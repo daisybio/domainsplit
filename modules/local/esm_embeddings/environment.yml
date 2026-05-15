@@ -1,0 +1,12 @@
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - pandas
+  - h5py
+  - biopython
+  - pytorch-gpu
+  - pip
+  - pip:
+      - esm
+      - httpx

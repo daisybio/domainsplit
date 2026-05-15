@@ -15,6 +15,8 @@
 ## Introduction
 
 **daisybio/domainsplit** is a bioinformatics pipeline that ...
+This directory contains a Nextflow translation of the CoBiNet data preparation pipeline. It downloads and processes all required files to generate the `cobinet_ddi.sqlite3` database.
+
 
 <!-- TODO nf-core:
    Complete this sentence with a 2-3 sentence summary of what types of data the pipeline ingests, a brief overview of the
@@ -31,21 +33,6 @@
 > [!NOTE]
 > If you are new to Nextflow and nf-core, please refer to [this page](https://nf-co.re/docs/get_started/environment_setup/overview) on how to set-up Nextflow. Make sure to [test your setup](https://nf-co.re/docs/get_started/run-your-first-pipeline) with `-profile test` before running the workflow on actual data.
 
-<!-- TODO nf-core: Describe the minimum required steps to execute the pipeline, e.g. how to prepare samplesheets.
-     Explain what rows and columns represent. For instance (please edit as appropriate):
-
-First, prepare a samplesheet with your input data that looks as follows:
-
-`samplesheet.csv`:
-
-```csv
-sample,fastq_1,fastq_2
-CONTROL_REP1,AEG588A1_S1_L002_R1_001.fastq.gz,AEG588A1_S1_L002_R2_001.fastq.gz
-```
-
-Each row represents a fastq file (single-end) or a pair of fastq files (paired end).
-
--->
 
 Now, you can run the pipeline using:
 
@@ -54,12 +41,20 @@ Now, you can run the pipeline using:
 ```bash
 nextflow run daisybio/domainsplit \
    -profile <docker/singularity/.../institute> \
-   --input samplesheet.csv \
    --outdir <OUTDIR>
 ```
 
 > [!WARNING]
 > Please provide pipeline parameters via the CLI or Nextflow `-params-file` option. Custom config files including those provided by the `-c` Nextflow option can be used to provide any configuration _**except for parameters**_; see [docs](https://nf-co.re/docs/running/run-pipelines#using-parameter-files).
+
+## Output
+
+The main output is the SQLite database file `cobinet_ddi.sqlite3` in the `results` directory.
+
+## Notes
+- Each process in `main.nf` is commented for clarity.
+- Some processes require external scripts (e.g., `mysql2sqlite` for 3did conversion).
+- You may need to adjust paths or URLs as needed.
 
 ## Credits
 
