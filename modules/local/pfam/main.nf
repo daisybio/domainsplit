@@ -3,12 +3,11 @@ process DOWNLOAD_PFAM_ALIGNMENT {
     label 'process_low'
     conda "${moduleDir}/environment.yml"
     container "${ workflow.containerEngine == 'singularity' && !task.ext.singularity_pull_docker_container ?
-        'docker://ubuntu:22.04' :
-        'ubuntu:22.04' }"
+        'docker://quay.io/biocontainers/biopython:1.84--pyh7e72e81_0' :
+        'quay.io/biocontainers/biopython:1.84--pyh7e72e81_0' }"
 
     maxRetries 3
-    maxForks 50
-    errorStrategy "ignore"
+    errorStrategy { task.attempt <= 3 ? 'retry' : 'ignore' }
 
     input:
     val pfam_id
@@ -21,15 +20,36 @@ process DOWNLOAD_PFAM_ALIGNMENT {
     pfam_id = pfam_id.strip()
     def download_url = params.url_pfam_template.replace("{pfam_id}", pfam_id)
     """
-    OUTPUT_FILE='${pfam_id}.alignment.full.gz'
-    DOWNLOAD_URL='$download_url'
+    #!/usr/bin/env python3
+    import sys, time, urllib.request, urllib.error, ssl
 
-    curl -fsSL -o "\$OUTPUT_FILE" "\$DOWNLOAD_URL"
+    OUTPUT_FILE = "${pfam_id}.alignment.full.gz"
+    DOWNLOAD_URL = "${download_url}"
 
-    cat <<-END_VERSIONS > versions.yml
-    "${task.process}":
-        curl: \$(curl --version | head -n1 | awk '{print \$2}')
-    END_VERSIONS
+    ctx = ssl.create_default_context()
+    req = urllib.request.Request(DOWNLOAD_URL, headers={"User-Agent": "domainsplit/1.0"})
+
+    last_err = None
+    for attempt in range(1, 6):
+        try:
+            with urllib.request.urlopen(req, timeout=120, context=ctx) as r, open(OUTPUT_FILE, "wb") as out:
+                while True:
+                    chunk = r.read(65536)
+                    if not chunk:
+                        break
+                    out.write(chunk)
+            break
+        except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError) as e:
+            last_err = e
+            print(f"attempt {attempt} failed for ${pfam_id}: {e}", file=sys.stderr)
+            time.sleep(2 ** attempt)
+    else:
+        print(f"all retries failed for ${pfam_id}: {last_err}", file=sys.stderr)
+        sys.exit(1)
+
+    with open("versions.yml", "w") as f:
+        f.write('"${task.process}":\\n')
+        f.write(f"    python: {sys.version.split()[0]}\\n")
     """
 }
 

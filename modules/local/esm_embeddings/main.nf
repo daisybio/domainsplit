@@ -50,15 +50,9 @@ process FILTER_SEQUENCES {
 process GENERATE_ESM_EMBEDDINGS {
     tag { meta.id }
     label 'process_gpu_large'
-    maxForks 10
     conda "${moduleDir}/environment.yml"
-    // NOTE: queue/clusterOptions/memory/time will move to conf/slurm.config in phase 5.
-    // Kept inline for now so phase 1 is behavior-preserving.
-    queue "shared-gpu"
-    memory '20 GB'
-    time 24.h
-    clusterOptions "--gpus-per-task=1 --ntasks=1  --qos=limitgpus --nodelist=jlab-gpu01.exbio.wzw.tum.de,gpu02.exbio.wzw.tum.de,compms-gpu-2.exbio.wzw.tum.de"
-    //  compms-gpu-1.exbio.wzw.tum.de is currently running having memory ECC issues, so we exclude it for now
+    // queue / clusterOptions / memory / time / maxForks defined in
+    // conf/slurm.config under withLabel: 'process_gpu_large'
 
     input:
     tuple val(meta), path(input_fasta)
