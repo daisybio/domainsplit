@@ -194,16 +194,14 @@ process AVERAGE_POOL_EMBEDDINGS {
 
 
 def generate_esm_embeddings(uniprotkb_database, protein_domain_map) {
-    (protein_fasta, domain_fasta) = FILTER_SEQUENCES(
-        protein_domain_map=protein_domain_map,
-        uniprotkb_database=uniprotkb_database
-    )
+    filter_result = FILTER_SEQUENCES(protein_domain_map, uniprotkb_database)
+    protein_fasta = filter_result.protein_sequences
+    domain_fasta = filter_result.domain_sequences
 
-    //HOG_GPU()
-    esm_embeddings = GENERATE_ESM_EMBEDDINGS(protein_fasta.mix(domain_fasta))
+    esm_result = GENERATE_ESM_EMBEDDINGS(protein_fasta.mix(domain_fasta))
 
-    protein_embeddings = esm_embeddings.filter { it[0].id == "protein_sequences" }.map { it[1] }
-    domain_embeddings = esm_embeddings.filter { it[0].id == "domain_sequences" }.map { it[1] }
+    protein_embeddings = esm_result.esm_embeddings.filter { it[0].id == "protein_sequences" }.map { it[1] }
+    domain_embeddings = esm_result.esm_embeddings.filter { it[0].id == "domain_sequences" }.map { it[1] }
 
-    return [protein_embeddings, AVERAGE_POOL_EMBEDDINGS(domain_embeddings)]
+    return [protein_embeddings, AVERAGE_POOL_EMBEDDINGS(domain_embeddings).averaged_embeddings]
 }
