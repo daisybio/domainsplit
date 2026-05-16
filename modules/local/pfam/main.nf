@@ -2,6 +2,9 @@ process DOWNLOAD_PFAM_ALIGNMENT {
     tag { pfam_id }
     label 'process_low'
     conda "${moduleDir}/environment.yml"
+    container "${ workflow.containerEngine == 'singularity' && !task.ext.singularity_pull_docker_container ?
+        'docker://quay.io/biocontainers/biopython:1.84' :
+        'quay.io/biocontainers/biopython:1.84' }"
 
     maxRetries 3
     maxForks 100
@@ -34,6 +37,9 @@ process CREATE_PROTEIN_DOMAIN_MAPPING {
     tag { "${uniprot_map_file.simpleName}" }
     label 'process_medium'
     conda "${moduleDir}/environment.yml"
+    container "${ workflow.containerEngine == 'singularity' && !task.ext.singularity_pull_docker_container ?
+        'docker://quay.io/biocontainers/biopython:1.84' :
+        'quay.io/biocontainers/biopython:1.84' }"
 
     input:
     path uniprot_map_file
