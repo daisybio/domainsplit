@@ -1,11 +1,14 @@
 process EXTRACT_PROTEIN_SEQUENCES {
+    tag "proteins"
+    label 'process_medium'
     conda "${moduleDir}/environment.yml"
 
     input:
     path "cobinet.sqlite3"
 
     output:
-    path "protein_sequences.fasta.gz"
+    path "protein_sequences.fasta.gz", emit: protein_fasta
+    path "versions.yml", emit: versions
 
     script:
     """
@@ -19,17 +22,25 @@ process EXTRACT_PROTEIN_SEQUENCES {
         " | \\
         gzip > \\
         protein_sequences.fasta.gz
+
+    cat <<-END_VERSIONS > versions.yml
+    "${task.process}":
+        sqlite3: \$(sqlite3 --version | awk '{print \$1}')
+    END_VERSIONS
     """
 }
 
 process EXTRACT_DOMAIN_SEQUENCES {
+    tag "domains"
+    label 'process_medium'
     conda "${moduleDir}/environment.yml"
 
     input:
     path "cobinet.sqlite3"
 
     output:
-    path "domain_sequences.fasta.gz"
+    path "domain_sequences.fasta.gz", emit: domain_fasta
+    path "versions.yml", emit: versions
 
     script:
     """
@@ -43,12 +54,21 @@ process EXTRACT_DOMAIN_SEQUENCES {
         " | \\
         gzip > \\
         domain_sequences.fasta.gz
+
+    cat <<-END_VERSIONS > versions.yml
+    "${task.process}":
+        sqlite3: \$(sqlite3 --version | awk '{print \$1}')
+    END_VERSIONS
     """
 }
 
+// TODO: not yet implemented. Body is intentionally `exit 1` so any subworkflow
+// call hits a hard failure instead of producing silent empty splits. Implement
+// before invoking this in production.
 process MINIMAL_LEAKAGE_SPLIT_PROTEIN {
+    tag "minimal_leakage_protein"
+    label 'process_high'
     conda "${moduleDir}/environment.yml"
-    cpus 1
 
     input:
     path "cobinet.sqlite3"
@@ -74,13 +94,15 @@ process MINIMAL_LEAKAGE_SPLIT_PROTEIN {
     def split_fraction_dict_py = "{" + split_fraction_dict_str + "}"
 
     """
+    echo "MINIMAL_LEAKAGE_SPLIT_PROTEIN is not yet implemented." >&2
     exit 1
     """
 }
 
 process MINIMAL_LEAKAGE_SPLIT_DOMAIN {
+    tag "minimal_leakage_domain"
+    label 'process_high'
     conda "${moduleDir}/environment.yml"
-    cpus 1
 
     input:
     path "cobinet.sqlite3"
@@ -90,6 +112,7 @@ process MINIMAL_LEAKAGE_SPLIT_DOMAIN {
     output:
     path output_files, emit: split_ddi_id_files
     val output_file_splits, emit: split_fractions
+    path "versions.yml", emit: versions
 
     script:
     def output_file_fraction_dict = [:]
@@ -229,5 +252,12 @@ process MINIMAL_LEAKAGE_SPLIT_DOMAIN {
             for domain_id in split_domains[split_name]:
                 f.write(f"{domain_id}\\n")
             print("Done!")
+
+    import sys as _sys
+    with open("versions.yml", "w") as f:
+        f.write('"${task.process}":\\n')
+        f.write(f"    python: {_sys.version.split()[0]}\\n")
+        f.write(f"    pandas: {pd.__version__}\\n")
+        f.write(f"    numpy: {np.__version__}\\n")
     """
 }

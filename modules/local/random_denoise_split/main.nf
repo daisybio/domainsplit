@@ -1,5 +1,6 @@
 process RANDOM_DENOISE_SPLIT {
-    tag "denoise ${change_fraction}"
+    tag "denoise ${change_fraction}${invert ? ' inverted' : ''}"
+    label 'process_medium'
     conda "${moduleDir}/environment.yml"
 
     input:
@@ -10,6 +11,7 @@ process RANDOM_DENOISE_SPLIT {
     output:
     path('*.csv'), emit: split_ddi_id_files
     val output_file_splits, emit: split_fractions
+    path "versions.yml", emit: versions
 
     script:
     output_file_splits = []
@@ -94,6 +96,11 @@ process RANDOM_DENOISE_SPLIT {
 
 
     conn.close()
+
+    import sys as _sys
+    with open("versions.yml", "w") as f:
+        f.write('"${task.process}":\\n')
+        f.write(f"    python: {_sys.version.split()[0]}\\n")
     """
 
 }

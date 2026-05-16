@@ -1,5 +1,6 @@
 process SPLIT_DATABASE {
     tag { meta.id }
+    label 'process_high'
     conda "${moduleDir}/environment.yml"
 
     input:
@@ -8,6 +9,7 @@ process SPLIT_DATABASE {
 
     output:
     tuple val(meta), path(output_db_path), emit: split_db
+    path "versions.yml", emit: versions
 
     script:
     output_db_path = "${meta.id}.sqlite3"
@@ -111,6 +113,12 @@ process SPLIT_DATABASE {
     ''')
 
     conn.close()
+
+    import sys as _sys
+    with open("versions.yml", "w") as f:
+        f.write('"${task.process}":\\n')
+        f.write(f"    python: {_sys.version.split()[0]}\\n")
+        f.write(f"    pandas: {pd.__version__}\\n")
     """
 
 }

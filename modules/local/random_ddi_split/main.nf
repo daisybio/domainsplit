@@ -1,4 +1,6 @@
 process RANDOM_DDI_SPLIT {
+    tag "random_ddi"
+    label 'process_medium'
     conda "${moduleDir}/environment.yml"
 
     input:
@@ -8,6 +10,7 @@ process RANDOM_DDI_SPLIT {
     output:
     path('*.csv'), emit: split_ddi_id_files
     val output_file_splits, emit: split_fractions
+    path "versions.yml", emit: versions
 
     script:
     def output_file_fraction_dict = [:]
@@ -50,5 +53,10 @@ process RANDOM_DDI_SPLIT {
                 f.write(f"{ddi_id}\\n")
 
     conn.close()
+
+    import sys as _sys
+    with open("versions.yml", "w") as f:
+        f.write('"${task.process}":\\n')
+        f.write(f"    python: {_sys.version.split()[0]}\\n")
     """
 }

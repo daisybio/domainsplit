@@ -1,6 +1,7 @@
 process DOWNLOAD_PFAM_ALIGNMENT {
-    conda "${moduleDir}/environment.yml"
     tag { pfam_id }
+    label 'process_low'
+    conda "${moduleDir}/environment.yml"
 
     maxRetries 3
     maxForks 100
@@ -10,7 +11,8 @@ process DOWNLOAD_PFAM_ALIGNMENT {
     val pfam_id
 
     output:
-    path "${pfam_id}.alignment.full.gz"
+    path "${pfam_id}.alignment.full.gz", emit: alignment
+    path "versions.yml", emit: versions
 
     script:
     pfam_id = pfam_id.strip()
@@ -20,10 +22,17 @@ process DOWNLOAD_PFAM_ALIGNMENT {
     DOWNLOAD_URL='$download_url'
 
     wget -O "\$OUTPUT_FILE" "\$DOWNLOAD_URL"
+
+    cat <<-END_VERSIONS > versions.yml
+    "${task.process}":
+        wget: \$(wget --version | head -n1 | awk '{print \$3}')
+    END_VERSIONS
     """
 }
 
 process CREATE_PROTEIN_DOMAIN_MAPPING {
+    tag { "${uniprot_map_file.simpleName}" }
+    label 'process_medium'
     conda "${moduleDir}/environment.yml"
 
     input:
@@ -31,7 +40,8 @@ process CREATE_PROTEIN_DOMAIN_MAPPING {
     path "alignment_files/*"
 
     output:
-    path out_path
+    path out_path, emit: mapping
+    path "versions.yml", emit: versions
 
     script:
     out_path = 'protein_domain_mapping.csv.gz'
@@ -70,5 +80,11 @@ process CREATE_PROTEIN_DOMAIN_MAPPING {
                             out.write(f"{domain},{uniprot_id},{start},{end},{sequence}\\n")
             except Exception:
                 print(f"Warning: could not process alignment file {aln}", file=sys.stderr)
+
+    import Bio as _Bio
+    with open("versions.yml", "w") as f:
+        f.write('"${task.process}":\\n')
+        f.write(f"    python: {sys.version.split()[0]}\\n")
+        f.write(f"    biopython: {_Bio.__version__}\\n")
     """
 }

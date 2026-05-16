@@ -16,12 +16,12 @@ workflow CREATE_COBINET_DATABASE {
     input_pfam2go
 
     main:
-    sqlite_3did = DOWNLOAD_3DID_SQLITE(input_3did)
-    pfam_ids = EXTRACT_PFAM_IDS(sqlite_3did).splitText()
+    sqlite_3did = DOWNLOAD_3DID_SQLITE(input_3did).sqlite
+    pfam_ids = EXTRACT_PFAM_IDS(sqlite_3did).pfam_ids.splitText()
 
-    pfam_files = DOWNLOAD_PFAM_ALIGNMENT(pfam_ids)
+    pfam_files = DOWNLOAD_PFAM_ALIGNMENT(pfam_ids).alignment
 
-    protein_domain_map = CREATE_PROTEIN_DOMAIN_MAPPING(input_uniprot_id_mapping, pfam_files.collect())
+    protein_domain_map = CREATE_PROTEIN_DOMAIN_MAPPING(input_uniprot_id_mapping, pfam_files.collect()).mapping
 
     protein_ids = protein_domain_map.splitCsv(decompress: true, header:true)
         .map { it.uniprot_id }
@@ -48,7 +48,7 @@ workflow CREATE_COBINET_DATABASE {
         uniprot_id_mapping=input_uniprot_id_mapping,
         esm_protein_embeddings=esm_protein_embeddings,
         esm_domain_embeddings=esm_domain_embeddings
-    ).first()
+    ).cobinet_db.first()
 
     emit:
     cobinet_db_ch

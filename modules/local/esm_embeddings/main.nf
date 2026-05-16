@@ -1,14 +1,16 @@
 process FILTER_SEQUENCES {
+    tag { "${protein_domain_map.simpleName}" }
+    label 'process_medium'
     conda "${moduleDir}/environment.yml"
 
     input:
-    file protein_domain_map
-    file uniprotkb_database
+    path protein_domain_map
+    path uniprotkb_database
 
     output:
     tuple val(protein_meta), path("uniprot_filtered.fasta.gz"), emit: protein_sequences
     tuple val(domain_meta), path("domain_sequences.fasta.gz"), emit: domain_sequences
-
+    path "versions.yml", emit: versions
 
     script:
     protein_meta = [id: "protein_sequences"]
@@ -35,25 +37,22 @@ process FILTER_SEQUENCES {
                 if record.id in uniprot_ids:
                     record.description=""
                     SeqIO.write(record, uniprot_filtered_fasta, "fasta")
-    """
-}
 
-process HOG_GPU {
-    conda "${moduleDir}/environment.yml"
-    queue "shared-gpu"
-    accelerator 1
-    memory '1 GB'
-    clusterOptions "--gpus=1"
-
-    script:
-    """
-    sleep 1200
+    with open("versions.yml", "w") as f:
+        f.write('"${task.process}":\\n')
+        import sys, Bio, pandas
+        f.write(f"    python: {sys.version.split()[0]}\\n")
+        f.write(f"    biopython: {Bio.__version__}\\n")
+        f.write(f"    pandas: {pandas.__version__}\\n")
     """
 }
 
 process GENERATE_ESM_EMBEDDINGS {
     tag { meta.id }
+    label 'process_gpu_large'
     conda "${moduleDir}/environment.yml"
+    // NOTE: queue/clusterOptions/memory/time will move to conf/slurm.config in phase 5.
+    // Kept inline for now so phase 1 is behavior-preserving.
     queue "shared-gpu"
     memory '20 GB'
     time 24.h
@@ -65,12 +64,17 @@ process GENERATE_ESM_EMBEDDINGS {
 
     output:
     tuple val(meta), path("esm_embeddings.h5"), emit: esm_embeddings
+    path "versions.yml", emit: versions
 
     script:
     """
     #!/usr/bin/env python3
     import os
-    os.system("hf auth login --token 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 --add-to-git-credential")
+    # HF_TOKEN must be provided by the executor environment (e.g. Nextflow secret or cluster env).
+    # Source: see CLAUDE.md / params.hf_token_env.
+    hf_token = os.environ.get("HF_TOKEN")
+    if hf_token:
+        os.system(f"hf auth login --token {hf_token} --add-to-git-credential")
     os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 
     from esm.models.esmc import ESMC
@@ -143,10 +147,19 @@ process GENERATE_ESM_EMBEDDINGS {
         print("Generating ESMC embeddings")
         for seq_name, embedding in yield_embeddings(client_gpu, client_cpu):
             esm_file.create_dataset(f"{seq_name}/esmc", data=embedding)
+
+    import esm as _esm
+    import torch as _torch
+    with open("versions.yml", "w") as f:
+        f.write('"${task.process}":\\n')
+        f.write(f"    esm: {_esm.__version__}\\n")
+        f.write(f"    torch: {_torch.__version__}\\n")
     """
 }
 
 process AVERAGE_POOL_EMBEDDINGS {
+    tag { "${input_embeddings.simpleName}" }
+    label 'process_low'
     conda "${moduleDir}/environment.yml"
 
     input:
@@ -154,6 +167,8 @@ process AVERAGE_POOL_EMBEDDINGS {
 
     output:
     path("output_embeddings.h5"), emit: averaged_embeddings
+    path "versions.yml", emit: versions
+
     script:
     """
     #!/usr/bin/env python3
@@ -169,6 +184,11 @@ process AVERAGE_POOL_EMBEDDINGS {
                 output_h5.create_dataset(path, data=avg_embedding)
 
         input_h5.visititems(copy_to_new_h5)
+
+    with open("versions.yml", "w") as f:
+        f.write('"${task.process}":\\n')
+        f.write(f"    h5py: {h5py.__version__}\\n")
+        f.write(f"    numpy: {np.__version__}\\n")
     """
 }
 

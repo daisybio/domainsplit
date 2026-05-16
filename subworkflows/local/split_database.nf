@@ -25,10 +25,10 @@ workflow SPLIT_COBINET_DATABASE {
     // Extract protein and domain sequences for clustering
     protein_sequences = EXTRACT_PROTEIN_SEQUENCES(
         cobinet_db_ch
-    )
+    ).protein_fasta
     domain_sequences = EXTRACT_DOMAIN_SEQUENCES(
         cobinet_db_ch
-    )
+    ).domain_fasta
 
     // Cluster protein and domain sequences
 

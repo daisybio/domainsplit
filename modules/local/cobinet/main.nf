@@ -1,21 +1,24 @@
 process COBINET {
+    tag "cobinet"
+    label 'process_high'
     conda "${moduleDir}/environment.yml"
 
     input:
-    file ddi_3did
-    file ddi_negatome
-    file pfam2go
-    file uniprot_database
-    file protein_domain_map
-    file prott5_embeddings
-    file uniprot_go_terms
-    file string_ppi
-    file uniprot_id_mapping
-    file esm_protein_embeddings
-    file esm_domain_embeddings
+    path ddi_3did
+    path ddi_negatome
+    path pfam2go
+    path uniprot_database
+    path protein_domain_map
+    path prott5_embeddings
+    path uniprot_go_terms
+    path string_ppi
+    path uniprot_id_mapping
+    path esm_protein_embeddings
+    path esm_domain_embeddings
 
     output:
-    path "cobinet.sqlite3"
+    path "cobinet.sqlite3", emit: cobinet_db
+    path "versions.yml", emit: versions
 
     script:
     """
@@ -312,5 +315,13 @@ process COBINET {
 
     conn_cobinet.commit()
     conn_cobinet.close()
+
+    import sys as _sys
+    with open("versions.yml", "w") as f:
+        f.write('"${task.process}":\\n')
+        f.write(f"    python: {_sys.version.split()[0]}\\n")
+        f.write(f"    pandas: {pd.__version__}\\n")
+        f.write(f"    numpy: {np.__version__}\\n")
+        f.write(f"    h5py: {h5py.__version__}\\n")
     """
 }
