@@ -20,10 +20,52 @@ process DOWNLOAD_3DID_SQLITE {
     zcat ${mysql_gz_file} | mysql2sqlite - > 3did.dump.sql
 
     python3 - <<'PY'
-import sqlite3
+import sqlite3, re
+
+# Python sqlite3.executescript() passes the entire string to sqlite3_exec(),
+# which is bounded by SQLITE_MAX_SQL_LENGTH (default 1 MB). 3did dump is
+# larger, so we stream-execute statements one at a time.
+#
+# mysql2sqlite emits well-formed SQL with statement terminators on their
+# own line ("...);" pattern). We collect lines into a buffer and execute
+# on every terminator. Strings spanning multiple lines stay intact because
+# we flush only when the LAST non-whitespace char of the buffer is ';' and
+# we are not inside an open quote.
+
 con = sqlite3.connect("3did.sqlite3")
-with open("3did.dump.sql", "r") as fh:
-    con.executescript(fh.read())
+cur = con.cursor()
+
+buf = []
+in_squote = False
+in_dquote = False
+
+def flush():
+    stmt = "".join(buf).strip()
+    if not stmt:
+        return
+    cur.executescript(stmt)
+
+with open("3did.dump.sql", "r", encoding="utf-8", errors="replace") as fh:
+    for line in fh:
+        buf.append(line)
+        # track open quotes across the buffer line
+        i = 0
+        s = line
+        while i < len(s):
+            c = s[i]
+            if c == "\\\\":
+                i += 2
+                continue
+            if c == "'" and not in_dquote:
+                in_squote = not in_squote
+            elif c == '"' and not in_squote:
+                in_dquote = not in_dquote
+            i += 1
+        if not in_squote and not in_dquote and s.rstrip().endswith(";"):
+            flush()
+            buf = []
+
+flush()
 con.commit()
 con.close()
 PY
