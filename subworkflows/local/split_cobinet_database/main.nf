@@ -94,12 +94,11 @@ workflow SPLIT_COBINET_DATABASE {
     )
 
     // Split the cobinet database based on the split DDI ID files
-    split_db_ch = SPLIT_DATABASE(
+    SPLIT_DATABASE(
         split_ch,
         cobinet_db_ch
     )
 
-
     emit:
-    split_db = split_db_ch
+    split_db = SPLIT_DATABASE.out.split_db
 }
