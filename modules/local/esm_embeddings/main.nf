@@ -50,6 +50,7 @@ process FILTER_SEQUENCES {
 process GENERATE_ESM_EMBEDDINGS {
     tag { meta.id }
     label 'process_gpu_large'
+    maxForks 10
     conda "${moduleDir}/environment.yml"
     // NOTE: queue/clusterOptions/memory/time will move to conf/slurm.config in phase 5.
     // Kept inline for now so phase 1 is behavior-preserving.

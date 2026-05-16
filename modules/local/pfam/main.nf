@@ -7,7 +7,7 @@ process DOWNLOAD_PFAM_ALIGNMENT {
         'quay.io/biocontainers/biopython:1.84' }"
 
     maxRetries 3
-    maxForks 100
+    maxForks 50
     errorStrategy "ignore"
 
     input:
@@ -24,11 +24,11 @@ process DOWNLOAD_PFAM_ALIGNMENT {
     OUTPUT_FILE='${pfam_id}.alignment.full.gz'
     DOWNLOAD_URL='$download_url'
 
-    wget -O "\$OUTPUT_FILE" "\$DOWNLOAD_URL"
+    curl -fsSL -o "\$OUTPUT_FILE" "\$DOWNLOAD_URL"
 
     cat <<-END_VERSIONS > versions.yml
     "${task.process}":
-        wget: \$(wget --version | head -n1 | awk '{print \$3}')
+        curl: \$(curl --version | head -n1 | awk '{print \$2}')
     END_VERSIONS
     """
 }
