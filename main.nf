@@ -27,9 +27,6 @@ include { PIPELINE_COMPLETION     } from './subworkflows/local/utils_nfcore_doma
 //
 workflow DAISYBIO_DOMAINSPLIT {
 
-    take:
-    samplesheet // channel: samplesheet read in from --input
-
     main:
 
     //
@@ -59,7 +56,6 @@ workflow {
         params.monochrome_logs,
         args,
         params.outdir,
-        params.input,
         params.help,
         params.help_full,
         params.show_hidden
@@ -68,9 +64,7 @@ workflow {
     //
     // WORKFLOW: Run main workflow
     //
-    DAISYBIO_DOMAINSPLIT (
-        PIPELINE_INITIALISATION.out.samplesheet
-    )
+    DAISYBIO_DOMAINSPLIT ()
 
     //
     // SUBWORKFLOW: Run completion tasks
