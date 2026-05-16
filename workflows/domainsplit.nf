@@ -43,20 +43,9 @@ main:
         cobinet_db_ch
     )
 
-    publish:
+emit:
     cobinet_db = cobinet_db_ch
-    split_db = split_db_ch
-}
-
-output {
-    cobinet_db  {
-    }
-    // put the split databases in a separate output folders
-    split_db  {
-        path {
-            it[1] >> "split_databases/${it[0].method}/${it[0].split}.sqlite3"
-        }
-    }
+    split_db   = split_db_ch
 }
 
 /*

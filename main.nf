@@ -35,10 +35,11 @@ workflow DAISYBIO_DOMAINSPLIT {
     //
     // WORKFLOW: Run pipeline
     //
-    DOMAINSPLIT (
-        samplesheet,
-        params.outdir,
-    )
+    DOMAINSPLIT ()
+
+emit:
+    cobinet_db = DOMAINSPLIT.out.cobinet_db
+    split_db   = DOMAINSPLIT.out.split_db
 }
 /*
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -70,6 +71,11 @@ workflow {
     DAISYBIO_DOMAINSPLIT (
         PIPELINE_INITIALISATION.out.samplesheet
     )
+
+    publish:
+    cobinet_db = DAISYBIO_DOMAINSPLIT.out.cobinet_db
+    split_db   = DAISYBIO_DOMAINSPLIT.out.split_db
+
     //
     // SUBWORKFLOW: Run completion tasks
     //
@@ -80,6 +86,16 @@ workflow {
         params.outdir,
         params.monochrome_logs,
     )
+}
+
+output {
+    cobinet_db {
+    }
+    split_db {
+        path {
+            it[1] >> "split_databases/${it[0].method}/${it[0].split}.sqlite3"
+        }
+    }
 }
 
 /*
