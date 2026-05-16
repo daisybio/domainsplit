@@ -72,10 +72,6 @@ workflow {
         PIPELINE_INITIALISATION.out.samplesheet
     )
 
-    publish:
-    cobinet_db = DAISYBIO_DOMAINSPLIT.out.cobinet_db
-    split_db   = DAISYBIO_DOMAINSPLIT.out.split_db
-
     //
     // SUBWORKFLOW: Run completion tasks
     //
@@ -86,6 +82,10 @@ workflow {
         params.outdir,
         params.monochrome_logs,
     )
+
+    publish:
+    cobinet_db = DAISYBIO_DOMAINSPLIT.out.cobinet_db
+    split_db   = DAISYBIO_DOMAINSPLIT.out.split_db
 }
 
 output {

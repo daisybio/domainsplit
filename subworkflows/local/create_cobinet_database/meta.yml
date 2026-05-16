@@ -1,0 +1,50 @@
+name: create_cobinet_database
+description: Assemble the unified CoBiNet SQLite database from 3did, Pfam, ProtT5, and ESM inputs.
+keywords:
+  - ddi
+  - cobinet
+  - database
+  - sqlite
+  - embeddings
+components:
+  - 3did
+  - pfam
+  - cobinet
+  - prott5_embeddings
+  - esm_embeddings
+input:
+  - input_3did:
+      type: file
+      description: 3did SQL dump archive.
+  - input_uniprot_id_mapping:
+      type: file
+      description: UniProt id mapping file.
+  - input_uniprot_embeddings:
+      type: file
+      description: Per-residue ProtT5 embeddings HDF5.
+  - input_uniprot_go_terms:
+      type: file
+      description: UniProt GO term TSV.
+  - input_uniprot_sequences:
+      type: file
+      description: UniProt-SwissProt FASTA.
+  - input_negatome:
+      type: file
+      description: Negatome non-interaction TSV.
+  - input_string:
+      type: file
+      description: STRING protein-protein links.
+  - input_pfam2go:
+      type: file
+      description: Pfam2GO mapping file.
+output:
+  - cobinet_db:
+      type: file
+      description: Unified CoBiNet SQLite database.
+      pattern: "*.sqlite3"
+authors:
+  - "Konstantin Pelz"
+  - "Christian Romberg"
+  - "Chiara Thomas"
+maintainers:
+  - "Konstantin Pelz"

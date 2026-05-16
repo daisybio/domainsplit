@@ -10,18 +10,15 @@
             "type": "object",
             "fa_icon": "fas fa-terminal",
             "description": "Define where the pipeline should find input data and save output data.",
-            "required": ["input", "outdir"],
+            "required": ["outdir"],
             "properties": {
                 "input": {
                     "type": "string",
                     "format": "file-path",
-                    "exists": true,
-                    "schema": "assets/schema_input.json",
-                    "mimetype": "text/csv",
-                    "pattern": "^\\S+\\.csv$",
-                    "description": "Path to comma-separated file containing information about the samples in the experiment.",
-                    "help_text": "You will need to create a design file with information about the samples in your experiment before running the pipeline. Use this parameter to specify its location. It has to be a comma-separated file with 3 columns, and a header row.",
-                    "fa_icon": "fas fa-file-csv"
+                    "description": "Unused samplesheet placeholder; this pipeline reads inputs from the url_* parameters instead.",
+                    "help_text": "Kept for nf-core template compatibility. Source databases are configured via the url_* parameters in nextflow.config.",
+                    "fa_icon": "fas fa-file-csv",
+                    "hidden": true
                 },
                 "outdir": {
                     "type": "string",
@@ -35,6 +32,80 @@
                     "fa_icon": "fas fa-envelope",
                     "help_text": "Set this parameter to your e-mail address to get a summary e-mail with details of the run sent to you when the workflow exits. If set in your user config file (`~/.nextflow/config`) then you don't need to specify this on the command line for every run.",
                     "pattern": "^([a-zA-Z0-9_\\-\\.]+)@([a-zA-Z0-9_\\-\\.]+)\\.([a-zA-Z]{2,5})$"
+                }
+            }
+        },
+        "source_database_options": {
+            "title": "Source database URLs",
+            "type": "object",
+            "fa_icon": "fas fa-database",
+            "description": "URLs of the public source databases used to assemble the CoBiNet database.",
+            "properties": {
+                "url_3did": {
+                    "type": "string",
+                    "description": "URL of the 3did SQL dump archive.",
+                    "default": "https://3did.irbbarcelona.org/download/2022_01/3did.sql.gz",
+                    "fa_icon": "fas fa-link"
+                },
+                "url_uniprot_id_mapping": {
+                    "type": "string",
+                    "description": "URL of the UniProt id-mapping file (per organism).",
+                    "default": "https://ftp.uniprot.org/pub/databases/uniprot/current_release/knowledgebase/idmapping/by_organism/HUMAN_9606_idmapping.dat.gz",
+                    "fa_icon": "fas fa-link"
+                },
+                "url_uniprot_embeddings": {
+                    "type": "string",
+                    "description": "URL of the per-residue ProtT5 UniProt embeddings HDF5.",
+                    "default": "https://ftp.ebi.ac.uk/pub/contrib/UniProt/embeddings/current_release/UP000005640_9606/per-residue.h5",
+                    "fa_icon": "fas fa-link"
+                },
+                "url_uniprot_go_terms": {
+                    "type": "string",
+                    "description": "URL of the UniProt GO terms TSV (REST stream).",
+                    "default": "https://rest.uniprot.org/uniprotkb/stream?compressed=true&fields=accession%2Cgo_id&format=tsv&query=%28%28database%3AGO%29+AND+%28reviewed%3Atrue%29%29",
+                    "fa_icon": "fas fa-link"
+                },
+                "url_uniprot_sequences": {
+                    "type": "string",
+                    "description": "URL of the UniProt-SwissProt FASTA archive.",
+                    "default": "https://ftp.uniprot.org/pub/databases/uniprot/current_release/knowledgebase/complete/uniprot_sprot.fasta.gz",
+                    "fa_icon": "fas fa-link"
+                },
+                "url_negatome": {
+                    "type": "string",
+                    "description": "URL or path of the Negatome non-interaction TSV.",
+                    "default": "${projectDir}/assets/ppi_detect_negatome.tsv",
+                    "fa_icon": "fas fa-link"
+                },
+                "url_string": {
+                    "type": "string",
+                    "description": "URL of the STRING protein-protein links file.",
+                    "default": "https://stringdb-downloads.org/download/protein.links.v12.0/9606.protein.links.v12.0.txt.gz",
+                    "fa_icon": "fas fa-link"
+                },
+                "url_pfam2go": {
+                    "type": "string",
+                    "description": "URL of the Pfam2GO mapping file.",
+                    "default": "https://current.geneontology.org/ontology/external2go/pfam2go",
+                    "fa_icon": "fas fa-link"
+                },
+                "url_pfam_template": {
+                    "type": "string",
+                    "description": "Template URL for downloading per-Pfam alignment archives; `{pfam_id}` is substituted per family.",
+                    "default": "https://www.ebi.ac.uk/interpro/wwwapi//entry/pfam/{pfam_id}/?annotation=alignment:full&download",
+                    "fa_icon": "fas fa-link"
+                },
+                "download_prott5_complete": {
+                    "type": "boolean",
+                    "description": "ProtT5 embeddings download strategy: true = single full HDF5 download; false = chunked async REST queries for required IDs only.",
+                    "default": true,
+                    "fa_icon": "fas fa-cloud-download-alt"
+                },
+                "url_prott5_embeddings_complete": {
+                    "type": "string",
+                    "description": "URL of the full UniProt-SwissProt per-residue ProtT5 embeddings HDF5 (used when download_prott5_complete=true).",
+                    "default": "https://ftp.ebi.ac.uk/pub/contrib/UniProt/embeddings/current_release/uniprot_sprot/per-residue.h5",
+                    "fa_icon": "fas fa-link"
                 }
             }
         },
@@ -166,6 +237,9 @@
     "allOf": [
         {
             "$ref": "#/$defs/input_output_options"
+        },
+        {
+            "$ref": "#/$defs/source_database_options"
         },
         {
             "$ref": "#/$defs/institutional_config_options"

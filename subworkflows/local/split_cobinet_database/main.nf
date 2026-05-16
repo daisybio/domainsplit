@@ -1,10 +1,18 @@
+/*
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    SPLIT_COBINET_DATABASE -- split the CoBiNet DB into train/opt/test sets
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    Extracts protein/domain sequences, clusters with MMseqs2, then runs the
+    three splitting strategies (random DDI, random denoise, minimal leakage)
+    producing per-method/per-split SQLite databases.
+----------------------------------------------------------------------------*/
 
-include { RANDOM_DDI_SPLIT } from '../modules/local/random_ddi_split/main'
-include { RANDOM_DENOISE_SPLIT } from '../modules/local/random_denoise_split/main'
-include { RANDOM_DENOISE_SPLIT as RANDOM_DENOISE_SPLIT_2 } from '../modules/local/random_denoise_split/main'
-include { SPLIT_DATABASE } from '../modules/local/split_database/main'
-include { EXTRACT_DOMAIN_SEQUENCES; EXTRACT_PROTEIN_SEQUENCES; MINIMAL_LEAKAGE_SPLIT_DOMAIN; MINIMAL_LEAKAGE_SPLIT_PROTEIN } from '../modules/local/minimal_leakage_split/main'
-include { MMSEQS_EASYCLUSTER } from '../modules/nf-core/mmseqs/easycluster/main'
+include { RANDOM_DDI_SPLIT                                                                                          } from '../../../modules/local/random_ddi_split/main'
+include { RANDOM_DENOISE_SPLIT                                                                                      } from '../../../modules/local/random_denoise_split/main'
+include { RANDOM_DENOISE_SPLIT as RANDOM_DENOISE_SPLIT_2                                                            } from '../../../modules/local/random_denoise_split/main'
+include { SPLIT_DATABASE                                                                                            } from '../../../modules/local/split_database/main'
+include { EXTRACT_DOMAIN_SEQUENCES; EXTRACT_PROTEIN_SEQUENCES; MINIMAL_LEAKAGE_SPLIT_DOMAIN; MINIMAL_LEAKAGE_SPLIT_PROTEIN } from '../../../modules/local/minimal_leakage_split/main'
+include { MMSEQS_EASYCLUSTER                                                                                        } from '../../../modules/nf-core/mmseqs/easycluster/main'
 
 
 def map_split_files(split_id_files_ch, split_paths_ch, method) {
@@ -83,11 +91,9 @@ workflow SPLIT_COBINET_DATABASE {
         map_split_files(split_discovery_id_files_ch, split_discovery_paths, "random_discovery"),
         map_split_files(split_minimal_leakage_protein_id_files_ch, split_minimal_leakage_protein_paths, "minimal_leakage_protein"),
         map_split_files(split_minimal_leakage_domain_id_files_ch, split_minimal_leakage_domain_paths, "minimal_leakage_domain")
-       // split_minimal_leakage_domain_ch
     )
 
     // Split the cobinet database based on the split DDI ID files
-    //split_db_ch = Channel.empty()
     split_db_ch = SPLIT_DATABASE(
         split_ch,
         cobinet_db_ch
@@ -95,5 +101,5 @@ workflow SPLIT_COBINET_DATABASE {
 
 
     emit:
-    split_db_ch
+    split_db = split_db_ch
 }

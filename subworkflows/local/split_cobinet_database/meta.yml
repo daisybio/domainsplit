@@ -1,0 +1,30 @@
+name: split_cobinet_database
+description: Split the CoBiNet SQLite database into train/optimization/test sets using random and minimal-leakage strategies.
+keywords:
+  - ddi
+  - split
+  - leakage
+  - clustering
+components:
+  - mmseqs/easycluster
+  - random_ddi_split
+  - random_denoise_split
+  - minimal_leakage_split
+  - split_database
+input:
+  - cobinet_db_ch:
+      type: file
+      description: Unified CoBiNet SQLite database.
+      pattern: "*.sqlite3"
+output:
+  - split_db:
+      type: file
+      description: |
+        Channel of (meta, split.sqlite3) tuples. meta = [id, split, method].
+      pattern: "*.sqlite3"
+authors:
+  - "Konstantin Pelz"
+  - "Christian Romberg"
+  - "Chiara Thomas"
+maintainers:
+  - "Konstantin Pelz"

@@ -6,8 +6,8 @@
 include { paramsSummaryMap       } from 'plugin/nf-schema'
 include { softwareVersionsToYAML } from '../subworkflows/nf-core/utils_nfcore_pipeline'
 include { methodsDescriptionText } from '../subworkflows/local/utils_nfcore_domainsplit_pipeline'
-include { CREATE_COBINET_DATABASE } from './subworkflows/create_database.nf'
-include { SPLIT_COBINET_DATABASE } from './subworkflows/split_database.nf'
+include { CREATE_COBINET_DATABASE } from '../subworkflows/local/create_cobinet_database/main.nf'
+include { SPLIT_COBINET_DATABASE  } from '../subworkflows/local/split_cobinet_database/main.nf'
 
 /*
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -26,7 +26,7 @@ main:
     input_string             = file(params.url_string)
     input_pfam2go            = file(params.url_pfam2go)
 
-    cobinet_db_ch = CREATE_COBINET_DATABASE(
+    CREATE_COBINET_DATABASE(
         input_3did,
         input_uniprot_id_mapping,
         input_uniprot_embeddings,
@@ -35,17 +35,15 @@ main:
         input_negatome,
         input_string,
         input_pfam2go,
-    )//*/
+    )
 
-    //cobinet_db_ch = file("results/cobinet.sqlite3")
-
-    split_db_ch = SPLIT_COBINET_DATABASE(
-        cobinet_db_ch
+    SPLIT_COBINET_DATABASE(
+        CREATE_COBINET_DATABASE.out.cobinet_db
     )
 
 emit:
-    cobinet_db = cobinet_db_ch
-    split_db   = split_db_ch
+    cobinet_db = CREATE_COBINET_DATABASE.out.cobinet_db
+    split_db   = SPLIT_COBINET_DATABASE.out.split_db
 }
 
 /*
