@@ -2,6 +2,7 @@ process COBINET {
     tag "cobinet"
     label 'process_high'
     conda "${moduleDir}/environment.yml"
+    container "docker://konstantinpelz/domainsplit-general:1.0.0"
 
     input:
     path ddi_3did
@@ -200,11 +201,11 @@ process COBINET {
     # filter the uniprot fasta and put into cobinet database
     with gzip.open("${uniprot_database}","rt") as uniprot_text, \
             gzip.open("${protein_domain_map}","rt") as protein_domain_map_text, \
-            h5py.File("${esm_protein_embeddings}",mode="r") as esm_protein_embeddings:
+            h5py.File("${esm_protein_embeddings}",mode="r") as esm_protein_embeddings, \
+            h5py.File("${prott5_embeddings}",mode="r") as prott5_embeddings_file:
 
         pd_map = pd.read_csv(protein_domain_map_text)
         required_uniprot_ids = set(pd_map["uniprot_id"].unique())
-        prott5_embeddings_file = h5py.File("${prott5_embeddings}",mode="r")
 
         uniprot_records = SeqIO.parse(uniprot_text,"fasta")
         # convert uniprot records to (id, seq) tuples
@@ -245,8 +246,10 @@ process COBINET {
     # read the uniprot go terms and put them into the database
     with gzip.open("${uniprot_go_terms}","rt") as go_terms_text:
         go_terms_df = pd.read_csv(go_terms_text,sep="\t")
+        # Proteins without GO annotation are NaN; skip them before splitting.
         insert_iterator = (((go_term, row["Entry"]) for go_term in row["Gene Ontology IDs"].split("; "))
-                           for _, row in go_terms_df.iterrows())
+                           for _, row in go_terms_df.iterrows()
+                           if isinstance(row["Gene Ontology IDs"], str))
         insert_iterator = itertools.chain.from_iterable(insert_iterator)
         insert_iterator = tqdm(insert_iterator)
 

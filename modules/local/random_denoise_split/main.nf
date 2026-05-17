@@ -2,6 +2,7 @@ process RANDOM_DENOISE_SPLIT {
     tag "denoise ${change_fraction}${invert ? ' inverted' : ''}"
     label 'process_medium'
     conda "${moduleDir}/environment.yml"
+    container "docker://konstantinpelz/domainsplit-general:1.0.0"
 
     input:
     path 'cobinet.sqlite3'

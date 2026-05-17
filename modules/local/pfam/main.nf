@@ -2,9 +2,7 @@ process DOWNLOAD_PFAM_ALIGNMENT {
     tag { pfam_id }
     label 'process_low'
     conda "${moduleDir}/environment.yml"
-    container "${ workflow.containerEngine == 'singularity' && !task.ext.singularity_pull_docker_container ?
-        'docker://quay.io/biocontainers/biopython:1.84' :
-        'quay.io/biocontainers/biopython:1.84' }"
+    container "docker://konstantinpelz/domainsplit-general:1.0.0"
 
     maxRetries 3
     errorStrategy { task.attempt <= 3 ? 'retry' : 'ignore' }
@@ -57,9 +55,7 @@ process CREATE_PROTEIN_DOMAIN_MAPPING {
     tag { "${uniprot_map_file.simpleName}" }
     label 'process_medium'
     conda "${moduleDir}/environment.yml"
-    container "${ workflow.containerEngine == 'singularity' && !task.ext.singularity_pull_docker_container ?
-        'docker://quay.io/biocontainers/biopython:1.84' :
-        'quay.io/biocontainers/biopython:1.84' }"
+    container "docker://konstantinpelz/domainsplit-general:1.0.0"
 
     input:
     path uniprot_map_file

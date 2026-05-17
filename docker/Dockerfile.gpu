@@ -1,0 +1,54 @@
+FROM mambaorg/micromamba:1.5.10
+
+# Build/tag as konstantinpelz/domainsplit-gpu:1.0.0
+# Covers GPU process in daisybio/domainsplit pipeline:
+#   - GENERATE_ESM_EMBEDDINGS (torch + esm SDK + h5py + biopython + tqdm)
+#
+# Mirrors CUDA 12.8 + torch 2.7.0 stack from daisybio-domainbenchmark Dockerfile.ml.
+LABEL org.opencontainers.image.source="https://github.com/daisybio/domainsplit"
+LABEL org.opencontainers.image.version="1.0.0"
+LABEL org.opencontainers.image.description="domainsplit GPU container (CUDA 12.8, torch 2.7, esm SDK, biopython, h5py)"
+
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+
+USER root
+RUN apt-get update && apt-get install -y --no-install-recommends procps \
+ && rm -rf /var/lib/apt/lists/*
+USER $MAMBA_USER
+
+ENV ENV_NAME=gpu
+ENV PATH=/opt/conda/envs/${ENV_NAME}/bin:$PATH
+ENV CONDA_PREFIX=/opt/conda/envs/${ENV_NAME}
+ENV PYTHONUNBUFFERED=1
+ENV PIP_NO_CACHE_DIR=1
+ENV PIP_DISABLE_PIP_VERSION_CHECK=1
+ENV PIP_DEFAULT_TIMEOUT=100
+
+ENV NVIDIA_TF32_OVERRIDE=0
+ENV PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+
+RUN micromamba create -y -n ${ENV_NAME} \
+    -c conda-forge -c bioconda -c nvidia \
+    python=3.12.2 \
+    numpy=2.2.6 \
+    pandas=2.2.3 \
+    h5py=3.14.0 \
+    biopython=1.84 \
+    tqdm=4.66.5 \
+    cuda-version=12.8 \
+    cudnn=9 \
+    pip=25.0 \
+ && micromamba clean --all --yes
+
+# Torch from PyTorch cu128 wheel; esm + huggingface_hub from PyPI.
+# huggingface_hub provides the `hf` CLI used by the ESM script for HF_TOKEN auth.
+RUN micromamba run -n ${ENV_NAME} pip install \
+    --index-url https://download.pytorch.org/whl/cu128 \
+    --extra-index-url https://pypi.org/simple \
+    torch==2.7.0 \
+ && micromamba run -n ${ENV_NAME} pip install \
+    esm==3.1.6 \
+    huggingface_hub==0.26.2
+
+ENTRYPOINT ["micromamba", "run", "-n", "gpu"]
+CMD ["python"]

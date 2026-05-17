@@ -2,6 +2,7 @@ process SPLIT_DATABASE {
     tag { meta.id }
     label 'process_high'
     conda "${moduleDir}/environment.yml"
+    container "docker://konstantinpelz/domainsplit-general:1.0.0"
 
     input:
     tuple val(meta), path("interactions.csv")

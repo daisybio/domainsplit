@@ -2,6 +2,7 @@ process RANDOM_DDI_SPLIT {
     tag "random_ddi"
     label 'process_medium'
     conda "${moduleDir}/environment.yml"
+    container "docker://konstantinpelz/domainsplit-general:1.0.0"
 
     input:
     path 'cobinet.sqlite3'

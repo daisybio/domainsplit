@@ -2,6 +2,7 @@ process FILTER_SEQUENCES {
     tag { "${protein_domain_map.simpleName}" }
     label 'process_medium'
     conda "${moduleDir}/environment.yml"
+    container "docker://konstantinpelz/domainsplit-general:1.0.0"
 
     input:
     path protein_domain_map
@@ -17,33 +18,33 @@ process FILTER_SEQUENCES {
     domain_meta = [id: "domain_sequences"]
     """
     #!/usr/bin/env python3
+    import csv
     import gzip
-    import pandas as pd
     from Bio import SeqIO
 
-    with gzip.open("${protein_domain_map}","rt") as protein_domain_map_text:
-        pd_map = pd.read_csv(protein_domain_map_text)
+    uniprot_ids = set()
+    with gzip.open("${protein_domain_map}", "rt") as protein_domain_map_text, \\
+         gzip.open("domain_sequences.fasta.gz", "wt") as domain_sequences_fasta:
+        reader = csv.DictReader(protein_domain_map_text)
+        for row in reader:
+            domain_sequences_fasta.write(
+                f">{row['pfam_id']}_{row['uniprot_id']}_{row['start_pos']}_{row['end_pos']}\\n{row['sequence']}\\n"
+            )
+            uniprot_ids.add(row['uniprot_id'])
 
-    with gzip.open("domain_sequences.fasta.gz", "wt") as domain_sequences_fasta:
-        for row in pd_map.itertuples():
-            domain_sequences_fasta.write(f">{row.pfam_id}_{row.uniprot_id}_{row.start_pos}_{row.end_pos}\\n{row.sequence}\\n")
-
-
-    uniprot_ids = set(pd_map.uniprot_id)
-    with gzip.open("uniprot_filtered.fasta.gz", "wt") as uniprot_filtered_fasta:
-        with gzip.open("${uniprotkb_database}", "rt") as uniprotkb_fasta:
-            for record in SeqIO.parse(uniprotkb_fasta, "fasta"):
-                record.id = record.id.split("|")[1]
-                if record.id in uniprot_ids:
-                    record.description=""
-                    SeqIO.write(record, uniprot_filtered_fasta, "fasta")
+    with gzip.open("uniprot_filtered.fasta.gz", "wt") as uniprot_filtered_fasta, \\
+         gzip.open("${uniprotkb_database}", "rt") as uniprotkb_fasta:
+        for record in SeqIO.parse(uniprotkb_fasta, "fasta"):
+            record.id = record.id.split("|")[1]
+            if record.id in uniprot_ids:
+                record.description = ""
+                SeqIO.write(record, uniprot_filtered_fasta, "fasta")
 
     with open("versions.yml", "w") as f:
         f.write('"${task.process}":\\n')
-        import sys, Bio, pandas
+        import sys, Bio
         f.write(f"    python: {sys.version.split()[0]}\\n")
         f.write(f"    biopython: {Bio.__version__}\\n")
-        f.write(f"    pandas: {pandas.__version__}\\n")
     """
 }
 
@@ -51,6 +52,7 @@ process GENERATE_ESM_EMBEDDINGS {
     tag { meta.id }
     label 'process_gpu_large'
     conda "${moduleDir}/environment.yml"
+    container "docker://konstantinpelz/domainsplit-gpu:1.0.0"
     // queue / clusterOptions / memory / time / maxForks defined in
     // conf/slurm.config under withLabel: 'process_gpu_large'
 
@@ -156,6 +158,7 @@ process AVERAGE_POOL_EMBEDDINGS {
     tag { "${input_embeddings.simpleName}" }
     label 'process_low'
     conda "${moduleDir}/environment.yml"
+    container "docker://konstantinpelz/domainsplit-general:1.0.0"
 
     input:
     path("input_embeddings.h5")

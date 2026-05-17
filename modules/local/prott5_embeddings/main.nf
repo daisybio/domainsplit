@@ -2,6 +2,7 @@ process PROTT5_EMBEDDINGS_CHUNK {
     tag { tag_str }
     label 'process_low'
     conda "${moduleDir}/environment.yml"
+    container "docker://konstantinpelz/domainsplit-general:1.0.0"
 
     input:
     val(protein_ids)
@@ -17,6 +18,7 @@ process PROTT5_EMBEDDINGS_CHUNK {
     """
     #!/usr/bin/env python3
 
+    import sys
     import requests
     import time
 
@@ -34,37 +36,40 @@ process PROTT5_EMBEDDINGS_CHUNK {
     try:
         response.raise_for_status()
     except requests.HTTPError as e:
-        print(response.status_code)
-        print(response.text)
-        print("Failed to submit request to UniProt:", e)
-    else:
-        job_id = response.json()["jobId"]
+        print(response.status_code, file=sys.stderr)
+        print(response.text, file=sys.stderr)
+        sys.exit(f"Failed to submit request to UniProt: {e}")
 
-        def get_job_status():
-            status_url = f"https://rest.uniprot.org/uniprotkb/download/status/{job_id}"
-            r = requests.get(status_url)
-            r.raise_for_status()
-            status = r.json()["jobStatus"]
-            print(f"Job {job_id} status: {status}")
-            return status
+    job_id = response.json()["jobId"]
 
-        # wait until the request is done
-        time.sleep(2)
-        while get_job_status() == "RUNNING":
-            time.sleep(0.2)
+    def get_job_status():
+        status_url = f"https://rest.uniprot.org/uniprotkb/download/status/{job_id}"
+        r = requests.get(status_url)
+        r.raise_for_status()
+        status = r.json()["jobStatus"]
+        print(f"Job {job_id} status: {status}")
+        return status
 
-        # download the file
-        print("Downloading results for job:", job_id)
-        results_url = f"https://rest.uniprot.org/uniprotkb/download/results/{job_id}"
-        with requests.get(results_url, stream=True) as r, open(output_path, "wb") as out_file:
-            r.raise_for_status()
-            for chunk in r.iter_content(chunk_size=65536):
-                out_file.write(chunk)
+    # wait until job leaves RUNNING; treat anything other than FINISHED as fatal
+    time.sleep(2)
+    status = get_job_status()
+    while status == "RUNNING":
+        time.sleep(0.2)
+        status = get_job_status()
+    if status != "FINISHED":
+        sys.exit(f"UniProt job {job_id} ended with non-success status: {status}")
 
-    import sys as _sys
+    # download the file
+    print("Downloading results for job:", job_id)
+    results_url = f"https://rest.uniprot.org/uniprotkb/download/results/{job_id}"
+    with requests.get(results_url, stream=True) as r, open(output_path, "wb") as out_file:
+        r.raise_for_status()
+        for chunk in r.iter_content(chunk_size=65536):
+            out_file.write(chunk)
+
     with open("versions.yml", "w") as f:
         f.write('"${task.process}":\\n')
-        f.write(f"    python: {_sys.version.split()[0]}\\n")
+        f.write(f"    python: {sys.version.split()[0]}\\n")
         f.write(f"    requests: {requests.__version__}\\n")
     """
 }
@@ -73,6 +78,7 @@ process JOIN_HDF_FILES {
     tag "join_prott5_chunks"
     label 'process_low'
     conda "${moduleDir}/environment.yml"
+    container "docker://konstantinpelz/domainsplit-general:1.0.0"
 
     input:
     path "chunk*"
@@ -109,9 +115,9 @@ process DOWNLOAD_PROTT5_EMBEDDINGS_COMPLETE {
     tag "prott5_complete"
     label 'process_low'
     conda "${moduleDir}/environment.yml"
-
-    maxRetries 3
-    errorStrategy "ignore"
+    container "docker://konstantinpelz/domainsplit-general:1.0.0"
+    // errorStrategy / maxRetries owned by conf/slurm.config (withName override).
+    // Inline 'ignore' previously masked SIGTERM (exit 140) from time-limited downloads.
 
     output:
     path(output_path), emit: embeddings

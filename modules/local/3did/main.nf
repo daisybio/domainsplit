@@ -2,9 +2,7 @@ process DOWNLOAD_3DID_SQLITE {
     tag "3did"
     label 'process_low'
     conda "${moduleDir}/environment.yml"
-    // No container: needs awk + zcat (host) + python3 stdlib sqlite3.
-    // Host has all three on the cluster compute nodes; avoids needing a
-    // combo container (no quay image bundles sqlite + gawk + gzip).
+    container "docker://konstantinpelz/domainsplit-general:1.0.0"
 
     input:
     path mysql_gz_file
@@ -35,7 +33,7 @@ process EXTRACT_PFAM_IDS {
     tag { "${sqlite_file.simpleName}" }
     label 'process_low'
     conda "${moduleDir}/environment.yml"
-    // No container: uses python3 stdlib sqlite3, available on host.
+    container "docker://konstantinpelz/domainsplit-general:1.0.0"
 
     input:
     path sqlite_file

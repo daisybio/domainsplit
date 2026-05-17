@@ -2,6 +2,7 @@ process EXTRACT_PROTEIN_SEQUENCES {
     tag "proteins"
     label 'process_medium'
     conda "${moduleDir}/environment.yml"
+    container "docker://konstantinpelz/domainsplit-general:1.0.0"
 
     input:
     path "cobinet.sqlite3"
@@ -34,6 +35,7 @@ process EXTRACT_DOMAIN_SEQUENCES {
     tag "domains"
     label 'process_medium'
     conda "${moduleDir}/environment.yml"
+    container "docker://konstantinpelz/domainsplit-general:1.0.0"
 
     input:
     path "cobinet.sqlite3"
@@ -62,13 +64,18 @@ process EXTRACT_DOMAIN_SEQUENCES {
     """
 }
 
-// TODO: not yet implemented. Body is intentionally `exit 1` so any subworkflow
-// call hits a hard failure instead of producing silent empty splits. Implement
-// before invoking this in production.
+// FUTURE WORK: MINIMAL_LEAKAGE_SPLIT_PROTEIN is not yet implemented.
+// Body is intentionally `exit 1` so any subworkflow call hits a hard failure
+// instead of producing silent empty splits. Mirror the domain-level annealing
+// approach (see MINIMAL_LEAKAGE_SPLIT_DOMAIN below) using protein clusters from
+// MMSEQS_EASYCLUSTER over uniprot sequences. Until implemented, callers must
+// route around this process — the workflow already excludes it from the
+// default split methods list.
 process MINIMAL_LEAKAGE_SPLIT_PROTEIN {
     tag "minimal_leakage_protein"
     label 'process_high'
     conda "${moduleDir}/environment.yml"
+    container "docker://konstantinpelz/domainsplit-general:1.0.0"
 
     input:
     path "cobinet.sqlite3"
@@ -103,6 +110,7 @@ process MINIMAL_LEAKAGE_SPLIT_DOMAIN {
     tag "minimal_leakage_domain"
     label 'process_high'
     conda "${moduleDir}/environment.yml"
+    container "docker://konstantinpelz/domainsplit-general:1.0.0"
 
     input:
     path "cobinet.sqlite3"
@@ -215,7 +223,7 @@ process MINIMAL_LEAKAGE_SPLIT_DOMAIN {
             print(f"\t{split_name}: {len(split_ddis[split_name])} interactions")
 
         random.shuffle(domain_clusters)
-        clusters_to_keep, clusters_queue = split(domain_clusters, annealing_fraction)
+        clusters_to_keep, clusters_queue_list = split(domain_clusters, annealing_fraction)
         domains_to_keep = set.union(*clusters_to_keep)
 
         # Remove domains from splits that are not in the clusters to keep
@@ -227,6 +235,10 @@ process MINIMAL_LEAKAGE_SPLIT_DOMAIN {
         for split_name in split_fractions.keys():
             print(f"\t{split_name}: {len(split_ddis[split_name])} interactions")
 
+        # Keep clusters in a dict keyed by index so removal is O(1).
+        # `clusters_queue.remove(cluster)` on a list was O(n) per iteration,
+        # making the whole annealing loop O(n^2) for many clusters.
+        clusters_queue = dict(enumerate(clusters_queue_list))
         tqdm_ = tqdm(total=len(domain_clusters), initial=len(clusters_to_keep), desc=f"Annealing step {annealing_step + 1}/{ANNEALING_STEPS}")
         while clusters_queue:
             # take the split that has the least number of interactions (normalized by split size)
@@ -234,8 +246,9 @@ process MINIMAL_LEAKAGE_SPLIT_DOMAIN {
                                      key=lambda split_name: len(split_ddis[split_name]) / split_fractions[split_name])
 
             # rank the clusters by the number of interactions they would add to the split
-            cluster = max(clusters_queue, key=partial(cluster_rank_function, current_split_name))
-            clusters_queue.remove(cluster)
+            cluster_idx, cluster = max(clusters_queue.items(),
+                                       key=lambda kv: cluster_rank_function(current_split_name, kv[1]))
+            del clusters_queue[cluster_idx]
 
             split_domains[current_split_name].update(cluster)
             split_ddis[current_split_name] = get_split_ddis(current_split_name, new_domains=cluster)
@@ -243,13 +256,12 @@ process MINIMAL_LEAKAGE_SPLIT_DOMAIN {
             tqdm_.update(1)
 
     print("Final DDI counts:")
-    for split_name in split_fractions.keys():
-
-        # write out the domain ids in the split to a file
-        with open(split_name, "w") as f:
-            print(f"Writing split {split_name} with {len(split_domains[split_name])} domains and {len(split_ddis[split_name])} interactions to file...")
+    for output_file in split_fractions.keys():
+        # output_file is e.g. "train.txt"; matches output_file_fraction_dict keys.
+        with open(output_file, "w") as f:
+            print(f"Writing split {output_file} with {len(split_domains[output_file])} domains and {len(split_ddis[output_file])} interactions to file...")
             f.write("ddi_id\\n")
-            for domain_id in split_domains[split_name]:
+            for domain_id in split_domains[output_file]:
                 f.write(f"{domain_id}\\n")
             print("Done!")
 
