@@ -103,10 +103,8 @@ process CREATE_PROTEIN_DOMAIN_MAPPING {
             except Exception:
                 print(f"Warning: could not process alignment file {aln}", file=sys.stderr)
 
-    import Bio as _Bio
     with open("versions.yml", "w") as f:
         f.write('"${task.process}":\\n')
         f.write(f"    python: {sys.version.split()[0]}\\n")
-        f.write(f"    biopython: {_Bio.__version__}\\n")
     """
 }

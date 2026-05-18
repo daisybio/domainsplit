@@ -56,6 +56,20 @@ The main output is the SQLite database file `cobinet_ddi.sqlite3` in the `result
 - Some processes require external scripts (e.g., `mysql2sqlite` for 3did conversion).
 - You may need to adjust paths or URLs as needed.
 
+## Environment variables
+
+Some processes require secrets passed via environment variables. Copy `.env.example` to `.env` and fill in your values — the `.env` file is gitignored.
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `HF_TOKEN` | Yes (ESM embeddings) | HuggingFace access token for downloading ESM model weights. Obtain at <https://huggingface.co/settings/tokens>. |
+
+On a SLURM cluster, export the variable in your job script or pass it as a [Nextflow secret](https://www.nextflow.io/docs/latest/secrets.html):
+
+```bash
+nextflow secrets set HF_TOKEN <your_token>
+```
+
 ## Credits
 
 daisybio/domainsplit was originally written by Konstantin Pelz, Christian Romberg, Chiara Thomas.
