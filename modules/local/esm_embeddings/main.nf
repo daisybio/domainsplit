@@ -51,8 +51,14 @@ process FILTER_SEQUENCES {
 process GENERATE_ESM_EMBEDDINGS {
     tag { meta.id }
     label 'process_gpu_large'
+    secret 'HF_TOKEN'
     conda "${moduleDir}/environment.yml"
     container "docker://konstantinpelz/domainsplit-gpu:1.0.0"
+    containerOptions {
+        workflow.containerEngine == 'singularity' || workflow.containerEngine == 'apptainer'
+            ? '--env HF_TOKEN'
+            : '-e HF_TOKEN'
+    }
     // queue / clusterOptions / memory / time / maxForks defined in
     // conf/slurm.config under withLabel: 'process_gpu_large'
 
@@ -67,11 +73,21 @@ process GENERATE_ESM_EMBEDDINGS {
     """
     #!/usr/bin/env python3
     import os
-    # HF_TOKEN must be provided by the executor environment (e.g. Nextflow secret or cluster env).
-    # Source: see CLAUDE.md / params.hf_token_env.
+    # HF cache must be writable inside container; default ~/.cache may be read-only on slurm nodes.
+    os.environ.setdefault("HF_HOME", os.path.join(os.getcwd(), ".hf_cache"))
+    os.environ.setdefault("HUGGINGFACE_HUB_CACHE", os.environ["HF_HOME"])
+    os.makedirs(os.environ["HF_HOME"], exist_ok=True)
+
     hf_token = os.environ.get("HF_TOKEN")
-    if hf_token:
-        os.system(f"hf auth login --token {hf_token} --add-to-git-credential")
+    if not hf_token:
+        raise RuntimeError(
+            "HF_TOKEN not set. Required for gated ESM model download. "
+            "Set via `nextflow secrets set HF_TOKEN <token>` and request access at "
+            "https://huggingface.co/EvolutionaryScale/esm3-sm-open-v1"
+        )
+    from huggingface_hub import login as _hf_login
+    _hf_login(token=hf_token, add_to_git_credential=False)
+
     os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 
     from esm.models.esmc import ESMC
