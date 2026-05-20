@@ -106,6 +106,53 @@
                     "description": "URL of the full UniProt-SwissProt per-residue ProtT5 embeddings HDF5 (used when download_prott5_complete=true).",
                     "default": "https://ftp.ebi.ac.uk/pub/contrib/UniProt/embeddings/current_release/uniprot_sprot/per-residue.h5",
                     "fa_icon": "fas fa-link"
+                },
+                "esm_protein_shards": {
+                    "type": "integer",
+                    "description": "Number of FASTA shards for parallel per-residue ESM embedding generation over the protein sequences. Each shard runs as one GPU task; cluster QoS caps concurrency (see slurm.config).",
+                    "default": 4,
+                    "minimum": 1,
+                    "fa_icon": "fas fa-puzzle-piece"
+                },
+                "esm_domain_shards": {
+                    "type": "integer",
+                    "description": "Number of FASTA shards for parallel pooled ESM embedding generation over the domain sequences. ~15k domains comfortably fit in 1 shard.",
+                    "default": 1,
+                    "minimum": 1,
+                    "fa_icon": "fas fa-puzzle-piece"
+                },
+                "esm_batch_size_protein": {
+                    "type": "integer",
+                    "description": "Initial batch size for protein per-residue ESM inference. Halved in-process on torch.OutOfMemoryError and retried.",
+                    "default": 8,
+                    "minimum": 1,
+                    "fa_icon": "fas fa-layer-group"
+                },
+                "esm_batch_size_domain": {
+                    "type": "integer",
+                    "description": "Initial batch size for domain pooled ESM inference. Domains are short, so this can be larger than the protein batch size.",
+                    "default": 32,
+                    "minimum": 1,
+                    "fa_icon": "fas fa-layer-group"
+                },
+                "esm_max_len": {
+                    "type": "integer",
+                    "description": "Maximum sequence length fed to ESM. Longer sequences are skipped (quadratic-attention long tail; would otherwise OOM or stall a chunk).",
+                    "default": 4096,
+                    "minimum": 0,
+                    "fa_icon": "fas fa-ruler-horizontal"
+                },
+                "esm_smoke_test": {
+                    "type": "boolean",
+                    "description": "If true, each ESM chunk processes only the first 100 records. For quick end-to-end wiring tests on the cluster.",
+                    "default": false,
+                    "fa_icon": "fas fa-vial"
+                },
+                "esm_hf_cache_dir": {
+                    "type": "string",
+                    "description": "Shared HF_HOME directory for the ESM chunk tasks (e.g. an NFS path). Avoids parallel chunks each re-downloading the gated ESM3 / ESMC weights. Set empty to use the per-task local cache.",
+                    "default": "",
+                    "fa_icon": "fas fa-folder-open"
                 }
             }
         },

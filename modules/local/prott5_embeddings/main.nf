@@ -1,3 +1,5 @@
+include { JOIN_HDF_FILES } from '../util/main.nf'
+
 process PROTT5_EMBEDDINGS_CHUNK {
     tag { tag_str }
     label 'process_low'
@@ -74,43 +76,6 @@ process PROTT5_EMBEDDINGS_CHUNK {
     """
 }
 
-process JOIN_HDF_FILES {
-    tag "join_prott5_chunks"
-    label 'process_low'
-    conda "${moduleDir}/environment.yml"
-    container "docker://konstantinpelz/domainsplit-general:1.0.0"
-
-    input:
-    path "chunk*"
-
-    output:
-    path "embeddings.h5", emit: embeddings
-    path "versions.yml", emit: versions
-
-    script:
-    """
-    #!/usr/bin/env python3
-    from pathlib import Path
-    import h5py
-    import gzip
-
-    with h5py.File("embeddings.h5", "w") as out_h5:
-        for chunk_file in Path().glob("chunk*"):
-            print("Combining chunk file:", chunk_file)
-            # open chunk file with gzip decompression
-            with gzip.open(chunk_file, "rb") as gz_file:
-                with h5py.File(gz_file, "r") as in_h5:
-                    for key in in_h5.keys():
-                        in_h5.copy(key, out_h5)
-
-    import sys as _sys
-    with open("versions.yml", "w") as f:
-        f.write('"${task.process}":\\n')
-        f.write(f"    python: {_sys.version.split()[0]}\\n")
-        f.write(f"    h5py: {h5py.__version__}\\n")
-    """
-}
-
 process DOWNLOAD_PROTT5_EMBEDDINGS_COMPLETE {
     tag "prott5_complete"
     label 'process_low'
@@ -153,6 +118,6 @@ def download_prott5_embeddings(protein_ids) {
     }
     def protein_id_sublists = protein_ids.buffer(size: 100, remainder: true)
     def chunks = PROTT5_EMBEDDINGS_CHUNK(protein_id_sublists)
-    def embeddings = JOIN_HDF_FILES(chunks.embeddings_chunk.collect())
-    return embeddings.embeddings
+    def joined = JOIN_HDF_FILES('embeddings', chunks.embeddings_chunk.collect())
+    return joined.joined
 }
