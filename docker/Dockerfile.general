@@ -2,9 +2,12 @@ FROM mambaorg/micromamba:1.5.10
 
 # Build/tag as konstantinpelz/domainsplit-general:1.0.0
 # Covers all CPU processes in daisybio/domainsplit pipeline:
-#   - DOWNLOAD_3DID_SQLITE, EXTRACT_PFAM_IDS (python stdlib + gawk + gzip + bin/mysql2sqlite)
+#   - DOWNLOAD_3DID_SQLITE (gawk + gzip + bin/mysql2sqlite)
+#   - INIT_DOMAINSPLIT_DB, INSERT_DDIS, INSERT_NEGATIVE_DDIS, SMOKE_FILTER (sqlite3 CLI/stdlib)
+#   - EXTRACT_UNIQUE_DOMAINS (sqlite3 CLI)
 #   - DOWNLOAD_PFAM_ALIGNMENT, CREATE_PROTEIN_DOMAIN_MAPPING (biopython)
-#   - COBINET (pandas, numpy, h5py, biopython, tqdm, sqlite3 stdlib)
+#   - INSERT_DOMAIN_GO_TERMS, INSERT_PROTEINS_WITH_EMBEDDINGS, INSERT_PROTEIN_GO_TERMS,
+#     INSERT_PPI, INSERT_DOMAIN_PROTEIN_MAPPING (pandas, numpy, h5py, biopython, tqdm, sqlite3 stdlib)
 #   - PROTT5_EMBEDDINGS_CHUNK (requests)
 #   - JOIN_HDF_FILES (h5py)
 #   - DOWNLOAD_PROTT5_EMBEDDINGS_COMPLETE (wget)

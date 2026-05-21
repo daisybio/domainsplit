@@ -35,7 +35,7 @@ workflow DAISYBIO_DOMAINSPLIT {
     DOMAINSPLIT ()
 
 emit:
-    cobinet_db = DOMAINSPLIT.out.cobinet_db
+    domainsplit_db = DOMAINSPLIT.out.domainsplit_db
     split_db   = DOMAINSPLIT.out.split_db
 }
 /*
@@ -78,12 +78,12 @@ workflow {
     )
 
     publish:
-    cobinet_db = DAISYBIO_DOMAINSPLIT.out.cobinet_db
+    domainsplit_db = DAISYBIO_DOMAINSPLIT.out.domainsplit_db
     split_db   = DAISYBIO_DOMAINSPLIT.out.split_db
 }
 
 output {
-    cobinet_db {
+    domainsplit_db {
     }
     split_db {
         path {

@@ -1,0 +1,11 @@
+name: insert_proteins_with_embeddings
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - python>=3.10
+  - pandas
+  - numpy
+  - h5py
+  - biopython
+  - tqdm

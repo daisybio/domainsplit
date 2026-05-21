@@ -1,5 +1,5 @@
-name: split_cobinet_database
-description: Split the CoBiNet SQLite database into train/optimization/test sets using random and minimal-leakage strategies.
+name: split_domainsplit_database
+description: Split the Domainsplit SQLite database into train/optimization/test sets using random and minimal-leakage strategies.
 keywords:
   - ddi
   - split
@@ -12,9 +12,9 @@ components:
   - minimal_leakage_split
   - split_database
 input:
-  - cobinet_db_ch:
+  - domainsplit_db_ch:
       type: file
-      description: Unified CoBiNet SQLite database.
+      description: Unified Domainsplit SQLite database.
       pattern: "*.sqlite3"
 output:
   - split_db:

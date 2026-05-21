@@ -1,7 +1,8 @@
 /*
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
     COLLECT_DDI_DATA -- download and parse every DDI source, write into the
-    pre-initialised CoBiNet SQLite. Downstream code consumes only the database.
+    pre-initialised Domainsplit SQLite. Downstream code consumes only the
+    database; the 3did SQLite stays internal to this subworkflow.
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
     Add a new DDI source by:
       1. Adding its download module (network fetch + format normalisation).
@@ -17,7 +18,7 @@ include { SMOKE_FILTER         } from '../../../modules/local/smoke_filter/main.
 
 workflow COLLECT_DDI_DATA {
     take:
-    cobinet_db_in
+    domainsplit_db_in
     url_3did
     url_negatome
 
@@ -26,13 +27,12 @@ workflow COLLECT_DDI_DATA {
     sqlite_3did   = DOWNLOAD_3DID_SQLITE(file_3did).sqlite
     negatome_file = DOWNLOAD_NEGATOME(url_negatome).negatome
 
-    cobinet_db = INSERT_DDIS(cobinet_db_in, sqlite_3did, negatome_file).cobinet_db
+    domainsplit_db = INSERT_DDIS(domainsplit_db_in, sqlite_3did, negatome_file).domainsplit_db
 
     if (params.smoke_test_n_ddis != null) {
-        cobinet_db = SMOKE_FILTER(cobinet_db, params.smoke_test_n_ddis).cobinet_db
+        domainsplit_db = SMOKE_FILTER(domainsplit_db, params.smoke_test_n_ddis).domainsplit_db
     }
 
     emit:
-    cobinet_db
-    sqlite_3did
+    domainsplit_db
 }

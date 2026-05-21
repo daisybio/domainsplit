@@ -1,12 +1,12 @@
-process INIT_COBINET_DB {
-    tag "init_cobinet_db"
+process INIT_DOMAINSPLIT_DB {
+    tag "init_domainsplit_db"
     label 'process_low'
     conda "${moduleDir}/environment.yml"
     container "docker://konstantinpelz/domainsplit-general:1.0.0"
 
     output:
-    path "cobinet.sqlite3", emit: cobinet_db
-    path "versions.yml",    emit: versions
+    path "domainsplit.sqlite3", emit: domainsplit_db
+    path "versions.yml",        emit: versions
 
     script:
     """
@@ -14,7 +14,7 @@ process INIT_COBINET_DB {
     import sqlite3
     import sys
 
-    con = sqlite3.connect("cobinet.sqlite3")
+    con = sqlite3.connect("domainsplit.sqlite3")
     con.executescript('''
         PRAGMA foreign_keys=ON;
         PRAGMA journal_mode=OFF;

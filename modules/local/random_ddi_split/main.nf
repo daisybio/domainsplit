@@ -5,7 +5,7 @@ process RANDOM_DDI_SPLIT {
     container "docker://konstantinpelz/domainsplit-general:1.0.0"
 
     input:
-    path 'cobinet.sqlite3'
+    path 'domainsplit.sqlite3'
     val split_fractions  // e.g., [("train", 0.8), ("test", 0.2)]
 
     output:
@@ -32,7 +32,7 @@ process RANDOM_DDI_SPLIT {
     import random
     import os
 
-    input_db_path = "cobinet.sqlite3"
+    input_db_path = "domainsplit.sqlite3"
     output_file_fraction_dict = ${split_fraction_dict_py}
 
     # Connect to the database

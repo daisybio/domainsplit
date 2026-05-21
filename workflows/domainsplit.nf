@@ -3,13 +3,15 @@
     IMPORT MODULES / SUBWORKFLOWS / FUNCTIONS
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 */
-include { paramsSummaryMap        } from 'plugin/nf-schema'
-include { softwareVersionsToYAML  } from '../subworkflows/nf-core/utils_nfcore_pipeline'
-include { methodsDescriptionText  } from '../subworkflows/local/utils_nfcore_domainsplit_pipeline'
-include { INIT_COBINET_DB         } from '../modules/local/init_cobinet_db/main.nf'
-include { COLLECT_DDI_DATA        } from '../subworkflows/local/collect_ddi_data/main.nf'
-include { CREATE_COBINET_DATABASE } from '../subworkflows/local/create_cobinet_database/main.nf'
-include { SPLIT_COBINET_DATABASE  } from '../subworkflows/local/split_cobinet_database/main.nf'
+include { paramsSummaryMap            } from 'plugin/nf-schema'
+include { softwareVersionsToYAML      } from '../subworkflows/nf-core/utils_nfcore_pipeline'
+include { methodsDescriptionText      } from '../subworkflows/local/utils_nfcore_domainsplit_pipeline'
+include { INIT_DOMAINSPLIT_DB         } from '../modules/local/init_domainsplit_db/main.nf'
+include { COLLECT_DDI_DATA            } from '../subworkflows/local/collect_ddi_data/main.nf'
+include { CURATE_DOMAINS              } from '../subworkflows/local/curate_domains/main.nf'
+include { GENERATE_EMBEDDINGS         } from '../subworkflows/local/generate_embeddings/main.nf'
+include { ENRICH_DDI_DATABASE         } from '../subworkflows/local/enrich_ddi_database/main.nf'
+include { SPLIT_DOMAINSPLIT_DATABASE  } from '../subworkflows/local/split_domainsplit_database/main.nf'
 
 /*
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -26,7 +28,7 @@ main:
     input_string             = file(params.url_string)
     input_pfam2go            = file(params.url_pfam2go)
 
-    empty_db = INIT_COBINET_DB().cobinet_db
+    empty_db = INIT_DOMAINSPLIT_DB().domainsplit_db
 
     COLLECT_DDI_DATA(
         empty_db,
@@ -34,28 +36,40 @@ main:
         params.url_negatome,
     )
 
-    cobinet_db_ddi = COLLECT_DDI_DATA.out.cobinet_db
-    sqlite_3did    = COLLECT_DDI_DATA.out.sqlite_3did
+    domainsplit_db_ddi = COLLECT_DDI_DATA.out.domainsplit_db
 
-
-    CREATE_COBINET_DATABASE(
-        cobinet_db_ddi,
-        sqlite_3did,
+    CURATE_DOMAINS(
+        domainsplit_db_ddi,
         input_uniprot_id_mapping,
-        input_uniprot_embeddings,
-        input_uniprot_go_terms,
-        input_uniprot_sequences,
-        input_string,
-        input_pfam2go,
     )
 
-    SPLIT_COBINET_DATABASE(
-        CREATE_COBINET_DATABASE.out.cobinet_db
+    protein_domain_map = CURATE_DOMAINS.out.protein_domain_map
+
+    GENERATE_EMBEDDINGS(
+        protein_domain_map,
+        input_uniprot_sequences,
+    )
+
+    ENRICH_DDI_DATABASE(
+        domainsplit_db_ddi,
+        input_pfam2go,
+        input_uniprot_sequences,
+        protein_domain_map,
+        GENERATE_EMBEDDINGS.out.prott5_embeddings,
+        input_uniprot_go_terms,
+        input_string,
+        input_uniprot_id_mapping,
+        GENERATE_EMBEDDINGS.out.esm_protein_embeddings,
+        GENERATE_EMBEDDINGS.out.esm_domain_embeddings,
+    )
+
+    SPLIT_DOMAINSPLIT_DATABASE(
+        ENRICH_DDI_DATABASE.out.domainsplit_db
     )
 
 emit:
-    cobinet_db = CREATE_COBINET_DATABASE.out.cobinet_db
-    split_db   = SPLIT_COBINET_DATABASE.out.split_db
+    domainsplit_db = ENRICH_DDI_DATABASE.out.domainsplit_db
+    split_db       = SPLIT_DOMAINSPLIT_DATABASE.out.split_db
 }
 
 /*

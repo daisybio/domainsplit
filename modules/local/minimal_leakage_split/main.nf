@@ -5,7 +5,7 @@ process EXTRACT_PROTEIN_SEQUENCES {
     container "docker://konstantinpelz/domainsplit-general:1.0.0"
 
     input:
-    path "cobinet.sqlite3"
+    path "domainsplit.sqlite3"
 
     output:
     path "protein_sequences.fasta.gz", emit: protein_fasta
@@ -16,7 +16,7 @@ process EXTRACT_PROTEIN_SEQUENCES {
     set -o pipefail
 
     # x'0a' is a newline character in hexadecimal, which is used to separate the header and sequence in FASTA format
-    sqlite3 cobinet.sqlite3 "
+    sqlite3 domainsplit.sqlite3 "
             SELECT
                 CONCAT('>', protein.id, x'0a', protein.sequence)
             FROM protein;
@@ -38,7 +38,7 @@ process EXTRACT_DOMAIN_SEQUENCES {
     container "docker://konstantinpelz/domainsplit-general:1.0.0"
 
     input:
-    path "cobinet.sqlite3"
+    path "domainsplit.sqlite3"
 
     output:
     path "domain_sequences.fasta.gz", emit: domain_fasta
@@ -49,7 +49,7 @@ process EXTRACT_DOMAIN_SEQUENCES {
     set -o pipefail
 
     # x'0a' is a newline character in hexadecimal, which is used to separate the header and sequence in FASTA format
-    sqlite3 cobinet.sqlite3 "
+    sqlite3 domainsplit.sqlite3 "
             SELECT
                 CONCAT('>', domain_id, '-', protein_id, x'0a', domain_sequence)
             FROM domain_protein_map;
@@ -78,7 +78,7 @@ process MINIMAL_LEAKAGE_SPLIT_PROTEIN {
     container "docker://konstantinpelz/domainsplit-general:1.0.0"
 
     input:
-    path "cobinet.sqlite3"
+    path "domainsplit.sqlite3"
     val split_fractions  // e.g., [("train", 0.8), ("test", 0.2)]
     path ("protein_clusters.tsv")
 
@@ -113,7 +113,7 @@ process MINIMAL_LEAKAGE_SPLIT_DOMAIN {
     container "docker://konstantinpelz/domainsplit-general:1.0.0"
 
     input:
-    path "cobinet.sqlite3"
+    path "domainsplit.sqlite3"
     val split_fractions  // e.g., [("train", 0.8), ("test", 0.2)]
     path ("domain_clusters.tsv")
 
@@ -159,7 +159,7 @@ process MINIMAL_LEAKAGE_SPLIT_DOMAIN {
     domain_clusters = cluster_df.groupby("centroid")["member"].apply(set).tolist()
 
     # Load DDI data from the database
-    conn = sqlite3.connect("cobinet.sqlite3")
+    conn = sqlite3.connect("domainsplit.sqlite3")
     # Load the protein-domain mapping into a DataFrame (not used in the current implementation, but may be useful for future extensions)
     # pd_mapping = pd.read_sql('''
     #    SELECT domain_id, protein_id FROM domain_protein_map

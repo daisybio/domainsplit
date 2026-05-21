@@ -39,7 +39,7 @@
             "title": "Source database URLs",
             "type": "object",
             "fa_icon": "fas fa-database",
-            "description": "URLs of the public source databases used to assemble the CoBiNet database.",
+            "description": "URLs of the public source databases used to assemble the domainsplit database.",
             "properties": {
                 "url_3did": {
                     "type": "string",
@@ -156,7 +156,7 @@
                 },
                 "smoke_test_n_ddis": {
                     "type": ["integer", "null"],
-                    "description": "If set, after DDI collection the cobinet DB is reduced to this many total interactions — floor(N/2) random positive DDIs and floor(N/2) random negative DDIs. All downstream steps then run on a tiny data set. Leave null (default) to disable the smoke filter.",
+                    "description": "If set, after DDI collection the domainsplit DB is reduced to this many total interactions — floor(N/2) random positive DDIs and floor(N/2) random negative DDIs. All downstream steps then run on a tiny data set. Leave null (default) to disable the smoke filter.",
                     "default": null,
                     "minimum": 2,
                     "fa_icon": "fas fa-hashtag"

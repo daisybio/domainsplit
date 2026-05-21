@@ -5,7 +5,7 @@ process RANDOM_DENOISE_SPLIT {
     container "docker://konstantinpelz/domainsplit-general:1.0.0"
 
     input:
-    path 'cobinet.sqlite3'
+    path 'domainsplit.sqlite3'
     val change_fraction
     val invert
 
@@ -28,7 +28,7 @@ process RANDOM_DENOISE_SPLIT {
     import random
     import os
 
-    input_db_path = "cobinet.sqlite3"
+    input_db_path = "domainsplit.sqlite3"
 
     # Connect to the database
     conn = sqlite3.connect(input_db_path)

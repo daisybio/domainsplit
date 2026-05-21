@@ -1,6 +1,7 @@
+name: insert_domain_go_terms
 channels:
   - conda-forge
   - bioconda
 dependencies:
+  - python>=3.10
   - pandas
-  - sqlite

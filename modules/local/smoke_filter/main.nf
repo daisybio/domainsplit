@@ -5,12 +5,12 @@ process SMOKE_FILTER {
     container "docker://konstantinpelz/domainsplit-general:1.0.0"
 
     input:
-    path cobinet_db
+    path domainsplit_db
     val  n_ddis
 
     output:
-    path "cobinet.smoke.sqlite3", emit: cobinet_db
-    path "versions.yml",          emit: versions
+    path "domainsplit.smoke.sqlite3", emit: domainsplit_db
+    path "versions.yml",              emit: versions
 
     script:
     """
@@ -22,8 +22,8 @@ process SMOKE_FILTER {
     N = ${n_ddis}
     HALF = N // 2
 
-    shutil.copy("${cobinet_db}", "cobinet.smoke.sqlite3")
-    con = sqlite3.connect("cobinet.smoke.sqlite3")
+    shutil.copy("${domainsplit_db}", "domainsplit.smoke.sqlite3")
+    con = sqlite3.connect("domainsplit.smoke.sqlite3")
     con.execute("PRAGMA foreign_keys=ON")
 
     pos_before = con.execute(
@@ -79,7 +79,7 @@ process SMOKE_FILTER {
     )
     con.close()
 
-    con = sqlite3.connect("cobinet.smoke.sqlite3")
+    con = sqlite3.connect("domainsplit.smoke.sqlite3")
     con.execute("VACUUM")
     con.close()
 

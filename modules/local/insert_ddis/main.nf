@@ -5,13 +5,13 @@ process INSERT_DDIS {
     container "docker://konstantinpelz/domainsplit-general:1.0.0"
 
     input:
-    path cobinet_db_in, stageAs: 'input.cobinet.sqlite3'
+    path domainsplit_db_in, stageAs: 'input.domainsplit.sqlite3'
     path sqlite_3did
     path negatome_txt
 
     output:
-    path "cobinet.sqlite3", emit: cobinet_db
-    path "versions.yml",    emit: versions
+    path "domainsplit.sqlite3", emit: domainsplit_db
+    path "versions.yml",        emit: versions
 
     script:
     """
@@ -20,13 +20,13 @@ process INSERT_DDIS {
     import sqlite3
     import sys
 
-    shutil.copy("${cobinet_db_in}", "cobinet.sqlite3")
+    shutil.copy("${domainsplit_db_in}", "domainsplit.sqlite3")
 
-    conn_3did    = sqlite3.connect("${sqlite_3did}")
-    conn_cobinet = sqlite3.connect("cobinet.sqlite3")
-    conn_cobinet.execute("PRAGMA foreign_keys=ON")
-    conn_cobinet.execute("PRAGMA journal_mode=OFF")
-    conn_cobinet.execute("PRAGMA synchronous=OFF")
+    conn_3did        = sqlite3.connect("${sqlite_3did}")
+    conn_domainsplit = sqlite3.connect("domainsplit.sqlite3")
+    conn_domainsplit.execute("PRAGMA foreign_keys=ON")
+    conn_domainsplit.execute("PRAGMA journal_mode=OFF")
+    conn_domainsplit.execute("PRAGMA synchronous=OFF")
 
     def iter_negatome_pairs(path):
         with open(path) as f:
@@ -53,12 +53,12 @@ process INSERT_DDIS {
     domain_rows_3did = ((name, pfam_id.split(".")[0]) for (name, pfam_id, _length) in cursor)
     domain_rows_negatome = ((None, pfam_id) for pfam_id in negatome_pfam_ids("${negatome_txt}"))
 
-    conn_cobinet.executemany(
+    conn_domainsplit.executemany(
         "INSERT OR IGNORE INTO domain(name, pfam_id) VALUES (?, ?);",
         list(domain_rows_3did) + list(domain_rows_negatome),
     )
     cursor.close()
-    conn_cobinet.commit()
+    conn_domainsplit.commit()
 
     # ---- positive DDIs from 3did
     print("Inserting positive DDIs from 3did", flush=True)
@@ -68,7 +68,7 @@ process INSERT_DDIS {
         "WHERE DDI1.domain1 = d1.Name AND DDI1.domain2 = d2.Name;"
     )
     pos_iter = ((id_1.split(".")[0], id_2.split(".")[0]) for (id_1, id_2) in cursor)
-    conn_cobinet.executemany(
+    conn_domainsplit.executemany(
         '''INSERT OR IGNORE INTO domain_domain_interaction(domain_id_a, domain_id_b, negative, source)
            SELECT d1.id, d2.id, FALSE, '3did'
            FROM domain AS d1, domain AS d2
@@ -76,19 +76,19 @@ process INSERT_DDIS {
         pos_iter,
     )
     cursor.close()
-    conn_cobinet.commit()
+    conn_domainsplit.commit()
 
     # ---- negative DDIs from negatome
     print("Inserting negative DDIs from negatome", flush=True)
-    conn_cobinet.executemany(
+    conn_domainsplit.executemany(
         '''INSERT OR IGNORE INTO domain_domain_interaction(domain_id_a, domain_id_b, negative, source)
            SELECT d1.id, d2.id, TRUE, 'negatome'
            FROM domain AS d1, domain AS d2
            WHERE d1.pfam_id = ? AND d2.pfam_id = ?;''',
         iter_negatome_pairs("${negatome_txt}"),
     )
-    conn_cobinet.commit()
-    conn_cobinet.close()
+    conn_domainsplit.commit()
+    conn_domainsplit.close()
     conn_3did.close()
 
     with open("versions.yml", "w") as f:

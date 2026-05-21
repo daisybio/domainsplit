@@ -18,7 +18,7 @@ Performance:
     Cap halvings at 3; if the smallest batch still OOMs, fall back to
     per-record and skip records that still fail.
   - `--max-len` cap drops the long-tail quadratic-attention sequences entirely.
-  - Storage dtype is float16 (downstream cobinet only does np.array().dumps()).
+  - Storage dtype is float16 (downstream domainsplit only does np.array().dumps()).
 
 H5 key contract (must match the legacy pipeline):
   per_residue: <seq_id>/esm3 -> (L+2, D), <seq_id>/esmc -> (L+2, D)

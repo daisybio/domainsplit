@@ -6,7 +6,7 @@ process SPLIT_DATABASE {
 
     input:
     tuple val(meta), path("interactions.csv")
-    path "cobinet.sqlite3"
+    path "domainsplit.sqlite3"
 
     output:
     tuple val(meta), path(output_db_path), emit: split_db
@@ -28,7 +28,7 @@ process SPLIT_DATABASE {
     import pandas as pd
 
 
-    input_db_path = "cobinet.sqlite3"
+    input_db_path = "domainsplit.sqlite3"
     output_db_path = "${output_db_path}"
     interaction_ids_path = "interactions.csv"
 
