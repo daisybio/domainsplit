@@ -5,8 +5,7 @@ process COBINET {
     container "docker://konstantinpelz/domainsplit-general:1.0.0"
 
     input:
-    path ddi_3did
-    path ddi_negatome
+    path cobinet_db_in, stageAs: 'input.cobinet.sqlite3'
     path pfam2go
     path uniprot_database
     path protein_domain_map
@@ -25,6 +24,7 @@ process COBINET {
     """
     #!/usr/bin/env python3
 
+    import shutil
     import sqlite3
     import gzip
     import itertools
@@ -35,7 +35,7 @@ process COBINET {
     from Bio import SeqIO
     from Bio import AlignIO
     from tqdm import tqdm
-    from typing import Set, Dict
+    from typing import Dict
     from pathlib import Path
 
     def load_pfam2go_dataframe(pfam2go_path: str) -> pd.DataFrame:
@@ -56,138 +56,11 @@ process COBINET {
                     mapping[symbol_name.strip()] = uniprot_id.strip()
         return mapping
 
-    def iter_negatome_pairs(path):
-        # Negatome 2.0 combined_pfam.txt: whitespace-separated rows of two
-        # Pfam IDs (e.g. "PF00001\\tPF00002"). Skip blank lines and rows
-        # with fewer than two tokens.
-        with open(path) as f:
-            for line in f:
-                tokens = line.split()
-                if len(tokens) < 2:
-                    continue
-                yield tokens[0], tokens[1]
-
-    def get_negatome_pfam_ids() -> Set[str]:
-        pfam_ids = set()
-        for id_1, id_2 in iter_negatome_pairs("${ddi_negatome}"):
-            pfam_ids.add(id_1)
-            pfam_ids.add(id_2)
-        return pfam_ids
-
-    conn_3did = sqlite3.connect("${ddi_3did}")
+    shutil.copy("${cobinet_db_in}", "cobinet.sqlite3")
     conn_cobinet = sqlite3.connect("cobinet.sqlite3")
-    print("Creating database schema")
-    conn_cobinet.executescript(\"""
-        PRAGMA foreign_keys=ON;
-        PRAGMA journal_mode=OFF;
-        PRAGMA synchronous=OFF;
-
-        CREATE TABLE domain (id INTEGER PRIMARY KEY, pfam_id, name, UNIQUE(pfam_id));
-        CREATE TABLE domain_go_terms(
-            domain_id REFERENCES domain ON DELETE CASCADE,
-            go_accession
-        );
-        CREATE TABLE domain_domain_interaction (
-            id INTEGER PRIMARY KEY,
-            domain_id_a, domain_id_b, negative,
-            FOREIGN KEY(domain_id_a) REFERENCES domain ON DELETE CASCADE,
-            FOREIGN KEY(domain_id_b) REFERENCES domain ON DELETE CASCADE,
-            UNIQUE(domain_id_a, domain_id_b)
-        );
-
-        CREATE TABLE protein (
-            id INTEGER PRIMARY KEY,
-            uniprot_id,
-            sequence,
-            prott5_per_residue,
-            esm3_per_residue,
-            esmc_per_residue,
-            UNIQUE(uniprot_id)
-        );
-        CREATE TABLE protein_go_terms(
-            protein_id REFERENCES protein ON DELETE CASCADE,
-            go_accession
-        );
-        CREATE TABLE protein_protein_interaction (
-            protein_id_a REFERENCES protein ON DELETE CASCADE,
-            protein_id_b REFERENCES protein ON DELETE CASCADE,
-            score,
-            UNIQUE(protein_id_a, protein_id_b)
-        );
-
-        CREATE TABLE domain_protein_map (
-            domain_id REFERENCES domain ON DELETE CASCADE,
-            protein_id REFERENCES protein ON DELETE CASCADE,
-            domain_sequence, start_pos, end_pos,
-            esm3_per_domain, esmc_per_domain,
-            UNIQUE(domain_id, protein_id)
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_domain_domain_interaction_domain_id_a
-        ON domain_domain_interaction (domain_id_a);
-        CREATE INDEX IF NOT EXISTS idx_domain_domain_interaction_domain_id_b
-        ON domain_domain_interaction (domain_id_b);
-        CREATE INDEX IF NOT EXISTS idx_domain_protein_map_domain_id
-        ON domain_protein_map (domain_id);
-        CREATE INDEX IF NOT EXISTS idx_domain_protein_map_protein_id
-        ON domain_protein_map (protein_id);
-        CREATE INDEX IF NOT EXISTS idx_protein_protein_interaction_protein_id_a
-        ON protein_protein_interaction (protein_id_a);
-        CREATE INDEX IF NOT EXISTS idx_protein_protein_interaction_protein_id_b
-        ON protein_protein_interaction (protein_id_b);
-        \""")
-
-    # SELECT name and Pfam id from 3did and move to cobinet database
-    cursor = conn_3did.execute(\"""
-        SELECT Name, Pfam_id, profile_length FROM Domain, domain_length
-        WHERE domain_length.domain = Domain.Name
-        \""")
-
-    print("Inserting domain information")
-    insert_iterator_3did = ((name, pfam_id.split(".")[0]) for (name, pfam_id, length) in cursor)
-    insert_iterator_negatome = ((None, pfam_id) for pfam_id in get_negatome_pfam_ids())
-
-    insert_iterator = tqdm(itertools.chain(insert_iterator_3did,insert_iterator_negatome))
-
-    # need to insert or ignore, because the same pfam id can occur in both 3did and negatome. This eliminates
-    # duplicates that would violate the unique constraint
-    conn_cobinet.executemany(
-        "INSERT OR IGNORE INTO domain(name, pfam_id) VALUES (?, ?);",
-        insert_iterator)
-    cursor.close()
-    conn_cobinet.commit()
-
-    print("Inserting domain-domain interactions")
-    # SELECT the domain domain interactions and tranfer over to cobinet
-    cursor = conn_3did.execute(\"""
-                SELECT d1.Pfam_id, d2.Pfam_id
-                FROM DDI1, Domain AS d1, Domain AS d2
-                WHERE
-                    DDI1.domain1 = d1.Name AND
-                    DDI1.domain2 = d2.Name;
-                \""")
-
-    pfam_id_iterator = tqdm((id_1.split(".")[0], id_2.split(".")[0]) for (id_1, id_2) in cursor)
-    conn_cobinet.executemany(\"""
-                    INSERT INTO domain_domain_interaction(domain_id_a, domain_id_b, negative)
-                    SELECT d1.id AS domain_id_a, d2.id AS domain_id_b, FALSE as negative
-                    FROM domain AS d1, domain AS d2
-                    WHERE d1.pfam_id = ? AND d2.pfam_id = ?
-                    ;
-                \""",pfam_id_iterator)
-    cursor.close()
-    conn_cobinet.commit()
-
-    print("Inserting negative domain-domain intereactions (negatome)")
-    pfam_id_iterator = iter_negatome_pairs("${ddi_negatome}")
-    conn_cobinet.executemany(\"""
-                    INSERT OR IGNORE INTO domain_domain_interaction(domain_id_a, domain_id_b, negative)
-                    SELECT d1.id AS domain_id_a, d2.id AS domain_id_b, TRUE as negative
-                    FROM domain AS d1, domain AS d2
-                    WHERE d1.pfam_id = ? AND d2.pfam_id = ?
-                    ;
-                \""",pfam_id_iterator)
-    conn_cobinet.commit()
+    conn_cobinet.execute("PRAGMA foreign_keys=ON")
+    conn_cobinet.execute("PRAGMA journal_mode=OFF")
+    conn_cobinet.execute("PRAGMA synchronous=OFF")
 
     print("Inserting domain GO information")
     pfam2go_dataframe = load_pfam2go_dataframe("${pfam2go}")

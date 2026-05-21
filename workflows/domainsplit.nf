@@ -3,9 +3,11 @@
     IMPORT MODULES / SUBWORKFLOWS / FUNCTIONS
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 */
-include { paramsSummaryMap       } from 'plugin/nf-schema'
-include { softwareVersionsToYAML } from '../subworkflows/nf-core/utils_nfcore_pipeline'
-include { methodsDescriptionText } from '../subworkflows/local/utils_nfcore_domainsplit_pipeline'
+include { paramsSummaryMap        } from 'plugin/nf-schema'
+include { softwareVersionsToYAML  } from '../subworkflows/nf-core/utils_nfcore_pipeline'
+include { methodsDescriptionText  } from '../subworkflows/local/utils_nfcore_domainsplit_pipeline'
+include { INIT_COBINET_DB         } from '../modules/local/init_cobinet_db/main.nf'
+include { COLLECT_DDI_DATA        } from '../subworkflows/local/collect_ddi_data/main.nf'
 include { CREATE_COBINET_DATABASE } from '../subworkflows/local/create_cobinet_database/main.nf'
 include { SPLIT_COBINET_DATABASE  } from '../subworkflows/local/split_cobinet_database/main.nf'
 
@@ -17,22 +19,32 @@ include { SPLIT_COBINET_DATABASE  } from '../subworkflows/local/split_cobinet_da
 
 workflow DOMAINSPLIT {
 main:
-    input_3did               = file(params.url_3did)
     input_uniprot_id_mapping = file(params.url_uniprot_id_mapping)
     input_uniprot_embeddings = file(params.url_uniprot_embeddings)
     input_uniprot_go_terms   = file(params.url_uniprot_go_terms)
     input_uniprot_sequences  = file(params.url_uniprot_sequences)
-    input_negatome           = file(params.url_negatome)
     input_string             = file(params.url_string)
     input_pfam2go            = file(params.url_pfam2go)
 
+    empty_db = INIT_COBINET_DB().cobinet_db
+
+    COLLECT_DDI_DATA(
+        empty_db,
+        params.url_3did,
+        params.url_negatome,
+    )
+
+    cobinet_db_ddi = COLLECT_DDI_DATA.out.cobinet_db
+    sqlite_3did    = COLLECT_DDI_DATA.out.sqlite_3did
+
+
     CREATE_COBINET_DATABASE(
-        input_3did,
+        cobinet_db_ddi,
+        sqlite_3did,
         input_uniprot_id_mapping,
         input_uniprot_embeddings,
         input_uniprot_go_terms,
         input_uniprot_sequences,
-        input_negatome,
         input_string,
         input_pfam2go,
     )

@@ -5,75 +5,83 @@ process SMOKE_FILTER {
     container "docker://konstantinpelz/domainsplit-general:1.0.0"
 
     input:
-    path sqlite_3did
-    path negatome
+    path cobinet_db
     val  n_ddis
 
     output:
-    path "3did.smoke.sqlite3", emit: sqlite
-    path "negatome.smoke.tsv", emit: negatome
-    path "versions.yml",       emit: versions
+    path "cobinet.smoke.sqlite3", emit: cobinet_db
+    path "versions.yml",          emit: versions
 
     script:
     """
     #!/usr/bin/env python3
-    import sqlite3
-    import random
     import shutil
+    import sqlite3
     import sys
 
-    random.seed(42)
     N = ${n_ddis}
+    HALF = N // 2
 
-    # ---- 3did SQLite: keep N random positive DDIs; restrict Domain / domain_length to referenced rows
-    shutil.copy("${sqlite_3did}", "3did.smoke.sqlite3")
-    con = sqlite3.connect("3did.smoke.sqlite3")
-    total = con.execute("SELECT COUNT(*) FROM DDI1").fetchone()[0]
-    print(f"3did DDI1 rows before: {total}", flush=True)
+    shutil.copy("${cobinet_db}", "cobinet.smoke.sqlite3")
+    con = sqlite3.connect("cobinet.smoke.sqlite3")
+    con.execute("PRAGMA foreign_keys=ON")
 
-    keep = min(N, total)
-    rows = con.execute(
-        "SELECT domain1, domain2 FROM DDI1 ORDER BY RANDOM() LIMIT ?",
-        (keep,)
-    ).fetchall()
+    pos_before = con.execute(
+        "SELECT COUNT(*) FROM domain_domain_interaction WHERE negative=0"
+    ).fetchone()[0]
+    neg_before = con.execute(
+        "SELECT COUNT(*) FROM domain_domain_interaction WHERE negative=1"
+    ).fetchone()[0]
+    dom_before = con.execute("SELECT COUNT(*) FROM domain").fetchone()[0]
+    print(
+        f"smoke filter: before -> pos={pos_before} neg={neg_before} domain={dom_before}; "
+        f"keep {HALF} of each",
+        flush=True,
+    )
 
-    con.execute("CREATE TEMP TABLE keep_pairs(d1 TEXT, d2 TEXT, PRIMARY KEY(d1, d2))")
-    con.executemany("INSERT OR IGNORE INTO keep_pairs VALUES (?, ?)", rows)
-
+    con.execute("CREATE TEMP TABLE keep_ddi(id INTEGER PRIMARY KEY)")
+    con.execute(
+        "INSERT INTO keep_ddi(id) "
+        "SELECT id FROM domain_domain_interaction WHERE negative=0 "
+        "ORDER BY RANDOM() LIMIT ?",
+        (HALF,),
+    )
+    con.execute(
+        "INSERT INTO keep_ddi(id) "
+        "SELECT id FROM domain_domain_interaction WHERE negative=1 "
+        "ORDER BY RANDOM() LIMIT ?",
+        (HALF,),
+    )
+    con.execute(
+        "DELETE FROM domain_domain_interaction "
+        "WHERE id NOT IN (SELECT id FROM keep_ddi)"
+    )
     con.execute('''
-        DELETE FROM DDI1
-        WHERE NOT EXISTS (
-            SELECT 1 FROM keep_pairs k
-            WHERE k.d1 = DDI1.domain1 AND k.d2 = DDI1.domain2
+        DELETE FROM domain
+        WHERE id NOT IN (
+            SELECT domain_id_a FROM domain_domain_interaction
+            UNION
+            SELECT domain_id_b FROM domain_domain_interaction
         )
     ''')
-
-    domains = {d for pair in rows for d in pair}
-    con.execute("CREATE TEMP TABLE keep_domains(name TEXT PRIMARY KEY)")
-    con.executemany("INSERT OR IGNORE INTO keep_domains VALUES (?)", [(d,) for d in domains])
-    con.execute("DELETE FROM Domain WHERE Name NOT IN (SELECT name FROM keep_domains)")
-    con.execute("DELETE FROM domain_length WHERE domain NOT IN (SELECT name FROM keep_domains)")
     con.commit()
 
-    after_ddi = con.execute("SELECT COUNT(*) FROM DDI1").fetchone()[0]
-    after_dom = con.execute("SELECT COUNT(*) FROM Domain").fetchone()[0]
-    print(f"3did DDI1 rows after:   {after_ddi}", flush=True)
-    print(f"3did Domain rows after: {after_dom}", flush=True)
+    pos_after = con.execute(
+        "SELECT COUNT(*) FROM domain_domain_interaction WHERE negative=0"
+    ).fetchone()[0]
+    neg_after = con.execute(
+        "SELECT COUNT(*) FROM domain_domain_interaction WHERE negative=1"
+    ).fetchone()[0]
+    dom_after = con.execute("SELECT COUNT(*) FROM domain").fetchone()[0]
+    print(
+        f"smoke filter: after  -> pos={pos_after} neg={neg_after} domain={dom_after}",
+        flush=True,
+    )
     con.close()
 
-    con = sqlite3.connect("3did.smoke.sqlite3")
+    con = sqlite3.connect("cobinet.smoke.sqlite3")
     con.execute("VACUUM")
     con.close()
-
-    # ---- Negatome: keep N random non-empty lines
-    with open("${negatome}") as fh:
-        lines = [ln for ln in fh if ln.strip()]
-    print(f"negatome rows before: {len(lines)}", flush=True)
-    random.shuffle(lines)
-    sampled = lines[:min(N, len(lines))]
-    with open("negatome.smoke.tsv", "w") as fh:
-        fh.writelines(sampled)
-    print(f"negatome rows after:  {len(sampled)}", flush=True)
 
     with open("versions.yml", "w") as f:
         f.write('"${task.process}":\\n')

@@ -74,7 +74,7 @@
                 "url_negatome": {
                     "type": "string",
                     "description": "URL or path of the Negatome non-interaction TSV.",
-                    "default": "${projectDir}/assets/ppi_detect_negatome.tsv",
+                    "default": "https://mips.helmholtz-muenchen.de/proj/ppi/negatome/combined_pfam.txt",
                     "fa_icon": "fas fa-link"
                 },
                 "url_string": {
@@ -98,7 +98,7 @@
                 "download_prott5_complete": {
                     "type": "boolean",
                     "description": "ProtT5 embeddings download strategy: true = single full HDF5 download; false = chunked async REST queries for required IDs only.",
-                    "default": true,
+                    "default": false,
                     "fa_icon": "fas fa-cloud-download-alt"
                 },
                 "url_prott5_embeddings_complete": {
@@ -151,20 +151,14 @@
                 "esm_hf_cache_dir": {
                     "type": "string",
                     "description": "Shared HF_HOME directory for the ESM chunk tasks (e.g. an NFS path). Avoids parallel chunks each re-downloading the gated ESM3 / ESMC weights. Set empty to use the per-task local cache.",
-                    "default": "",
+                    "default": null,
                     "fa_icon": "fas fa-folder-open"
                 },
-                "smoke_test": {
-                    "type": "boolean",
-                    "description": "If true, after 3did and negatome are loaded, both are subsampled to `smoke_test_n_ddis` random rows each so every downstream step runs on a tiny data set. Use to validate a real-data cluster run end-to-end in minutes.",
-                    "default": false,
-                    "fa_icon": "fas fa-vial"
-                },
                 "smoke_test_n_ddis": {
-                    "type": "integer",
-                    "description": "Number of positive DDIs (from 3did) and negative DDIs (from negatome) to keep when `smoke_test` is true. Increase if a downstream task needs more interactions.",
-                    "default": 50,
-                    "minimum": 1,
+                    "type": ["integer", "null"],
+                    "description": "If set, after DDI collection the cobinet DB is reduced to this many total interactions — floor(N/2) random positive DDIs and floor(N/2) random negative DDIs. All downstream steps then run on a tiny data set. Leave null (default) to disable the smoke filter.",
+                    "default": null,
+                    "minimum": 2,
                     "fa_icon": "fas fa-hashtag"
                 }
             }
