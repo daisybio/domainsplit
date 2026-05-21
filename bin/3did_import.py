@@ -39,8 +39,15 @@ def flush():
     stmt = "".join(buf).strip()
     if not stmt:
         return
-    if any(stmt.upper().startswith(p) for p in SKIP_PREFIXES):
+    upper = stmt.upper()
+    if any(upper.startswith(p) for p in SKIP_PREFIXES):
         return
+    # Some 3did dumps (notably the 2011 release) contain duplicate INSERT rows
+    # that violate UNIQUE constraints once mysql2sqlite emits them as SQLite
+    # tables. Rewrite plain INSERTs so the import skips duplicates instead of
+    # aborting. Leave INSERT OR ... statements unchanged.
+    if upper.startswith("INSERT INTO"):
+        stmt = "INSERT OR IGNORE" + stmt[len("INSERT"):]
     con.execute(stmt)
 
 
