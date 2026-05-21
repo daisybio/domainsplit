@@ -56,13 +56,22 @@ process COBINET {
                     mapping[symbol_name.strip()] = uniprot_id.strip()
         return mapping
 
+    def iter_negatome_pairs(path):
+        # Negatome 2.0 combined_pfam.txt: whitespace-separated rows of two
+        # Pfam IDs (e.g. "PF00001\\tPF00002"). Skip blank lines and rows
+        # with fewer than two tokens.
+        with open(path) as f:
+            for line in f:
+                tokens = line.split()
+                if len(tokens) < 2:
+                    continue
+                yield tokens[0], tokens[1]
+
     def get_negatome_pfam_ids() -> Set[str]:
         pfam_ids = set()
-        with open("${ddi_negatome}") as f:
-            for line in f:
-                id_1, id_2 = line.strip().split()
-                pfam_ids.add(id_1)
-                pfam_ids.add(id_2)
+        for id_1, id_2 in iter_negatome_pairs("${ddi_negatome}"):
+            pfam_ids.add(id_1)
+            pfam_ids.add(id_2)
         return pfam_ids
 
     conn_3did = sqlite3.connect("${ddi_3did}")
@@ -170,20 +179,14 @@ process COBINET {
     conn_cobinet.commit()
 
     print("Inserting negative domain-domain intereactions (negatome)")
-    with open("${ddi_negatome}") as f:
-        pfam_id_iterator = ((line.split() for line in f))
-        try:
-            # TODO investigate why negatome contains some erroneous entries
-            conn_cobinet.executemany(\"""
-                            INSERT OR IGNORE INTO domain_domain_interaction(domain_id_a, domain_id_b, negative)
-                            SELECT d1.id AS domain_id_a, d2.id AS domain_id_b, TRUE as negative
-                            FROM domain AS d1, domain AS d2
-                            WHERE d1.pfam_id = ? AND d2.pfam_id = ?
-                            ;
-                        \""",pfam_id_iterator)
-        except Exception as e:
-            print(next(pfam_id_iterator))
-            raise e
+    pfam_id_iterator = iter_negatome_pairs("${ddi_negatome}")
+    conn_cobinet.executemany(\"""
+                    INSERT OR IGNORE INTO domain_domain_interaction(domain_id_a, domain_id_b, negative)
+                    SELECT d1.id AS domain_id_a, d2.id AS domain_id_b, TRUE as negative
+                    FROM domain AS d1, domain AS d2
+                    WHERE d1.pfam_id = ? AND d2.pfam_id = ?
+                    ;
+                \""",pfam_id_iterator)
     conn_cobinet.commit()
 
     print("Inserting domain GO information")
