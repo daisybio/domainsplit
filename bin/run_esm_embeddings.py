@@ -10,7 +10,7 @@ Two output modes:
                   Used for domain sequences.
 
 Performance:
-  - Batched logits() call via `_BatchedESMProteinTensor.from_protein_tensors`.
+  - Batched logits() call via `_BatchedESMProteinTensor` (manual right-pad stack).
   - bf16 autocast around the model forward (autocast, NOT model.bfloat16(),
     since some ESM3 sub-modules are not bf16-safe).
   - Length bucketing: sort all records by length, batch contiguous groups.
@@ -90,16 +90,11 @@ def _encode_one(client, sequence: str):
 
 def _stack_batch(tensors):
     """Stack a list of ESMProteinTensor into a _BatchedESMProteinTensor."""
-    from esm.utils.misc import stack_variable_length_tensors  # noqa: F401  (sanity import)
-    from esm.sdk.api import _BatchedESMProteinTensor
-    # Public-ish path: from_protein_tensors classmethod in SDK 3.2.x
-    if hasattr(_BatchedESMProteinTensor, "from_protein_tensors"):
-        return _BatchedESMProteinTensor.from_protein_tensors(tensors)
-    # Older SDKs only have single-protein wrapper; build one-by-one manually
+    import esm.sdk.api  # noqa: F401  prime to avoid circular import in esm 3.1.x
+    from esm.utils.sampling import _BatchedESMProteinTensor
     import torch
     if len(tensors) == 1:
         return _BatchedESMProteinTensor.from_protein_tensor(tensors[0])
-    # Manual stack with right-padding to max length
     max_len = max(t.sequence.shape[0] for t in tensors)
     pad_id = 0
     padded = torch.full((len(tensors), max_len), pad_id, dtype=tensors[0].sequence.dtype)

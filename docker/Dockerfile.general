@@ -3,7 +3,7 @@ FROM mambaorg/micromamba:1.5.10
 # Build/tag as konstantinpelz/domainsplit-general:1.0.0
 # Covers all CPU processes in daisybio/domainsplit pipeline:
 #   - DOWNLOAD_3DID_SQLITE (gawk + gzip + bin/mysql2sqlite)
-#   - INIT_DOMAINSPLIT_DB, INSERT_DDIS, INSERT_NEGATIVE_DDIS, SMOKE_FILTER (sqlite3 CLI/stdlib)
+#   - INIT_DOMAINSPLIT_DB, INSERT_DDIS, INSERT_NEGATIVE_DDIS, INSERT_PPI_NEGATIVE_DDIS, SMOKE_FILTER (sqlite3 CLI/stdlib; INSERT_PPI_NEGATIVE_DDIS also needs pandas + pyarrow)
 #   - EXTRACT_UNIQUE_DOMAINS (sqlite3 CLI)
 #   - DOWNLOAD_PFAM_ALIGNMENT, CREATE_PROTEIN_DOMAIN_MAPPING (biopython)
 #   - INSERT_DOMAIN_GO_TERMS, INSERT_PROTEINS_WITH_EMBEDDINGS, INSERT_PROTEIN_GO_TERMS,
@@ -18,7 +18,7 @@ FROM mambaorg/micromamba:1.5.10
 #   - SPLIT_DATABASE (pandas, sqlite3 stdlib)
 LABEL org.opencontainers.image.source="https://github.com/daisybio/domainsplit"
 LABEL org.opencontainers.image.version="1.0.0"
-LABEL org.opencontainers.image.description="domainsplit CPU container (pandas, numpy, h5py, biopython, tqdm, requests, sqlite, wget, gawk)"
+LABEL org.opencontainers.image.description="domainsplit CPU container (pandas, pyarrow, numpy, h5py, biopython, tqdm, requests, sqlite, wget, gawk)"
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
@@ -39,6 +39,7 @@ RUN micromamba create -y -n ${ENV_NAME} \
     python=3.12.2 \
     numpy=2.2.6 \
     pandas=2.2.3 \
+    pyarrow=18.1.0 \
     h5py=3.14.0 \
     biopython=1.84 \
     requests=2.32.3 \

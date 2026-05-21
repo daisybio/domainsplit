@@ -160,6 +160,26 @@
                     "default": null,
                     "minimum": 2,
                     "fa_icon": "fas fa-hashtag"
+                },
+                "negative_ppi_parquet": {
+                    "type": ["string", "null"],
+                    "format": "file-path",
+                    "description": "Optional path to a Y2H/MS PPI parquet (columns: gene_name_bait, gene_name_prey, n_tested, ...). When set, COLLECT_DDI_DATA derives extra negative DDIs by mapping bait/prey genes to UniProt then Pfam (via url_uniprot_id_mapping) and inserting the most-frequent Pfam-pair candidates restricted to domains already in positive DDIs. Null (default) disables this source.",
+                    "default": null,
+                    "fa_icon": "fas fa-file-import"
+                },
+                "negative_ppi_min_n_tested": {
+                    "type": "integer",
+                    "description": "Minimum value of the `n_tested` column required to keep a PPI row when building negative DDIs from negative_ppi_parquet.",
+                    "default": 5,
+                    "minimum": 1,
+                    "fa_icon": "fas fa-filter"
+                },
+                "negative_ppi_source_label": {
+                    "type": "string",
+                    "description": "Value written to the `source` column of domain_domain_interaction for DDIs derived from negative_ppi_parquet.",
+                    "default": "y2h_ms",
+                    "fa_icon": "fas fa-tag"
                 }
             }
         },

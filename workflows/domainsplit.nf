@@ -34,6 +34,7 @@ main:
         empty_db,
         params.url_3did,
         params.url_negatome,
+        input_uniprot_id_mapping,
     )
 
     domainsplit_db_ddi = COLLECT_DDI_DATA.out.domainsplit_db
