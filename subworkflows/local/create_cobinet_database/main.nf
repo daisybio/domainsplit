@@ -9,6 +9,7 @@
 include { DOWNLOAD_3DID_SQLITE; EXTRACT_PFAM_IDS                  } from '../../../modules/local/3did/main.nf'
 include { CREATE_PROTEIN_DOMAIN_MAPPING; DOWNLOAD_PFAM_ALIGNMENT  } from '../../../modules/local/pfam/main.nf'
 include { COBINET                                                 } from '../../../modules/local/cobinet/main.nf'
+include { SMOKE_FILTER                                            } from '../../../modules/local/smoke_filter/main.nf'
 include { download_prott5_embeddings                              } from '../../../modules/local/prott5_embeddings/main.nf'
 include { generate_esm_embeddings                                 } from '../../../modules/local/esm_embeddings/main.nf'
 
@@ -24,7 +25,15 @@ workflow CREATE_COBINET_DATABASE {
     input_pfam2go
 
     main:
-    sqlite_3did = DOWNLOAD_3DID_SQLITE(input_3did).sqlite
+    sqlite_3did   = DOWNLOAD_3DID_SQLITE(input_3did).sqlite
+    negatome_used = input_negatome
+
+    if (params.smoke_test) {
+        smoke         = SMOKE_FILTER(sqlite_3did, input_negatome, params.smoke_test_n_ddis)
+        sqlite_3did   = smoke.sqlite
+        negatome_used = smoke.negatome
+    }
+
     pfam_ids = EXTRACT_PFAM_IDS(sqlite_3did).pfam_ids.splitText()
 
     pfam_files = DOWNLOAD_PFAM_ALIGNMENT(pfam_ids).alignment
@@ -46,7 +55,7 @@ workflow CREATE_COBINET_DATABASE {
 
     cobinet_db_ch = COBINET(
         sqlite_3did,
-        input_negatome,
+        negatome_used,
         input_pfam2go,
         input_uniprot_sequences,
         protein_domain_map,
