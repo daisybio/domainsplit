@@ -89,22 +89,33 @@ def _encode_one(client, sequence: str):
 
 
 def _move_batch_to_device(bt, device):
-    """Move every torch.Tensor field on `bt` to `device` (defensive against
-    ESM SDK populating optional tracks like structure/sasa, and any private
-    cached attrs)."""
-    import dataclasses
+    """Move every torch.Tensor field on `bt` to `device`.
+
+    `_BatchedESMProteinTensor` is an attrs class (not a dataclass) and uses
+    __slots__, so neither `dataclasses.fields` nor `vars()` enumerate its
+    attributes. Prefer the SDK's `.to(device)` when present; fall back to a
+    known-field list (defensive against the SDK populating optional tracks
+    like structure/sasa)."""
     import torch
-    names = set()
-    if dataclasses.is_dataclass(bt):
-        names.update(f.name for f in dataclasses.fields(bt))
-    try:
-        names.update(vars(bt).keys())
-    except TypeError:
-        pass
-    for name in names:
+    to_fn = getattr(bt, "to", None)
+    if callable(to_fn):
+        try:
+            result = to_fn(device)
+            if result is not None:
+                bt = result
+        except Exception:
+            pass
+    known = (
+        "sequence", "structure", "secondary_structure", "sasa",
+        "function", "residue_annotations", "coordinates",
+    )
+    for name in known:
         v = getattr(bt, name, None)
         if isinstance(v, torch.Tensor) and v.device != device:
-            setattr(bt, name, v.to(device, non_blocking=True))
+            try:
+                setattr(bt, name, v.to(device, non_blocking=True))
+            except (AttributeError, TypeError):
+                pass
     return bt
 
 
@@ -118,9 +129,13 @@ def _stack_batch(tensors, device):
         return _move_batch_to_device(bt, device)
     max_len = max(t.sequence.shape[0] for t in tensors)
     pad_id = 0
-    padded = torch.full((len(tensors), max_len), pad_id, dtype=tensors[0].sequence.dtype)
+    padded = torch.full(
+        (len(tensors), max_len), pad_id,
+        dtype=tensors[0].sequence.dtype, device=device,
+    )
     for i, t in enumerate(tensors):
-        padded[i, : t.sequence.shape[0]] = t.sequence
+        src = t.sequence.to(device, non_blocking=True)
+        padded[i, : src.shape[0]] = src
     bt = _BatchedESMProteinTensor.from_protein_tensor(tensors[0])
     bt.sequence = padded
     return _move_batch_to_device(bt, device)
