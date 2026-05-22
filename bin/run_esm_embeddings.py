@@ -120,6 +120,15 @@ def _process_batch(client, seqs, ids, mode: str, out_h5, model_key: str):
     batched = _stack_batch(tensors)
     lengths = _seq_lengths(batched, tensors)
 
+    try:
+        model_device = next(client.parameters()).device
+    except StopIteration:
+        model_device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+    for attr in ("sequence", "structure", "secondary_structure", "sasa", "function", "residue_annotations", "coordinates"):
+        t = getattr(batched, attr, None)
+        if isinstance(t, torch.Tensor) and t.device != model_device:
+            setattr(batched, attr, t.to(model_device))
+
     cfg = LogitsConfig(sequence=True, return_embeddings=True)
     with torch.inference_mode():
         autocast = torch.autocast(device_type="cuda", dtype=torch.bfloat16) if torch.cuda.is_available() else _NullCtx()
