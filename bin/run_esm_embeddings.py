@@ -90,14 +90,18 @@ def _encode_one(client, sequence: str):
 
 def _move_batch_to_device(bt, device):
     """Move every torch.Tensor field on `bt` to `device` (defensive against
-    ESM SDK populating optional tracks like structure/sasa)."""
+    ESM SDK populating optional tracks like structure/sasa, and any private
+    cached attrs)."""
     import dataclasses
     import torch
+    names = set()
     if dataclasses.is_dataclass(bt):
-        attrs = [f.name for f in dataclasses.fields(bt)]
-    else:
-        attrs = [a for a in vars(bt).keys()]
-    for name in attrs:
+        names.update(f.name for f in dataclasses.fields(bt))
+    try:
+        names.update(vars(bt).keys())
+    except TypeError:
+        pass
+    for name in names:
         v = getattr(bt, name, None)
         if isinstance(v, torch.Tensor) and v.device != device:
             setattr(bt, name, v.to(device, non_blocking=True))
@@ -127,20 +131,38 @@ def _seq_lengths(batched, tensors):
     return [int(t.sequence.shape[0]) for t in tensors]
 
 
-def _process_batch(client, seqs, ids, mode: str, out_h5, model_key: str):
+_DEVICE_DIAG_DONE = False
+
+
+def _process_batch(client, seqs, ids, mode: str, out_h5, model_key: str, device):
     """Encode + forward a batch, write outputs. Returns True if batch succeeded."""
     import numpy as np
     import torch
     from esm.sdk.api import LogitsConfig
 
-    try:
-        model_device = next(client.parameters()).device
-    except StopIteration:
-        model_device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
-
     tensors = [_encode_one(client, s) for s in seqs]
-    batched = _stack_batch(tensors, model_device)
+    batched = _stack_batch(tensors, device)
     lengths = _seq_lengths(batched, tensors)
+
+    global _DEVICE_DIAG_DONE
+    if not _DEVICE_DIAG_DONE:
+        try:
+            param_devs = {str(p.device) for p in client.parameters()}
+            buf_devs = {str(b.device) for b in client.buffers()}
+        except Exception as e:
+            param_devs = {f"err:{e}"}
+            buf_devs = set()
+        embed_dev = "?"
+        for m in client.modules():
+            if isinstance(m, torch.nn.Embedding):
+                embed_dev = str(m.weight.device)
+                break
+        print(
+            f"DEVICE_DIAG: target={device} | bt.sequence={batched.sequence.device} | "
+            f"params={sorted(param_devs)} | buffers={sorted(buf_devs)} | first_embed={embed_dev}",
+            flush=True,
+        )
+        _DEVICE_DIAG_DONE = True
 
     cfg = LogitsConfig(sequence=True, return_embeddings=True)
     with torch.inference_mode():
@@ -178,7 +200,7 @@ class _NullCtx:
         return False
 
 
-def _run_model(records, client, mode: str, batch_size: int, out_h5, model_key: str):
+def _run_model(records, client, mode: str, batch_size: int, out_h5, model_key: str, device):
     """Iterate records in length-bucketed batches, with OOM halving."""
     import torch
 
@@ -192,7 +214,7 @@ def _run_model(records, client, mode: str, batch_size: int, out_h5, model_key: s
             ids = [r[0] for r in records[i:end]]
             seqs = [r[1] for r in records[i:end]]
             try:
-                _process_batch(client, seqs, ids, mode, out_h5, model_key)
+                _process_batch(client, seqs, ids, mode, out_h5, model_key, device)
                 i = end
                 break
             except torch.OutOfMemoryError:
@@ -259,15 +281,17 @@ def main() -> int:
     with h5py.File(args.output_h5, "w") as out_h5:
         print("loading ESM3", flush=True)
         client = ESM3.from_pretrained("esm3-open", device=device).to(device).eval()
-        _run_model(records, client, args.mode, args.batch_size, out_h5, "esm3")
+        _run_model(records, client, args.mode, args.batch_size, out_h5, "esm3", device)
         del client
         gc.collect()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 
         print("loading ESMC", flush=True)
+        global _DEVICE_DIAG_DONE
+        _DEVICE_DIAG_DONE = False
         client = ESMC.from_pretrained("esmc_600m", device=device).to(device).eval()
-        _run_model(records, client, args.mode, args.batch_size, out_h5, "esmc")
+        _run_model(records, client, args.mode, args.batch_size, out_h5, "esmc", device)
         del client
         gc.collect()
         if torch.cuda.is_available():
