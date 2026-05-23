@@ -25,11 +25,13 @@ ENV PIP_DISABLE_PIP_VERSION_CHECK=1
 ENV PIP_DEFAULT_TIMEOUT=100
 
 ENV NVIDIA_TF32_OVERRIDE=0
-# expandable_segments:True calls nvmlInit_v2_ in CUDACachingAllocator on first
-# large alloc and asserts on success. Singularity --nv cannot reliably init NVML
-# (libnvidia-ml.so version mismatch with host driver), so this assertion fires
-# inside ESM3 forward (torch.linalg.vector_norm path). Use default allocator.
-ENV PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:512
+# The native CUDACachingAllocator (both expandable_segments and max_split_size_mb
+# paths) calls nvmlInit_v2_ on first big alloc and asserts on failure. Singularity
+# --nv on this cluster cannot init NVML (libnvidia-ml.so version mismatch with
+# host driver — "Can't initialize NVML" warning), so the assertion fires inside
+# ESM3 forward. The cudaMallocAsync backend bypasses the C++ caching allocator
+# entirely and does not touch NVML.
+ENV PYTORCH_CUDA_ALLOC_CONF=backend:cudaMallocAsync
 
 RUN micromamba create -y -n ${ENV_NAME} \
     -c conda-forge -c bioconda -c nvidia \
