@@ -13,10 +13,12 @@ import sqlite3
 import sys
 from collections import defaultdict
 
-import pandas as pd
+import pyarrow.parquet as pq
 
 
 TAG = "[ppi_neg]"
+BATCH_SIZE = 500_000
+REQUIRED_COLUMNS = ["gene_name_bait", "gene_name_prey", "n_tested"]
 
 
 def log(msg):
@@ -60,11 +62,6 @@ def load_existing_pairs(conn):
 
 
 def stream_idmapping(path, gene_set):
-    """One pass over idmapping. Returns (gene_to_uniprots, uniprot_to_pfams).
-
-    Only keeps Gene_Name / Gene_Synonym rows whose value is in ``gene_set``,
-    and only keeps Pfam rows for the UniProts that survive that filter.
-    """
     gene_to_uniprots = defaultdict(set)
     relevant_uniprots = set()
     pfam_buffer = []
@@ -88,25 +85,56 @@ def stream_idmapping(path, gene_set):
     return gene_to_uniprots, uniprot_to_pfams
 
 
-def main():
-    args = parse_args()
-
-    log(f"loading parquet {args.parquet}")
-    df = pd.read_parquet(args.parquet)
-    n_input = len(df)
-    log(f"n_input_ppis = {n_input}")
-
-    required = {"gene_name_bait", "gene_name_prey", "n_tested"}
-    missing = required - set(df.columns)
+def _validate_columns(parquet_schema):
+    available = set(parquet_schema.names)
+    missing = set(REQUIRED_COLUMNS) - available
     if missing:
         sys.exit(f"{TAG} parquet missing required columns: {missing}")
 
-    df = df[df["n_tested"] >= args.min_n_tested]
-    df = df.dropna(subset=["gene_name_bait", "gene_name_prey"])
-    n_after = len(df)
-    log(f"n_ppis_after_n_tested_filter (>= {args.min_n_tested}) = {n_after}")
 
-    unique_genes = set(df["gene_name_bait"]).union(df["gene_name_prey"])
+def _collect_genes_and_pairs(parquet_path, min_n_tested):
+    """Stream parquet in batches. Returns (unique_genes, filtered bait/prey lists)."""
+    unique_genes = set()
+    baits = []
+    preys = []
+    n_input = 0
+
+    for batch in pq.ParquetFile(parquet_path).iter_batches(
+        batch_size=BATCH_SIZE, columns=REQUIRED_COLUMNS
+    ):
+        tbl = batch.to_pydict()
+        n_input += len(tbl["n_tested"])
+
+        for bait, prey, n_tested in zip(
+            tbl["gene_name_bait"], tbl["gene_name_prey"], tbl["n_tested"]
+        ):
+            if n_tested is None or n_tested < min_n_tested:
+                continue
+            if bait is None or prey is None:
+                continue
+            unique_genes.add(bait)
+            unique_genes.add(prey)
+            baits.append(bait)
+            preys.append(prey)
+
+    return n_input, unique_genes, baits, preys
+
+
+def main():
+    args = parse_args()
+
+    pf = pq.ParquetFile(args.parquet)
+    log(f"parquet {args.parquet}: {pf.metadata.num_rows} rows, "
+        f"{pf.metadata.num_columns} cols, streaming in batches of {BATCH_SIZE}")
+    _validate_columns(pf.schema_arrow)
+
+    log("pass 1: collecting genes from parquet (batched)")
+    n_input, unique_genes, baits, preys = _collect_genes_and_pairs(
+        args.parquet, args.min_n_tested
+    )
+    n_after = len(baits)
+    log(f"n_input_ppis = {n_input}")
+    log(f"n_ppis_after_n_tested_filter (>= {args.min_n_tested}) = {n_after}")
     log(f"n_unique_genes = {len(unique_genes)}")
 
     log(f"streaming idmapping {args.idmapping}")
@@ -136,7 +164,7 @@ def main():
 
     candidate_counts = defaultdict(int)
     n_rows_with_pairs = 0
-    for bait, prey in zip(df["gene_name_bait"], df["gene_name_prey"]):
+    for bait, prey in zip(baits, preys):
         bait_pfams = row_pfams(bait) & pos_pfam
         prey_pfams = row_pfams(prey) & pos_pfam
         if not bait_pfams or not prey_pfams:
@@ -151,6 +179,8 @@ def main():
         n_rows_with_pairs += 1
         for key in row_pairs:
             candidate_counts[key] += 1
+
+    del baits, preys
 
     log(f"n_rows_yielding_pairs = {n_rows_with_pairs}")
     log(f"n_unique_pfam_ddi_candidates = {len(candidate_counts)}")

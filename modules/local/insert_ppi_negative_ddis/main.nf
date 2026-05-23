@@ -29,7 +29,6 @@ process INSERT_PPI_NEGATIVE_DDIS {
     cat <<-END_VERSIONS > versions.yml
     "${task.process}":
         python: \$(python3 -c 'import sys; print(sys.version.split()[0])')
-        pandas: \$(python3 -c 'import pandas; print(pandas.__version__)')
         pyarrow: \$(python3 -c 'import pyarrow; print(pyarrow.__version__)')
         sqlite3: \$(python3 -c 'import sqlite3; print(sqlite3.sqlite_version)')
     END_VERSIONS
