@@ -13,7 +13,7 @@ include { RANDOM_DDI_SPLIT                                                      
 include { RANDOM_DENOISE_SPLIT                                                                                              } from '../../../modules/local/random_denoise_split/main'
 include { RANDOM_DENOISE_SPLIT as RANDOM_DENOISE_SPLIT_2                                                                    } from '../../../modules/local/random_denoise_split/main'
 include { SPLIT_DATABASE                                                                                                    } from '../../../modules/local/split_database/main'
-include { EXTRACT_DOMAIN_SEQUENCES; EXTRACT_PROTEIN_SEQUENCES; MINIMAL_LEAKAGE_SPLIT_DOMAIN; MINIMAL_LEAKAGE_SPLIT_PROTEIN   } from '../../../modules/local/minimal_leakage_split/main'
+include { EXTRACT_DOMAIN_SEQUENCES; EXTRACT_PROTEIN_SEQUENCES; MINIMAL_LEAKAGE_SPLIT_DOMAIN } from '../../../modules/local/minimal_leakage_split/main'
 include { MMSEQS_EASYCLUSTER                                                                                                } from '../../../modules/nf-core/mmseqs/easycluster/main'
 
 
@@ -75,11 +75,9 @@ workflow SPLIT_DOMAINSPLIT_DATABASE {
         true
     )
 
-    (split_minimal_leakage_protein_paths, split_minimal_leakage_protein_id_files_ch) = MINIMAL_LEAKAGE_SPLIT_PROTEIN(
-        domainsplit_db_ch,
-        splits,
-        clusters.tsv.filter { it[0].id == "protein" }.map { it[1] }
-    )
+    // MINIMAL_LEAKAGE_SPLIT_PROTEIN is not yet implemented (see module comment).
+    // Skipping its invocation until the protein-level annealing is written; the
+    // module body would otherwise `exit 1`.
 
     (split_minimal_leakage_domain_paths, split_minimal_leakage_domain_id_files_ch) = MINIMAL_LEAKAGE_SPLIT_DOMAIN(
         domainsplit_db_ch,
@@ -91,7 +89,6 @@ workflow SPLIT_DOMAINSPLIT_DATABASE {
         map_split_files(split_ddi_id_files_ch, split_ddi_paths, "random_ddi"),
         map_split_files(split_denoise_id_files_ch, split_denoise_paths, "random_denoise"),
         map_split_files(split_discovery_id_files_ch, split_discovery_paths, "random_discovery"),
-        map_split_files(split_minimal_leakage_protein_id_files_ch, split_minimal_leakage_protein_paths, "minimal_leakage_protein"),
         map_split_files(split_minimal_leakage_domain_id_files_ch, split_minimal_leakage_domain_paths, "minimal_leakage_domain")
     )
 

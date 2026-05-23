@@ -123,15 +123,15 @@ process MINIMAL_LEAKAGE_SPLIT_DOMAIN {
     path "versions.yml", emit: versions
 
     script:
-    def output_file_fraction_dict = [:]
-    def output_file_splits = [:]
+    output_file_fraction_dict = [:]
+    output_file_splits = [:]
 
     split_fractions.each { name, fraction ->
         output_file_fraction_dict["${name}.txt"] = fraction
         output_file_splits["${name}.txt"] = name
     }
 
-    def output_files = output_file_fraction_dict.keySet() //.collect { file_name -> file_name }
+    output_files = output_file_fraction_dict.keySet() as List
 
     def split_fraction_dict_str = output_file_fraction_dict.collect { k, v -> "'${k}': ${v}" }.join(", ")
     def split_fraction_dict_py = "{" + split_fraction_dict_str + "}"
