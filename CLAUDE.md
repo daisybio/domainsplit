@@ -60,12 +60,12 @@ Entrypoint chain:
 - `subworkflows/local/curate_domains/` (`CURATE_DOMAINS`) — extracts unique Pfam IDs from the in-build DB's `domain_domain_interaction` table (inline sqlite3, no python), downloads Pfam alignments, and creates the protein↔domain map.
 - `subworkflows/local/generate_embeddings/` (`GENERATE_EMBEDDINGS`) — parallel ProtT5 (per-residue HDF5) + ESM3/ESMC (per-residue protein + pooled domain) embedding generation.
 - `subworkflows/local/enrich_ddi_database/` (`ENRICH_DDI_DATABASE`) — sequential chain of five `INSERT_*` processes (`INSERT_DOMAIN_GO_TERMS`, `INSERT_PROTEINS_WITH_EMBEDDINGS`, `INSERT_PROTEIN_GO_TERMS`, `INSERT_PPI`, `INSERT_DOMAIN_PROTEIN_MAPPING`). Each opens the SQLite emitted by the previous step, performs one phase, commits, and emits the DB forward.
-- `subworkflows/local/split_domainsplit_database/` (`SPLIT_DOMAINSPLIT_DATABASE`) — extracts protein/domain sequences, clusters with `MMSEQS_EASYCLUSTER` (nf-core module), and runs split strategies producing per-split SQLite DBs: `RANDOM_DDI_SPLIT`, `RANDOM_DENOISE_SPLIT` (invoked twice — `RANDOM_DENOISE_SPLIT_2` is an alias), and `MINIMAL_LEAKAGE_SPLIT_{DOMAIN,PROTEIN}`. `map_split_files()` is the helper that re-keys flattened split outputs into `[meta, path]` tuples where `meta = [id, split, method]`.
+- `subworkflows/local/split_domainsplit_database/` (`SPLIT_DOMAINSPLIT_DATABASE`) — extracts domain sequences, clusters with `MMSEQS_EASYCLUSTER` (nf-core module), and runs split strategies producing per-split SQLite DBs: `RANDOM_DDI_SPLIT` (biased baseline) and `MINIMAL_LEAKAGE_SPLIT_DOMAIN` (spectral graph-partitioning). `map_split_files()` is the helper that re-keys flattened split outputs into `[meta, path]` tuples where `meta = [id, split, method]`.
 - `subworkflows/local/utils_nfcore_domainsplit_pipeline/` — pipeline init/completion/methods-description helpers (template-generated).
 
 Modules:
 
-- `modules/local/*` — all the scientific work: 3did SQL→SQLite via `bin/mysql2sqlite`, DDI insert/smoke-filter, Pfam alignment + protein-domain mapping, the five `enrich/insert_*` phase modules, ProtT5/ESM embedding generation, the splitter modules, sequence extractors.
+- `modules/local/*` — all the scientific work: 3did SQL→SQLite via `bin/mysql2sqlite`, DDI insert/smoke-filter, Pfam alignment + protein-domain mapping, the five `enrich/insert_*` phase modules (each calling a corresponding `bin/insert_*.py` script), ProtT5/ESM embedding generation, the splitter modules, sequence extractors.
 - `modules/nf-core/mmseqs/easycluster/` — only nf-core module currently installed. Pinned in `modules.json`.
 
 Config layout:

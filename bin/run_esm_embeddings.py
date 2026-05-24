@@ -2,11 +2,9 @@
 """Generate ESM3 + ESMC embeddings for a FASTA shard.
 
 Two output modes:
-  - per_residue : write (L+2, D) per sequence (BOS + seq + EOS, matches the
-                  pre-batching pipeline output). Used for protein sequences
-                  consumed downstream as per-residue tensors.
-  - pooled      : mean across the (L+2) token dimension (BOS+EOS included, to
-                  exactly match the legacy AVERAGE_POOL_EMBEDDINGS semantics).
+  - per_residue : write (L+2, D) per sequence (BOS + seq + EOS). Used for
+                  protein sequences consumed downstream as per-residue tensors.
+  - pooled      : mean across all (L+2) tokens (BOS + seq + EOS included).
                   Used for domain sequences.
 
 Performance:
@@ -20,7 +18,7 @@ Performance:
   - `--max-len` cap drops the long-tail quadratic-attention sequences entirely.
   - Storage dtype is float16 (downstream domainsplit only does np.array().dumps()).
 
-H5 key contract (must match the legacy pipeline):
+H5 key contract (downstream pipeline expects this layout):
   per_residue: <seq_id>/esm3 -> (L+2, D), <seq_id>/esmc -> (L+2, D)
   pooled:      <seq_id>/esm3 -> (D,),     <seq_id>/esmc -> (D,)
 """
@@ -30,7 +28,6 @@ import gc
 import gzip
 import os
 import sys
-from pathlib import Path
 
 
 def _setup_hf_cache() -> None:
@@ -187,7 +184,7 @@ def _process_batch(client, seqs, ids, mode: str, out_h5, model_key: str, device)
         emb = out.embeddings  # (B, L_max, D)
 
     if mode == "pooled":
-        # Masked mean across the (BOS+seq+EOS) tokens, matching legacy AVERAGE_POOL_EMBEDDINGS.
+        # Masked mean across all (BOS+seq+EOS) tokens.
         lengths_t = torch.tensor(lengths, device=emb.device).unsqueeze(1)  # (B,1)
         idx = torch.arange(emb.shape[1], device=emb.device).unsqueeze(0)   # (1,L)
         mask = (idx < lengths_t).to(emb.dtype).unsqueeze(-1)               # (B,L,1)

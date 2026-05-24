@@ -116,7 +116,7 @@ def download_prott5_embeddings(protein_ids) {
     if (params.download_prott5_complete) {
         return DOWNLOAD_PROTT5_EMBEDDINGS_COMPLETE().embeddings
     }
-    def protein_id_sublists = protein_ids.buffer(size: 100, remainder: true)
+    def protein_id_sublists = protein_ids.buffer(size: params.prott5_chunk_size, remainder: true)
     def chunks = PROTT5_EMBEDDINGS_CHUNK(protein_id_sublists)
     def joined = JOIN_HDF_FILES('embeddings', chunks.embeddings_chunk.collect())
     return joined.joined

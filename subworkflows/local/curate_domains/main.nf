@@ -8,8 +8,8 @@
     domain_domain_interaction after smoke filtering.
 ----------------------------------------------------------------------------*/
 
-include { EXTRACT_UNIQUE_DOMAINS                                  } from '../../../modules/local/curate_domains/extract_unique_domains/main.nf'
-include { CREATE_PROTEIN_DOMAIN_MAPPING; DOWNLOAD_PFAM_ALIGNMENT  } from '../../../modules/local/pfam/main.nf'
+include { EXTRACT_UNIQUE_DOMAINS                                            } from '../../../modules/local/curate_domains/extract_unique_domains/main.nf'
+include { CREATE_PROTEIN_DOMAIN_MAPPING; DOWNLOAD_PFAM_ALIGNMENTS_BATCH     } from '../../../modules/local/pfam/main.nf'
 
 workflow CURATE_DOMAINS {
     take:
@@ -17,9 +17,11 @@ workflow CURATE_DOMAINS {
     input_uniprot_id_mapping
 
     main:
-    pfam_ids = EXTRACT_UNIQUE_DOMAINS(domainsplit_db).pfam_ids.splitText()
+    pfam_batches = EXTRACT_UNIQUE_DOMAINS(domainsplit_db).pfam_ids
+        .splitText()
+        .buffer(size: params.pfam_download_batch_size, remainder: true)
 
-    pfam_files = DOWNLOAD_PFAM_ALIGNMENT(pfam_ids).alignment
+    pfam_files = DOWNLOAD_PFAM_ALIGNMENTS_BATCH(pfam_batches).alignments.flatten()
 
     protein_domain_map = CREATE_PROTEIN_DOMAIN_MAPPING(
         input_uniprot_id_mapping,

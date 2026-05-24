@@ -31,48 +31,6 @@ process EXTRACT_DOMAIN_SEQUENCES {
     """
 }
 
-// FUTURE WORK: MINIMAL_LEAKAGE_SPLIT_PROTEIN is not yet implemented.
-// Body is intentionally `exit 1` so any subworkflow call hits a hard failure
-// instead of producing silent empty splits. Mirror the domain-level spectral
-// partitioning approach (see MINIMAL_LEAKAGE_SPLIT_DOMAIN below) using
-// protein clusters from MMSEQS_EASYCLUSTER over uniprot sequences. Until
-// implemented, callers must route around this process — the workflow already
-// excludes it from the default split methods list.
-process MINIMAL_LEAKAGE_SPLIT_PROTEIN {
-    tag "minimal_leakage_protein"
-    label 'process_high'
-    conda "${moduleDir}/environment.yml"
-    container "docker://konstantinpelz/domainsplit-general:1.0.0"
-
-    input:
-    path "domainsplit.sqlite3"
-    val split_fractions  // e.g., [("train", 0.8), ("test", 0.2)]
-    path ("protein_clusters.tsv")
-
-    output:
-    path output_files, emit: split_ddi_id_files
-    val output_file_splits, emit: split_fractions
-
-    script:
-    def output_file_fraction_dict = [:]
-    def output_file_splits = [:]
-
-    split_fractions.each { name, fraction ->
-        output_file_fraction_dict["${name}.txt"] = fraction
-        output_file_splits["${name}.txt"] = name
-    }
-
-    def output_files = output_file_fraction_dict.keySet() //.collect { file_name -> file_name }
-
-    def split_fraction_dict_str = output_file_fraction_dict.collect { k, v -> "'${k}': ${v}" }.join(", ")
-    def split_fraction_dict_py = "{" + split_fraction_dict_str + "}"
-
-    """
-    echo "MINIMAL_LEAKAGE_SPLIT_PROTEIN is not yet implemented." >&2
-    exit 1
-    """
-}
-
 process MINIMAL_LEAKAGE_SPLIT_DOMAIN {
     tag "minimal_leakage_domain"
     label 'process_high'

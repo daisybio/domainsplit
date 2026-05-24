@@ -9,10 +9,8 @@
                                         └─ …                          (M tasks) └─ JOIN_DOMAIN_EMBEDDINGS  ── esm_domain_embeddings.h5
 
   - Chunk processes call bin/run_esm_embeddings.py (batched bf16 inference).
-  - Protein chunks: per-residue (L+2, D) fp16 datasets (BOS+seq+EOS preserved
-    to match the legacy single-sequence output).
-  - Domain chunks: GPU mean-pool inline -> (D,) fp16 (matches the legacy
-    AVERAGE_POOL_EMBEDDINGS semantics, which averaged over BOS+EOS as well).
+  - Protein chunks: per-residue (L+2, D) fp16 datasets (BOS + seq + EOS).
+  - Domain chunks: GPU mean-pool across all tokens (BOS+seq+EOS) -> (D,) fp16.
 */
 
 include { SHARD_FASTA as SHARD_PROTEIN_FASTA       } from '../util/main.nf'
