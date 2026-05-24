@@ -62,12 +62,11 @@ process SPLIT_DATABASE {
     # Delete entries from domain_domain_interaction not in database_split
     print("Deleting non-split entries from domain_domain_interaction...")
     conn.executescript('''
-        WITH ddi_to_delete AS (
-            SELECT id FROM domain_domain_interaction
-            WHERE id NOT IN (SELECT ddi_id FROM database_split)
-        )
         DELETE FROM domain_domain_interaction
-        WHERE id IN ddi_to_delete;
+        WHERE NOT EXISTS (
+            SELECT 1 FROM database_split
+            WHERE database_split.ddi_id = domain_domain_interaction.id
+        );
     ''')
 
     print("Updating remaining domain_domain_interaction entries")
@@ -111,6 +110,18 @@ process SPLIT_DATABASE {
     conn.executescript('''
         DROP TABLE database_split;
         VACUUM;
+    ''')
+
+    print("Creating indexes for downstream benchmark queries...")
+    conn.executescript('''
+        CREATE INDEX IF NOT EXISTS idx_ddi_domain_a ON domain_domain_interaction(domain_id_a);
+        CREATE INDEX IF NOT EXISTS idx_ddi_domain_b ON domain_domain_interaction(domain_id_b);
+        CREATE INDEX IF NOT EXISTS idx_ddi_eval_relevant ON domain_domain_interaction(is_evaluation_relevant);
+        CREATE INDEX IF NOT EXISTS idx_dpm_domain ON domain_protein_map(domain_id);
+        CREATE INDEX IF NOT EXISTS idx_dpm_protein ON domain_protein_map(protein_id);
+        CREATE INDEX IF NOT EXISTS idx_ppi_protein_a ON protein_protein_interaction(protein_id_a);
+        CREATE INDEX IF NOT EXISTS idx_ppi_protein_b ON protein_protein_interaction(protein_id_b);
+        CREATE INDEX IF NOT EXISTS idx_pgo_protein ON protein_go_terms(protein_id);
     ''')
 
     conn.close()

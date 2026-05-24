@@ -10,6 +10,7 @@ process INSERT_PPI_NEGATIVE_DDIS {
     path idmapping_gz
     val  min_n_tested
     val  source_label
+    val  sampling_strategy
 
     output:
     path "domainsplit.sqlite3", emit: domainsplit_db
@@ -24,7 +25,8 @@ process INSERT_PPI_NEGATIVE_DDIS {
         --parquet "${negative_ppi_parquet}" \\
         --idmapping "${idmapping_gz}" \\
         --min-n-tested ${min_n_tested} \\
-        --source-label "${source_label}"
+        --source-label "${source_label}" \\
+        --sampling-strategy "${sampling_strategy}"
 
     cat <<-END_VERSIONS > versions.yml
     "${task.process}":

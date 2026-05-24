@@ -13,6 +13,9 @@ import sqlite3
 import sys
 from collections import defaultdict
 
+import math
+
+import numpy as np
 import pyarrow.parquet as pq
 
 
@@ -32,6 +35,13 @@ def parse_args():
     p.add_argument("--idmapping", required=True, help="UniProt idmapping .dat or .dat.gz")
     p.add_argument("--min-n-tested", type=int, required=True)
     p.add_argument("--source-label", required=True)
+    p.add_argument(
+        "--sampling-strategy",
+        choices=["frequency", "degree_matched"],
+        default="degree_matched",
+        help="'frequency' = top-N by co-occurrence (old behavior). "
+             "'degree_matched' = sample to match positive degree distribution.",
+    )
     return p.parse_args()
 
 
@@ -118,6 +128,82 @@ def _collect_genes_and_pairs(parquet_path, min_n_tested):
             preys.append(prey)
 
     return n_input, unique_genes, baits, preys
+
+
+def _compute_positive_degree(conn):
+    """Per-domain degree in the positive DDI set."""
+    rows = conn.execute(
+        "SELECT domain_id_a, domain_id_b FROM domain_domain_interaction WHERE negative = 0"
+    ).fetchall()
+    deg = defaultdict(int)
+    for a, b in rows:
+        deg[a] += 1
+        deg[b] += 1
+    return deg
+
+
+def select_degree_matched(fresh_candidates, pos_degree, n_take):
+    """Select negatives matching the positive degree distribution shape.
+
+    Bins positive degrees into log-spaced histogram buckets, then greedily
+    picks candidates whose domains fall in under-represented bins, weighted
+    by PPI co-occurrence count to preserve biological signal.
+    """
+    if not fresh_candidates or n_take <= 0:
+        return []
+
+    pos_vals = np.array(list(pos_degree.values()), dtype=float)
+    if len(pos_vals) == 0:
+        return fresh_candidates[:n_take]
+
+    n_bins = min(10, max(3, int(np.sqrt(len(pos_vals)))))
+    bin_edges = np.logspace(0, np.log10(max(pos_vals.max(), 1) + 1), n_bins + 1)
+    bin_edges[0] = 0
+
+    pos_hist, _ = np.histogram(pos_vals, bins=bin_edges)
+    total_pos_pairs = sum(pos_hist)
+    if total_pos_pairs == 0:
+        return fresh_candidates[:n_take]
+
+    target_per_bin = np.array([
+        max(1, int(round(n_take * count / total_pos_pairs)))
+        for count in pos_hist
+    ], dtype=float)
+    # Scale so sum matches n_take
+    target_per_bin = target_per_bin * (n_take / target_per_bin.sum())
+
+    filled_per_bin = np.zeros(n_bins)
+
+    def domain_bin(pfam_id):
+        deg = pos_degree.get(pfam_id, 0)
+        idx = int(np.searchsorted(bin_edges, deg, side="right")) - 1
+        return max(0, min(n_bins - 1, idx))
+
+    def pair_score(pfam_a, pfam_b, count):
+        bin_a = domain_bin(pfam_a)
+        bin_b = domain_bin(pfam_b)
+        deficit_a = max(0, target_per_bin[bin_a] - filled_per_bin[bin_a])
+        deficit_b = max(0, target_per_bin[bin_b] - filled_per_bin[bin_b])
+        return (deficit_a + deficit_b) * math.log1p(count)
+
+    scored = []
+    for (pfam_a, pfam_b), count in fresh_candidates:
+        s = pair_score(pfam_a, pfam_b, count)
+        scored.append(((pfam_a, pfam_b), count, s))
+
+    scored.sort(key=lambda x: x[2], reverse=True)
+
+    chosen = []
+    for (pfam_a, pfam_b), count, _ in scored:
+        if len(chosen) >= n_take:
+            break
+        chosen.append(((pfam_a, pfam_b), count))
+        filled_per_bin[domain_bin(pfam_a)] += 1
+        filled_per_bin[domain_bin(pfam_b)] += 1
+
+    log(f"degree_matched: target_per_bin = {target_per_bin.astype(int).tolist()}")
+    log(f"degree_matched: filled_per_bin = {filled_per_bin.astype(int).tolist()}")
+    return chosen
 
 
 def main():
@@ -212,19 +298,37 @@ def main():
     ]
     fresh_candidates.sort(key=lambda kv: kv[1], reverse=True)
     log(f"n_fresh_candidates_after_dedup = {len(fresh_candidates)}")
-    chosen = fresh_candidates[:n_take]
+
+    if args.sampling_strategy == "degree_matched":
+        log("using degree-matched sampling strategy")
+        pos_degree = _compute_positive_degree(conn)
+        chosen = select_degree_matched(fresh_candidates, pos_degree, n_take)
+    else:
+        log("using frequency-ranked sampling strategy")
+        chosen = fresh_candidates[:n_take]
     log(f"n_chosen = {len(chosen)}")
 
     if chosen:
+        # Pre-load pfam_id → domain.id mapping to avoid per-row subqueries
+        pfam_to_domain_ids = defaultdict(list)
+        for did, pfam in conn.execute("SELECT id, pfam_id FROM domain"):
+            pfam_to_domain_ids[pfam].append(did)
+        log(f"loaded {len(pfam_to_domain_ids)} pfam→domain mappings")
+
+        insert_rows = []
+        for (pfam_a, pfam_b), _ in chosen:
+            for d_a in pfam_to_domain_ids.get(pfam_a, ()):
+                for d_b in pfam_to_domain_ids.get(pfam_b, ()):
+                    insert_rows.append((d_a, d_b, True, args.source_label))
+
         conn.executemany(
             "INSERT OR IGNORE INTO domain_domain_interaction"
             "(domain_id_a, domain_id_b, negative, source) "
-            "SELECT d1.id, d2.id, TRUE, ? "
-            "FROM domain AS d1, domain AS d2 "
-            "WHERE d1.pfam_id = ? AND d2.pfam_id = ?;",
-            [(args.source_label, a, b) for (a, b), _ in chosen],
+            "VALUES (?, ?, ?, ?)",
+            insert_rows,
         )
         conn.commit()
+        log(f"batch-inserted {len(insert_rows)} rows")
 
     n_inserted = conn.execute(
         "SELECT COUNT(*) FROM domain_domain_interaction WHERE source = ?",

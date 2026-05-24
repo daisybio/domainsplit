@@ -41,24 +41,30 @@ process INSERT_PPI {
 
     print("Inserting PPI", flush=True)
 
-    def ppi_iterator():
-        string_id_mapping = load_uniprot_id_mapping("STRING")
-        ppi_df = pd.read_csv("${string_ppi}", sep=" ")
+    # Pre-load uniprot_id → protein.id mapping to avoid per-row subqueries
+    uniprot_to_pid = dict(
+        conn.execute("SELECT uniprot_id, id FROM protein").fetchall()
+    )
+    print(f"Loaded {len(uniprot_to_pid)} protein ID mappings", flush=True)
 
-        for _, row in ppi_df.iterrows():
-            uniprot_id_a = string_id_mapping.get(row["protein1"])
-            uniprot_id_b = string_id_mapping.get(row["protein2"])
-            if uniprot_id_a and uniprot_id_b:
-                yield row["combined_score"], uniprot_id_a, uniprot_id_b
+    string_id_mapping = load_uniprot_id_mapping("STRING")
+    ppi_df = pd.read_csv("${string_ppi}", sep=" ")
 
-    conn.executemany(\"""
-        INSERT INTO protein_protein_interaction(protein_id_a, protein_id_b, score)
-        SELECT protein_a.id, protein_b.id, ? as score
-        FROM protein AS protein_a, protein AS protein_b
-        WHERE
-            protein_a.uniprot_id = ? AND
-            protein_b.uniprot_id = ?;
-    \""", tqdm(ppi_iterator()))
+    insert_rows = []
+    for _, row in tqdm(ppi_df.iterrows(), total=len(ppi_df)):
+        uniprot_a = string_id_mapping.get(row["protein1"])
+        uniprot_b = string_id_mapping.get(row["protein2"])
+        if uniprot_a and uniprot_b:
+            pid_a = uniprot_to_pid.get(uniprot_a)
+            pid_b = uniprot_to_pid.get(uniprot_b)
+            if pid_a is not None and pid_b is not None:
+                insert_rows.append((pid_a, pid_b, row["combined_score"]))
+
+    conn.executemany(
+        "INSERT INTO protein_protein_interaction(protein_id_a, protein_id_b, score) "
+        "VALUES (?, ?, ?)",
+        insert_rows,
+    )
     conn.commit()
     conn.close()
 

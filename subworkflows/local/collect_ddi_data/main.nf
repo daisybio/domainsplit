@@ -38,6 +38,7 @@ workflow COLLECT_DDI_DATA {
             uniprot_id_mapping,
             params.negative_ppi_min_n_tested,
             params.negative_ppi_source_label,
+            params.negative_sampling_strategy,
         ).domainsplit_db
     }
 
