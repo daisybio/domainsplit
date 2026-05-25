@@ -33,7 +33,7 @@ process PROTT5_EMBEDDINGS_CHUNK {
 
     print("Submitting request to UniProt for chunk: ${tag_str}")
     url = "https://rest.uniprot.org/uniprotkb/download/run"
-    response = requests.post(url, params=params)
+    response = requests.post(url, data=params)
 
     try:
         response.raise_for_status()
