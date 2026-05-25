@@ -25,15 +25,11 @@ workflow GENERATE_EMBEDDINGS {
         .flatten()
         .distinct()
 
-    prott5_embeddings = download_prott5_embeddings(protein_ids)
-
-    (esm_protein_embeddings, esm_domain_embeddings) = generate_esm_embeddings(
-        input_uniprot_sequences,
-        protein_domain_map
-    )
+    download_prott5_embeddings(protein_ids)
+    generate_esm_embeddings(input_uniprot_sequences, protein_domain_map)
 
     emit:
-    prott5_embeddings
-    esm_protein_embeddings
-    esm_domain_embeddings
+    prott5_embeddings       = download_prott5_embeddings.out.prott5_embeddings
+    esm_protein_embeddings  = generate_esm_embeddings.out.protein_embeddings
+    esm_domain_embeddings   = generate_esm_embeddings.out.domain_embeddings
 }

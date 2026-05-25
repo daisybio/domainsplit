@@ -180,6 +180,27 @@
                     "description": "Value written to the `source` column of domain_domain_interaction for DDIs derived from negative_ppi_parquet.",
                     "default": "y2h_ms",
                     "fa_icon": "fas fa-tag"
+                },
+                "pfam_download_batch_size": {
+                    "type": "integer",
+                    "description": "Number of Pfam IDs grouped into a single download job to reduce scheduler overhead.",
+                    "default": 100,
+                    "minimum": 1,
+                    "fa_icon": "fas fa-layer-group"
+                },
+                "prott5_chunk_size": {
+                    "type": "integer",
+                    "description": "Number of protein IDs per REST API chunk when download_prott5_complete is false.",
+                    "default": 500,
+                    "minimum": 1,
+                    "fa_icon": "fas fa-layer-group"
+                },
+                "negative_sampling_strategy": {
+                    "type": "string",
+                    "description": "Strategy for sampling negative DDIs from the PPI parquet source.",
+                    "default": "degree_matched",
+                    "enum": ["frequency", "degree_matched"],
+                    "fa_icon": "fas fa-random"
                 }
             }
         },

@@ -152,17 +152,24 @@ process GENERATE_DOMAIN_ESM_EMBEDDINGS_CHUNK {
     """
 }
 
-def generate_esm_embeddings(uniprotkb_database, protein_domain_map) {
-    def filter_result = FILTER_SEQUENCES(protein_domain_map, uniprotkb_database)
+workflow generate_esm_embeddings {
+    take:
+    uniprotkb_database
+    protein_domain_map
 
-    def protein_shards = SHARD_PROTEIN_FASTA(filter_result.protein_sequences, params.esm_protein_shards).shards.flatten()
-    def domain_shards  = SHARD_DOMAIN_FASTA(filter_result.domain_sequences,  params.esm_domain_shards ).shards.flatten()
+    main:
+    filter_result = FILTER_SEQUENCES(protein_domain_map, uniprotkb_database)
 
-    def protein_chunks = GENERATE_PROTEIN_ESM_EMBEDDINGS_CHUNK(protein_shards)
-    def domain_chunks  = GENERATE_DOMAIN_ESM_EMBEDDINGS_CHUNK(domain_shards)
+    protein_shards = SHARD_PROTEIN_FASTA(filter_result.protein_sequences, params.esm_protein_shards).shards.flatten()
+    domain_shards  = SHARD_DOMAIN_FASTA(filter_result.domain_sequences,  params.esm_domain_shards ).shards.flatten()
 
-    def protein_embeddings = JOIN_PROTEIN_EMBEDDINGS('esm_protein_embeddings', protein_chunks.chunk.collect()).joined
-    def domain_embeddings  = JOIN_DOMAIN_EMBEDDINGS('esm_domain_embeddings',  domain_chunks.chunk.collect() ).joined
+    protein_chunks = GENERATE_PROTEIN_ESM_EMBEDDINGS_CHUNK(protein_shards)
+    domain_chunks  = GENERATE_DOMAIN_ESM_EMBEDDINGS_CHUNK(domain_shards)
 
-    return [protein_embeddings, domain_embeddings]
+    protein_embeddings = JOIN_PROTEIN_EMBEDDINGS('esm_protein_embeddings', protein_chunks.chunk.collect()).joined
+    domain_embeddings  = JOIN_DOMAIN_EMBEDDINGS('esm_domain_embeddings',  domain_chunks.chunk.collect() ).joined
+
+    emit:
+    protein_embeddings
+    domain_embeddings
 }

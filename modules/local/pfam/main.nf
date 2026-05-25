@@ -45,7 +45,7 @@ process DOWNLOAD_PFAM_ALIGNMENTS_BATCH {
                             break
                         out.write(chunk)
                 return pfam_id
-            except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError) as e:
+            except Exception as e:
                 last_err = e
                 time.sleep(min(2 ** attempt, 30))
         print(f"all retries failed for {pfam_id}: {last_err}", file=sys.stderr)
@@ -55,14 +55,21 @@ process DOWNLOAD_PFAM_ALIGNMENTS_BATCH {
     with ThreadPoolExecutor(max_workers=8) as pool:
         futures = {pool.submit(download_one, pid): pid for pid in PFAM_IDS}
         for i, future in enumerate(as_completed(futures), 1):
-            result = future.result()
+            try:
+                result = future.result()
+            except Exception as e:
+                result = None
+                print(f"worker exception for {futures[future]}: {e}", file=sys.stderr)
             if result is None:
                 failed.append(futures[future])
             if i % 20 == 0:
                 print(f"  downloaded {i}/{len(PFAM_IDS)}", file=sys.stderr)
 
     if failed:
-        print(f"WARNING: {len(failed)} downloads failed: {failed[:10]}", file=sys.stderr)
+        print(f"WARNING: {len(failed)}/{len(PFAM_IDS)} downloads failed: {failed[:10]}", file=sys.stderr)
+    if len(failed) == len(PFAM_IDS):
+        print("ERROR: all downloads failed", file=sys.stderr)
+        sys.exit(1)
 
     with open("versions.yml", "w") as f:
         f.write('"${task.process}":\\n')

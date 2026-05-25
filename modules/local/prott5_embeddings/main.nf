@@ -112,12 +112,19 @@ process DOWNLOAD_PROTT5_EMBEDDINGS_COMPLETE {
 //
 // Default stays on the complete download to preserve known-good behaviour. Flip when you want
 // to filter at fetch time (e.g. species-specific runs).
-def download_prott5_embeddings(protein_ids) {
+workflow download_prott5_embeddings {
+    take:
+    protein_ids
+
+    main:
     if (params.download_prott5_complete) {
-        return DOWNLOAD_PROTT5_EMBEDDINGS_COMPLETE().embeddings
+        prott5_embeddings = DOWNLOAD_PROTT5_EMBEDDINGS_COMPLETE().embeddings
+    } else {
+        protein_id_sublists = protein_ids.buffer(size: params.prott5_chunk_size, remainder: true)
+        chunks = PROTT5_EMBEDDINGS_CHUNK(protein_id_sublists)
+        prott5_embeddings = JOIN_HDF_FILES('embeddings', chunks.embeddings_chunk.collect()).joined
     }
-    def protein_id_sublists = protein_ids.buffer(size: params.prott5_chunk_size, remainder: true)
-    def chunks = PROTT5_EMBEDDINGS_CHUNK(protein_id_sublists)
-    def joined = JOIN_HDF_FILES('embeddings', chunks.embeddings_chunk.collect())
-    return joined.joined
+
+    emit:
+    prott5_embeddings
 }
