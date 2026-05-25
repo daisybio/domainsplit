@@ -95,17 +95,11 @@
                     "default": "https://www.ebi.ac.uk/interpro/wwwapi//entry/pfam/{pfam_id}/?annotation=alignment:full&download",
                     "fa_icon": "fas fa-link"
                 },
-                "download_prott5_complete": {
-                    "type": "boolean",
-                    "description": "ProtT5 embeddings download strategy: true = single full HDF5 download; false = chunked async REST queries for required IDs only.",
-                    "default": false,
-                    "fa_icon": "fas fa-cloud-download-alt"
-                },
-                "url_prott5_embeddings_complete": {
+                "prott5_per_residue_h5": {
                     "type": "string",
-                    "description": "URL of the full UniProt-SwissProt per-residue ProtT5 embeddings HDF5 (used when download_prott5_complete=true).",
-                    "default": "https://ftp.ebi.ac.uk/pub/contrib/UniProt/embeddings/current_release/uniprot_sprot/per-residue.h5",
-                    "fa_icon": "fas fa-link"
+                    "description": "Local path to the EBI ProtT5 per-residue HDF5 file. When null or file missing, ProtT5 embeddings are skipped with a warning.",
+                    "default": null,
+                    "fa_icon": "fas fa-file"
                 },
                 "esm_protein_shards": {
                     "type": "integer",
@@ -185,13 +179,6 @@
                     "type": "integer",
                     "description": "Number of Pfam IDs grouped into a single download job to reduce scheduler overhead.",
                     "default": 100,
-                    "minimum": 1,
-                    "fa_icon": "fas fa-layer-group"
-                },
-                "prott5_chunk_size": {
-                    "type": "integer",
-                    "description": "Number of protein IDs per REST API chunk when download_prott5_complete is false.",
-                    "default": 500,
                     "minimum": 1,
                     "fa_icon": "fas fa-layer-group"
                 },

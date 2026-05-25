@@ -11,6 +11,7 @@ import gzip
 import shutil
 import sqlite3
 import sys
+from contextlib import nullcontext
 
 import h5py
 import numpy as np
@@ -24,7 +25,7 @@ def main() -> int:
     parser.add_argument("--db-in", required=True)
     parser.add_argument("--uniprot-db", required=True)
     parser.add_argument("--protein-domain-map", required=True)
-    parser.add_argument("--prott5-embeddings", required=True)
+    parser.add_argument("--prott5-embeddings", default=None)
     parser.add_argument("--esm-protein-embeddings", required=True)
     parser.add_argument("--versions", required=True)
     parser.add_argument("--process-name", required=True)
@@ -36,12 +37,18 @@ def main() -> int:
     conn.execute("PRAGMA journal_mode=OFF")
     conn.execute("PRAGMA synchronous=OFF")
 
+    if args.prott5_embeddings:
+        print(f"Using ProtT5 embeddings from {args.prott5_embeddings}", flush=True)
+    else:
+        print("WARNING: No ProtT5 embeddings file supplied — prott5_per_residue will be NULL for all proteins", flush=True)
+
     print("Inserting required uniprot records and embeddings", flush=True)
+    prott5_ctx = h5py.File(args.prott5_embeddings, mode="r") if args.prott5_embeddings else nullcontext()
     with (
         gzip.open(args.uniprot_db, "rt") as uniprot_text,
         gzip.open(args.protein_domain_map, "rt") as protein_domain_map_text,
         h5py.File(args.esm_protein_embeddings, mode="r") as esm_protein_embeddings,
-        h5py.File(args.prott5_embeddings, mode="r") as prott5_embeddings_file,
+        prott5_ctx as prott5_embeddings_file,
     ):
         pd_map = pd.read_csv(protein_domain_map_text)
         required_uniprot_ids = set(pd_map["uniprot_id"].unique())
@@ -56,7 +63,7 @@ def main() -> int:
         )
 
         def get_prott5_embedding(seq_id):
-            if seq_id in prott5_embeddings_file:
+            if prott5_embeddings_file and seq_id in prott5_embeddings_file:
                 return np.array(prott5_embeddings_file[seq_id]).dumps()
             return None
 

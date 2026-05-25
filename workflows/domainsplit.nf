@@ -29,6 +29,18 @@ main:
     input_string             = file(params.url_string)
     input_pfam2go            = file(params.url_pfam2go)
 
+    def prott5_file = []
+    if (params.prott5_per_residue_h5) {
+        def f = file(params.prott5_per_residue_h5)
+        if (f.exists()) {
+            prott5_file = f
+        } else {
+            log.warn "ProtT5 HDF5 not found at '${params.prott5_per_residue_h5}' — skipping ProtT5 embeddings"
+        }
+    } else {
+        log.warn "params.prott5_per_residue_h5 not set — skipping ProtT5 embeddings"
+    }
+
     empty_db = INIT_DOMAINSPLIT_DB().domainsplit_db
 
     COLLECT_DDI_DATA(
@@ -57,7 +69,7 @@ main:
         input_pfam2go,
         input_uniprot_sequences,
         protein_domain_map,
-        GENERATE_EMBEDDINGS.out.prott5_embeddings,
+        prott5_file,
         input_uniprot_go_terms,
         input_string,
         input_uniprot_id_mapping,
