@@ -39,24 +39,22 @@ process MINIMAL_LEAKAGE_SPLIT_DOMAIN {
 
     input:
     path "domainsplit.sqlite3"
-    val split_fractions  // e.g., [("train", 0.8), ("test", 0.2)]
+    val split_fractions  // e.g., [("train", 0.6), ("optimization", 0.2), ("test", 0.2)]
     path ("domain_clusters.tsv")
 
     output:
-    path output_files, emit: split_ddi_id_files
-    val output_file_splits, emit: split_fractions
+    path('*.sqlite3'), emit: split_dbs
+    val output_split_info, emit: split_info
     path "versions.yml", emit: versions
 
     script:
     output_file_fraction_dict = [:]
-    output_file_splits = [:]
+    output_split_info = []
 
     split_fractions.each { name, fraction ->
-        output_file_fraction_dict["${name}.txt"] = fraction
-        output_file_splits["${name}.txt"] = name
+        output_file_fraction_dict["${name}"] = fraction
+        output_split_info << ["${name}.sqlite3", name]
     }
-
-    output_files = output_file_fraction_dict.keySet() as List
 
     def split_fraction_dict_str = output_file_fraction_dict.collect { k, v -> "'${k}': ${v}" }.join(", ")
     def split_fraction_dict_py = "{" + split_fraction_dict_str + "}"
@@ -79,14 +77,19 @@ process MINIMAL_LEAKAGE_SPLIT_DOMAIN {
     4. Refine with Kernighan-Lin local search: greedily move clusters
        between partitions when the move reduces the total cut (DDIs
        lost) while maintaining balance.
-    5. Output DDI IDs per split — a DDI is assigned to a split iff both
-       its domains land in the same partition.
+    5. Create per-split SQLite databases containing only the DDIs where
+       both domains land in the same partition.
     \"\"\"
+
+    import os
+    os.environ["SQLITE_TMPDIR"] = os.getcwd()
 
     import numpy as np
     import sqlite3
+    import shutil
     from collections import defaultdict
 
+    input_db_path = "domainsplit.sqlite3"
     split_fractions = ${split_fraction_dict_py}
     print(f"Split fractions: {split_fractions}")
     split_names = list(split_fractions.keys())
@@ -107,7 +110,7 @@ process MINIMAL_LEAKAGE_SPLIT_DOMAIN {
             domain_to_cluster[member_domain] = centroid_domain
 
     # ── Load DDI data ────────────────────────────────────────────────
-    conn = sqlite3.connect("domainsplit.sqlite3")
+    conn = sqlite3.connect(input_db_path)
     ddi_rows = conn.execute(
         "SELECT id, domain_id_a, domain_id_b FROM domain_domain_interaction"
     ).fetchall()
@@ -305,7 +308,7 @@ process MINIMAL_LEAKAGE_SPLIT_DOMAIN {
         for c in clusters:
             c2p[c] = name
 
-    split_ddis = {name: [] for name in split_names}
+    split_ddis = {name: set() for name in split_names}
     skipped = 0
     for ddi_id, da, db in ddi_rows:
         ca = domain_to_cluster.get(da)
@@ -315,23 +318,74 @@ process MINIMAL_LEAKAGE_SPLIT_DOMAIN {
             continue
         pa, pb = c2p.get(ca), c2p.get(cb)
         if pa == pb and pa is not None:
-            split_ddis[pa].append(ddi_id)
+            split_ddis[pa].add(ddi_id)
 
     total_assigned = sum(len(v) for v in split_ddis.values())
     print(f"Assigned {total_assigned}/{len(ddi_rows)} DDIs "
           f"({100 * total_assigned / max(len(ddi_rows), 1):.1f}%)")
 
-    # ── Write output ─────────────────────────────────────────────────
-    for output_file in split_fractions.keys():
-        with open(output_file, "w") as f:
-            f.write("ddi_id\\n")
-            for ddi_id in sorted(split_ddis[output_file]):
-                f.write(f"{ddi_id}\\n")
-        n_domains = sum(len(cluster_domains[c]) for c in partition[output_file])
-        frac = split_fractions[output_file]
-        print(f"  {output_file}: {len(split_ddis[output_file])} DDIs, "
+    # ── Step 4: Create per-split databases ───────────────────────────
+    for split_name, keep_ids in split_ddis.items():
+        output_path = f"{split_name}.sqlite3"
+        n_domains = sum(len(cluster_domains[c]) for c in partition[split_name])
+        frac = split_fractions[split_name]
+        print(f"Creating {output_path}: {len(keep_ids)} DDIs, "
               f"{n_domains} domains "
               f"({100 * n_domains / total_weight:.1f}%, target {100 * frac:.0f}%)")
+
+        shutil.copyfile(input_db_path, output_path)
+
+        conn = sqlite3.connect(output_path)
+        conn.executescript('''
+            PRAGMA foreign_keys=ON;
+            PRAGMA journal_mode=OFF;
+            PRAGMA synchronous=OFF;
+        ''')
+
+        conn.execute("CREATE TEMP TABLE keep_ids (id INTEGER PRIMARY KEY)")
+        conn.executemany("INSERT INTO keep_ids VALUES (?)", [(i,) for i in keep_ids])
+
+        conn.execute('''
+            DELETE FROM domain_domain_interaction
+            WHERE id NOT IN (SELECT id FROM keep_ids)
+        ''')
+
+        conn.execute('''
+            DELETE FROM domain WHERE id IN (
+                SELECT d.id FROM domain d
+                LEFT JOIN domain_domain_interaction ddi
+                    ON ddi.domain_id_a = d.id OR ddi.domain_id_b = d.id
+                LEFT JOIN domain_protein_map dpm
+                    ON dpm.domain_id = d.id
+                WHERE ddi.id IS NULL OR dpm.domain_id IS NULL
+            )
+        ''')
+
+        conn.execute('''
+            DELETE FROM protein WHERE id IN (
+                SELECT p.id FROM protein p
+                LEFT JOIN domain_protein_map dpm
+                    ON dpm.protein_id = p.id
+                WHERE dpm.domain_id IS NULL
+            )
+        ''')
+
+        conn.execute("DROP TABLE keep_ids")
+
+        conn.executescript('''
+            VACUUM;
+
+            CREATE INDEX IF NOT EXISTS idx_ddi_domain_a ON domain_domain_interaction(domain_id_a);
+            CREATE INDEX IF NOT EXISTS idx_ddi_domain_b ON domain_domain_interaction(domain_id_b);
+            CREATE INDEX IF NOT EXISTS idx_dpm_domain ON domain_protein_map(domain_id);
+            CREATE INDEX IF NOT EXISTS idx_dpm_protein ON domain_protein_map(protein_id);
+            CREATE INDEX IF NOT EXISTS idx_ppi_protein_a ON protein_protein_interaction(protein_id_a);
+            CREATE INDEX IF NOT EXISTS idx_ppi_protein_b ON protein_protein_interaction(protein_id_b);
+            CREATE INDEX IF NOT EXISTS idx_pgo_protein ON protein_go_terms(protein_id);
+        ''')
+
+        conn.close()
+        print(f"  {output_path}: done")
 
     import sys as _sys
     with open("versions.yml", "w") as f:

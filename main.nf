@@ -87,7 +87,7 @@ output {
     }
     split_db {
         path {
-            it[1] >> "split_databases/${it[0].method}/${it[0].split}.sqlite3"
+            it[1] >> "databases/${it[0].method}/${it[0].split}.sqlite3"
         }
     }
 }
