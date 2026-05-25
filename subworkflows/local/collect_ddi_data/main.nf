@@ -23,6 +23,7 @@ workflow COLLECT_DDI_DATA {
     url_3did
     url_negatome
     uniprot_id_mapping
+    pfam_stockholm
 
     main:
     file_3did     = file(url_3did)
@@ -31,15 +32,20 @@ workflow COLLECT_DDI_DATA {
 
     domainsplit_db = INSERT_DDIS(domainsplit_db_in, sqlite_3did, negatome_file).domainsplit_db
 
+    pfam_mapping = Channel.empty()
+
     if (params.negative_ppi_parquet != null) {
-        domainsplit_db = INSERT_PPI_NEGATIVE_DDIS(
+        ppi_result = INSERT_PPI_NEGATIVE_DDIS(
             domainsplit_db,
             file(params.negative_ppi_parquet),
             uniprot_id_mapping,
+            pfam_stockholm,
             params.negative_ppi_min_n_tested,
             params.negative_ppi_source_label,
             params.negative_sampling_strategy,
-        ).domainsplit_db
+        )
+        domainsplit_db = ppi_result.domainsplit_db
+        pfam_mapping   = ppi_result.pfam_mapping
     }
 
     if (params.smoke_test_n_ddis != null) {
@@ -48,4 +54,5 @@ workflow COLLECT_DDI_DATA {
 
     emit:
     domainsplit_db
+    pfam_mapping
 }

@@ -9,6 +9,8 @@ set, capped so the new-source count equals (n_positive - n_negatome).
 import argparse
 import gzip
 import itertools
+import json
+import os
 import sqlite3
 import sys
 from collections import defaultdict
@@ -33,6 +35,10 @@ def parse_args():
     p.add_argument("--db", required=True)
     p.add_argument("--parquet", required=True)
     p.add_argument("--idmapping", required=True, help="UniProt idmapping .dat or .dat.gz")
+    p.add_argument("--pfam-stockholm", required=True,
+                   help="Pfam-A.full.gz Stockholm alignment file")
+    p.add_argument("--pfam-mapping-out", required=True,
+                   help="Output path for UniProt→Pfam JSON mapping")
     p.add_argument("--min-n-tested", type=int, required=True)
     p.add_argument("--source-label", required=True)
     p.add_argument(
@@ -49,6 +55,36 @@ def open_idmapping(path):
     if path.endswith(".gz"):
         return gzip.open(path, "rt")
     return open(path, "rt")
+
+
+def parse_pfam_stockholm(path):
+    if not os.path.isfile(path):
+        sys.exit(f"{TAG} Stockholm file not found: {path}")
+
+    uniprot_to_pfams = defaultdict(set)
+    current_pfam = None
+    n_entries = 0
+
+    opener = gzip.open if path.endswith(".gz") else open
+    with opener(path, "rt") as fh:
+        for line in fh:
+            if line.startswith("#=GF AC"):
+                current_pfam = line.split()[-1].split(".")[0]
+                n_entries += 1
+            elif line.startswith("#=GS") and "\tAC\t" not in line and " AC " in line:
+                parts = line.split()
+                try:
+                    ac_idx = parts.index("AC")
+                    uniprot = parts[ac_idx + 1].split(".")[0]
+                    if current_pfam:
+                        uniprot_to_pfams[uniprot].add(current_pfam)
+                except (ValueError, IndexError):
+                    continue
+            elif line.startswith("//"):
+                current_pfam = None
+
+    log(f"parsed {n_entries} Pfam entries, {len(uniprot_to_pfams)} UniProt mappings")
+    return uniprot_to_pfams
 
 
 def load_positive_pfams(conn):
@@ -73,8 +109,6 @@ def load_existing_pairs(conn):
 
 def stream_idmapping(path, gene_set):
     gene_to_uniprots = defaultdict(set)
-    relevant_uniprots = set()
-    pfam_buffer = []
     with open_idmapping(path) as fh:
         for line in fh:
             parts = line.rstrip("\n").split("\t")
@@ -84,15 +118,7 @@ def stream_idmapping(path, gene_set):
             if kind == "Gene_Name" or kind == "Gene_Synonym":
                 if value in gene_set:
                     gene_to_uniprots[value].add(uniprot)
-                    relevant_uniprots.add(uniprot)
-            elif kind == "Pfam":
-                pfam_buffer.append((uniprot, value))
-
-    uniprot_to_pfams = defaultdict(set)
-    for uniprot, pfam in pfam_buffer:
-        if uniprot in relevant_uniprots:
-            uniprot_to_pfams[uniprot].add(pfam.split(".")[0])
-    return gene_to_uniprots, uniprot_to_pfams
+    return gene_to_uniprots
 
 
 def _validate_columns(parquet_schema):
@@ -223,8 +249,18 @@ def main():
     log(f"n_ppis_after_n_tested_filter (>= {args.min_n_tested}) = {n_after}")
     log(f"n_unique_genes = {len(unique_genes)}")
 
+    log(f"parsing Stockholm file {args.pfam_stockholm}")
+    uniprot_to_pfams = parse_pfam_stockholm(args.pfam_stockholm)
+
+    log(f"writing UniProt→Pfam mapping to {args.pfam_mapping_out}")
+    with open(args.pfam_mapping_out, "w") as fh:
+        json.dump(
+            {k: sorted(v) for k, v in uniprot_to_pfams.items()},
+            fh,
+        )
+
     log(f"streaming idmapping {args.idmapping}")
-    gene_to_uniprots, uniprot_to_pfams = stream_idmapping(args.idmapping, unique_genes)
+    gene_to_uniprots = stream_idmapping(args.idmapping, unique_genes)
     log(f"n_mapped_genes = {len(gene_to_uniprots)}")
     log(f"n_mapped_uniprots = {sum(len(v) for v in gene_to_uniprots.values())}")
     n_pfam_unique = len({p for s in uniprot_to_pfams.values() for p in s})

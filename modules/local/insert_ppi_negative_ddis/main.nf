@@ -8,13 +8,15 @@ process INSERT_PPI_NEGATIVE_DDIS {
     path domainsplit_db_in, stageAs: 'input.domainsplit.sqlite3'
     path negative_ppi_parquet
     path idmapping_gz
+    path pfam_stockholm
     val  min_n_tested
     val  source_label
     val  sampling_strategy
 
     output:
-    path "domainsplit.sqlite3", emit: domainsplit_db
-    path "versions.yml",        emit: versions
+    path "domainsplit.sqlite3",        emit: domainsplit_db
+    path "uniprot_pfam_mapping.json",  emit: pfam_mapping
+    path "versions.yml",               emit: versions
 
     script:
     """
@@ -24,6 +26,8 @@ process INSERT_PPI_NEGATIVE_DDIS {
         --db domainsplit.sqlite3 \\
         --parquet "${negative_ppi_parquet}" \\
         --idmapping "${idmapping_gz}" \\
+        --pfam-stockholm "${pfam_stockholm}" \\
+        --pfam-mapping-out uniprot_pfam_mapping.json \\
         --min-n-tested ${min_n_tested} \\
         --source-label "${source_label}" \\
         --sampling-strategy "${sampling_strategy}"
