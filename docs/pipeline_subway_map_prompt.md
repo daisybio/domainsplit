@@ -76,7 +76,7 @@ Create a **subway-map-style overview graphic** for the `daisybio/domainsplit` Ne
 ### `CREATE_PROTEIN_DOMAIN_MAPPING`
 
 **In:** UniProt id-mapping table (`url_uniprot_id_mapping`) + all Pfam alignment files.
-**Out:** protein↔domain mapping table (CSV, `uniprot_id` keyed).
+**Out:** protein <-> domain mapping table (CSV, `uniprot_id` keyed).
 **What:** Joins UniProt accessions to Pfam domain occurrences using the alignments. Produces the master mapping of which proteins contain which Pfam domains — the backbone of the protein/domain bridge.
 
 ### `DOWNLOAD_PROTT5_EMBEDDINGS`

@@ -23,6 +23,14 @@ include { ANALYZE_DDI_BIAS            } from '../modules/local/analyze_ddi_bias/
 workflow DOMAINSPLIT {
 main:
     input_uniprot_id_mapping = file(params.url_uniprot_id_mapping)
+    if (params.negative_ppi_parquet != null && params.url_uniprot_swissprot == null) {
+        error "params.url_uniprot_swissprot is required when negative_ppi_parquet is set. " +
+              "Please supply a local path to uniprot_sprot.dat.gz " +
+              "(download from https://ftp.uniprot.org/pub/databases/uniprot/current_release/knowledgebase/complete/uniprot_sprot.dat.gz)"
+    }
+    input_uniprot_swissprot = params.url_uniprot_swissprot
+        ? file(params.url_uniprot_swissprot, checkIfExists: true)
+        : []
     input_uniprot_embeddings = file(params.url_uniprot_embeddings)
     input_uniprot_go_terms   = file(params.url_uniprot_go_terms)
     input_uniprot_sequences  = file(params.url_uniprot_sequences)
@@ -51,7 +59,7 @@ main:
         empty_db,
         params.url_3did,
         params.url_negatome,
-        input_uniprot_id_mapping,
+        input_uniprot_swissprot,
         pfam_stockholm_file,
     )
 
