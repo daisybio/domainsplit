@@ -57,7 +57,7 @@ def open_idmapping(path):
     return open(path, "rt")
 
 
-def fetch_pfam_from_uniprot(uniprot_ids, batch_size=500):
+def fetch_pfam_from_uniprot(uniprot_ids, batch_size=100):
     BASE_URL = "https://rest.uniprot.org/uniprotkb/search"
     HEADERS = {"accept": "application/json"}
     MAX_RETRIES = 3
@@ -102,6 +102,9 @@ def fetch_pfam_from_uniprot(uniprot_ids, batch_size=500):
                     uniprot_to_pfams[acc].add(pfam_id)
 
         log(f"batch {batch_num}/{n_batches}: queried {len(batch)} IDs, got {len(data.get('results', []))} results")
+
+        if batch_num < n_batches:
+            time.sleep(1)
 
     log(f"fetched Pfam mappings for {len(uniprot_to_pfams)} UniProt IDs")
     return uniprot_to_pfams
