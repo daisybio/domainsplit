@@ -51,16 +51,11 @@ main:
 
     empty_db = INIT_DOMAINSPLIT_DB().domainsplit_db
 
-    def pfam_stockholm_file = params.pfam_stockholm
-        ? file(params.pfam_stockholm, checkIfExists: true)
-        : []
-
     COLLECT_DDI_DATA(
         empty_db,
         params.url_3did,
         params.url_negatome,
         input_uniprot_swissprot,
-        pfam_stockholm_file,
     )
 
     domainsplit_db_ddi = COLLECT_DDI_DATA.out.domainsplit_db

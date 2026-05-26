@@ -10,16 +10,17 @@ import argparse
 import gzip
 import itertools
 import json
-import os
 import re
 import sqlite3
 import sys
+import time
 from collections import defaultdict
 
 import math
 
 import numpy as np
 import pyarrow.parquet as pq
+import requests
 
 
 TAG = "[ppi_neg]"
@@ -36,8 +37,6 @@ def parse_args():
     p.add_argument("--db", required=True)
     p.add_argument("--parquet", required=True)
     p.add_argument("--swissprot", required=True, help="UniProt Swiss-Prot .dat or .dat.gz")
-    p.add_argument("--pfam-stockholm", required=True,
-                   help="Pfam-A.full.gz Stockholm alignment file")
     p.add_argument("--pfam-mapping-out", required=True,
                    help="Output path for UniProt→Pfam JSON mapping")
     p.add_argument("--min-n-tested", type=int, required=True)
@@ -58,33 +57,53 @@ def open_idmapping(path):
     return open(path, "rt")
 
 
-def parse_pfam_stockholm(path):
-    if not os.path.isfile(path):
-        sys.exit(f"{TAG} Stockholm file not found: {path}")
+def fetch_pfam_from_uniprot(uniprot_ids, batch_size=500):
+    BASE_URL = "https://rest.uniprot.org/uniprotkb/search"
+    HEADERS = {"accept": "application/json"}
+    MAX_RETRIES = 3
 
+    id_list = sorted(uniprot_ids)
     uniprot_to_pfams = defaultdict(set)
-    current_pfam = None
-    n_entries = 0
+    n_batches = math.ceil(len(id_list) / batch_size)
 
-    opener = gzip.open if path.endswith(".gz") else open
-    with opener(path, "rt") as fh:
-        for line in fh:
-            if line.startswith("#=GF AC"):
-                current_pfam = line.split()[-1].split(".")[0]
-                n_entries += 1
-            elif line.startswith("#=GS") and "\tAC\t" not in line and " AC " in line:
-                parts = line.split()
-                try:
-                    ac_idx = parts.index("AC")
-                    uniprot = parts[ac_idx + 1].split(".")[0]
-                    if current_pfam:
-                        uniprot_to_pfams[uniprot].add(current_pfam)
-                except (ValueError, IndexError):
-                    continue
-            elif line.startswith("//"):
-                current_pfam = None
+    log(f"fetching Pfam cross-refs for {len(id_list)} UniProt IDs in {n_batches} batches")
 
-    log(f"parsed {n_entries} Pfam entries, {len(uniprot_to_pfams)} UniProt mappings")
+    for i in range(0, len(id_list), batch_size):
+        batch = id_list[i : i + batch_size]
+        batch_num = i // batch_size + 1
+        query = " OR ".join(batch)
+        params = {
+            "query": query,
+            "fields": "accession,xref_pfam",
+            "size": str(batch_size),
+        }
+
+        for attempt in range(MAX_RETRIES):
+            try:
+                resp = requests.get(BASE_URL, headers=HEADERS, params=params, timeout=120)
+                resp.raise_for_status()
+                break
+            except requests.RequestException as exc:
+                if attempt < MAX_RETRIES - 1:
+                    wait = 2 ** (attempt + 1)
+                    log(f"batch {batch_num}/{n_batches} attempt {attempt + 1} failed: {exc}; retrying in {wait}s")
+                    time.sleep(wait)
+                else:
+                    sys.exit(f"{TAG} batch {batch_num}/{n_batches} failed after {MAX_RETRIES} attempts: {exc}")
+
+        data = resp.json()
+        for entry in data.get("results", []):
+            acc = entry.get("primaryAccession")
+            if acc not in uniprot_ids:
+                continue
+            for xref in entry.get("uniProtKBCrossReferences", []):
+                if xref.get("database") == "Pfam":
+                    pfam_id = xref["id"].split(".")[0]
+                    uniprot_to_pfams[acc].add(pfam_id)
+
+        log(f"batch {batch_num}/{n_batches}: queried {len(batch)} IDs, got {len(data.get('results', []))} results")
+
+    log(f"fetched Pfam mappings for {len(uniprot_to_pfams)} UniProt IDs")
     return uniprot_to_pfams
 
 
@@ -316,8 +335,12 @@ def main():
     log(f"n_ppis_after_n_tested_filter (>= {args.min_n_tested}) = {n_after}")
     log(f"n_unique_genes = {len(unique_genes)}")
 
-    log(f"parsing Stockholm file {args.pfam_stockholm}")
-    uniprot_to_pfams = parse_pfam_stockholm(args.pfam_stockholm)
+    log(f"parsing SwissProt file {args.swissprot}")
+    gene_to_uniprot = parse_swissprot(args.swissprot, unique_genes)
+
+    query_uniprots = set(gene_to_uniprot.values())
+    log(f"n_unique_uniprots_to_query = {len(query_uniprots)}")
+    uniprot_to_pfams = fetch_pfam_from_uniprot(query_uniprots)
 
     log(f"writing UniProt -> Pfam mapping to {args.pfam_mapping_out}")
     with open(args.pfam_mapping_out, "w") as fh:
@@ -326,8 +349,6 @@ def main():
             fh,
         )
 
-    log(f"parsing SwissProt file {args.swissprot}")
-    gene_to_uniprot = parse_swissprot(args.swissprot, unique_genes)
     n_pfam_unique = len({p for s in uniprot_to_pfams.values() for p in s})
     log(f"n_pfam_domains_for_input_proteins = {n_pfam_unique}")
 
