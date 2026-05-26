@@ -170,8 +170,8 @@ def parse_swissprot(path, gene_set):
                         if gene not in gene_name_map:
                             gene_name_map[gene] = primary_ac
                         elif gene_name_map[gene] is not None and gene_name_map[gene] != primary_ac:
-                            gene_name_map[gene] = None
                             log(f"{gene}: {primary_ac} and {gene_name_map[gene]}")
+                            gene_name_map[gene] = None
 
                     for gene in synonyms:
                         if gene not in gene_set:
