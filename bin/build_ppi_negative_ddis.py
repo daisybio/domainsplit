@@ -171,6 +171,7 @@ def parse_swissprot(path, gene_set):
                             gene_name_map[gene] = primary_ac
                         elif gene_name_map[gene] is not None and gene_name_map[gene] != primary_ac:
                             gene_name_map[gene] = None
+                            log(f"{gene}: {primary_ac} and {gene_name_map[gene]}")
 
                     for gene in synonyms:
                         if gene not in gene_set:
@@ -438,11 +439,11 @@ def main():
     log(f"n_chosen = {len(chosen)}")
 
     if chosen:
-        # Pre-load pfam_id → domain.id mapping to avoid per-row subqueries
+        # Pre-load pfam_id -> domain.id mapping to avoid per-row subqueries
         pfam_to_domain_ids = defaultdict(list)
         for did, pfam in conn.execute("SELECT id, pfam_id FROM domain"):
             pfam_to_domain_ids[pfam].append(did)
-        log(f"loaded {len(pfam_to_domain_ids)} pfam→domain mappings")
+        log(f"loaded {len(pfam_to_domain_ids)} pfam -> domain mappings")
 
         insert_rows = []
         for (pfam_a, pfam_b), _ in chosen:
