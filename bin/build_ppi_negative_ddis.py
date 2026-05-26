@@ -11,6 +11,7 @@ import gzip
 import itertools
 import json
 import os
+import re
 import sqlite3
 import sys
 from collections import defaultdict
@@ -34,7 +35,7 @@ def parse_args():
     p = argparse.ArgumentParser()
     p.add_argument("--db", required=True)
     p.add_argument("--parquet", required=True)
-    p.add_argument("--idmapping", required=True, help="UniProt idmapping .dat or .dat.gz")
+    p.add_argument("--swissprot", required=True, help="UniProt Swiss-Prot .dat or .dat.gz")
     p.add_argument("--pfam-stockholm", required=True,
                    help="Pfam-A.full.gz Stockholm alignment file")
     p.add_argument("--pfam-mapping-out", required=True,
@@ -107,18 +108,84 @@ def load_existing_pairs(conn):
     return {tuple(sorted((a, b))) for a, b in cur}
 
 
-def stream_idmapping(path, gene_set):
-    gene_to_uniprots = defaultdict(set)
+def _strip_evidence(s):
+    return s.split("{")[0].strip()
+
+
+def parse_swissprot(path, gene_set):
+    """Parse uniprot_sprot.dat(.gz) into gene->uniprot mapping (primary AC only).
+
+    Name-level mappings take priority over Synonym-level.
+    Genes mapping to >1 UniProt entry at the same level are dropped.
+    """
+    gene_name_map = {}
+    gene_synonym_map = {}
+    n_entries = 0
+
     with open_idmapping(path) as fh:
+        primary_ac = None
+        gn_lines = []
+
         for line in fh:
-            parts = line.rstrip("\n").split("\t")
-            if len(parts) != 3:
-                continue
-            uniprot, kind, value = parts
-            if kind == "Gene_Name" or kind == "Gene_Synonym":
-                if value in gene_set:
-                    gene_to_uniprots[value].add(uniprot)
-    return gene_to_uniprots
+            if line.startswith("AC   "):
+                if primary_ac is None:
+                    primary_ac = line[5:].strip().split(";")[0].strip()
+            elif line.startswith("GN   "):
+                gn_lines.append(line[5:].rstrip("\n"))
+            elif line.startswith("//"):
+                if primary_ac and gn_lines:
+                    n_entries += 1
+                    gn_text = " ".join(gn_lines)
+
+                    names = [_strip_evidence(n) for n in re.findall(r"Name=([^;]+);", gn_text)]
+                    synonyms = []
+                    for syn_group in re.findall(r"Synonyms=([^;]+);", gn_text):
+                        synonyms.extend(_strip_evidence(s) for s in syn_group.split(","))
+
+                    for gene in names:
+                        if gene not in gene_set:
+                            continue
+                        if gene not in gene_name_map:
+                            gene_name_map[gene] = primary_ac
+                        elif gene_name_map[gene] is not None and gene_name_map[gene] != primary_ac:
+                            gene_name_map[gene] = None
+
+                    for gene in synonyms:
+                        if gene not in gene_set:
+                            continue
+                        if gene not in gene_synonym_map:
+                            gene_synonym_map[gene] = primary_ac
+                        elif gene_synonym_map[gene] is not None and gene_synonym_map[gene] != primary_ac:
+                            gene_synonym_map[gene] = None
+
+                primary_ac = None
+                gn_lines = []
+
+    gene_to_uniprot = {}
+    n_ambig_name = 0
+    n_ambig_synonym = 0
+
+    for gene in set(gene_name_map) | set(gene_synonym_map):
+        name_ac = gene_name_map.get(gene)
+        if gene in gene_name_map:
+            if name_ac is not None:
+                gene_to_uniprot[gene] = name_ac
+            else:
+                n_ambig_name += 1
+        else:
+            syn_ac = gene_synonym_map.get(gene)
+            if syn_ac is not None:
+                gene_to_uniprot[gene] = syn_ac
+            else:
+                n_ambig_synonym += 1
+
+    n_dropped = n_ambig_name + n_ambig_synonym
+    log(f"parsed {n_entries} SwissProt entries with gene names")
+    log(f"n_mapped_genes = {len(gene_to_uniprot)}")
+    log(f"n_unique_uniprots = {len(set(gene_to_uniprot.values()))}")
+    log(f"n_dropped_ambiguous = {n_dropped} (name={n_ambig_name}, synonym={n_ambig_synonym})")
+
+    return gene_to_uniprot
 
 
 def _validate_columns(parquet_schema):
@@ -252,17 +319,15 @@ def main():
     log(f"parsing Stockholm file {args.pfam_stockholm}")
     uniprot_to_pfams = parse_pfam_stockholm(args.pfam_stockholm)
 
-    log(f"writing UniProt→Pfam mapping to {args.pfam_mapping_out}")
+    log(f"writing UniProt -> Pfam mapping to {args.pfam_mapping_out}")
     with open(args.pfam_mapping_out, "w") as fh:
         json.dump(
             {k: sorted(v) for k, v in uniprot_to_pfams.items()},
             fh,
         )
 
-    log(f"streaming idmapping {args.idmapping}")
-    gene_to_uniprots = stream_idmapping(args.idmapping, unique_genes)
-    log(f"n_mapped_genes = {len(gene_to_uniprots)}")
-    log(f"n_mapped_uniprots = {sum(len(v) for v in gene_to_uniprots.values())}")
+    log(f"parsing SwissProt file {args.swissprot}")
+    gene_to_uniprot = parse_swissprot(args.swissprot, unique_genes)
     n_pfam_unique = len({p for s in uniprot_to_pfams.values() for p in s})
     log(f"n_pfam_domains_for_input_proteins = {n_pfam_unique}")
 
@@ -278,15 +343,18 @@ def main():
     log(f"n_existing_ddis = {len(existing_pairs)}")
 
     def row_pfams(gene):
-        return {
-            pfam
-            for uniprot in gene_to_uniprots.get(gene, ())
-            for pfam in uniprot_to_pfams.get(uniprot, ())
-        }
+        uniprot = gene_to_uniprot.get(gene)
+        if uniprot is None:
+            return set()
+        return set(uniprot_to_pfams.get(uniprot, ()))
 
     candidate_counts = defaultdict(int)
     n_rows_with_pairs = 0
+    n_skipped_unmapped = 0
     for bait, prey in zip(baits, preys):
+        if bait not in gene_to_uniprot or prey not in gene_to_uniprot:
+            n_skipped_unmapped += 1
+            continue
         bait_pfams = row_pfams(bait) & pos_pfam
         prey_pfams = row_pfams(prey) & pos_pfam
         if not bait_pfams or not prey_pfams:
@@ -304,6 +372,7 @@ def main():
 
     del baits, preys
 
+    log(f"n_ppi_rows_skipped_unmapped_gene = {n_skipped_unmapped}")
     log(f"n_rows_yielding_pairs = {n_rows_with_pairs}")
     log(f"n_unique_pfam_ddi_candidates = {len(candidate_counts)}")
     if candidate_counts:
