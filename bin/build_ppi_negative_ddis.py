@@ -2,23 +2,21 @@
 """
 Build negative DDIs from a Y2H/MS PPI parquet and append them to the
 domainsplit SQLite, restricted to Pfam domains already present in positive
-DDIs, ranked by how often each Pfam-pair co-occurs across the filtered PPI
-set, capped so the new-source count equals (n_positive - n_negatome).
+DDIs.  In degree_matched mode, selects pairs so each domain's negative
+degree matches its positive degree.  In frequency mode, takes the top-N
+by PPI co-occurrence count, capped at (n_positive - n_negatome).
 """
 
 import argparse
-import gzip
+import heapq
 import itertools
 import json
-import re
+import random
 import sqlite3
 import sys
 import time
 from collections import defaultdict
 
-import math
-
-import numpy as np
 import pyarrow.parquet as pq
 import requests
 
@@ -36,7 +34,6 @@ def parse_args():
     p = argparse.ArgumentParser()
     p.add_argument("--db", required=True)
     p.add_argument("--parquet", required=True)
-    p.add_argument("--swissprot", required=True, help="UniProt Swiss-Prot .dat or .dat.gz")
     p.add_argument("--pfam-mapping-out", required=True,
                    help="Output path for UniProt→Pfam JSON mapping")
     p.add_argument("--min-n-tested", type=int, required=True)
@@ -51,31 +48,29 @@ def parse_args():
     return p.parse_args()
 
 
-def open_idmapping(path):
-    if path.endswith(".gz"):
-        return gzip.open(path, "rt")
-    return open(path, "rt")
-
-
-def fetch_pfam_from_uniprot(uniprot_ids, batch_size=100):
+def fetch_gene_mappings(gene_names, batch_size=100):
     BASE_URL = "https://rest.uniprot.org/uniprotkb/search"
     HEADERS = {"accept": "application/json"}
     MAX_RETRIES = 3
 
-    id_list = sorted(uniprot_ids)
+    gene_list = sorted(gene_names)
+    gene_to_uniprot = {}
+    gene_seen = {}
     uniprot_to_pfams = defaultdict(set)
-    n_batches = math.ceil(len(id_list) / batch_size)
+    n_batches = math.ceil(len(gene_list) / batch_size)
 
-    log(f"fetching Pfam cross-refs for {len(id_list)} UniProt IDs in {n_batches} batches")
+    log(f"fetching gene->UniProt+Pfam for {len(gene_list)} genes in {n_batches} batches")
 
-    for i in range(0, len(id_list), batch_size):
-        batch = id_list[i : i + batch_size]
+    for i in range(0, len(gene_list), batch_size):
+        batch = gene_list[i : i + batch_size]
         batch_num = i // batch_size + 1
-        query = " OR ".join(batch)
+        gene_clause = " OR ".join(f"gene:{g}" for g in batch)
+        query = f"organism_name:Human AND ({gene_clause}) AND reviewed:true"
         params = {
             "query": query,
-            "fields": "accession,xref_pfam",
-            "size": str(batch_size),
+            "fields": "accession,gene_primary,xref_pfam",
+            "sort": "accession desc",
+            "size": "500",
         }
 
         for attempt in range(MAX_RETRIES):
@@ -94,20 +89,50 @@ def fetch_pfam_from_uniprot(uniprot_ids, batch_size=100):
         data = resp.json()
         for entry in data.get("results", []):
             acc = entry.get("primaryAccession")
-            if acc not in uniprot_ids:
+            genes = entry.get("genes", [])
+            if not genes:
                 continue
+            primary_gene = genes[0].get("geneName", {}).get("value")
+            if not primary_gene or primary_gene not in gene_names:
+                continue
+
+            if primary_gene not in gene_seen:
+                gene_seen[primary_gene] = acc
+            elif gene_seen[primary_gene] is not None and gene_seen[primary_gene] != acc:
+                gene_seen[primary_gene] = None
+
+            pfams = set()
             for xref in entry.get("uniProtKBCrossReferences", []):
                 if xref.get("database") == "Pfam":
-                    pfam_id = xref["id"].split(".")[0]
-                    uniprot_to_pfams[acc].add(pfam_id)
+                    pfams.add(xref["id"].split(".")[0])
+            if pfams:
+                uniprot_to_pfams[acc] |= pfams
 
-        log(f"batch {batch_num}/{n_batches}: queried {len(batch)} IDs, got {len(data.get('results', []))} results")
+        log(f"batch {batch_num}/{n_batches}: queried {len(batch)} genes, got {len(data.get('results', []))} results")
 
         if batch_num < n_batches:
             time.sleep(1)
 
+    n_ambig = 0
+    ambiguous_genes = set()
+    for gene, acc in gene_seen.items():
+        if acc is not None:
+            gene_to_uniprot[gene] = acc
+        else:
+            n_ambig += 1
+            ambiguous_genes.add(gene)
+
+    genes_not_seen = set(gene_names) - set(gene_seen.keys())
+
+    log(f"n_mapped_genes = {len(gene_to_uniprot)}")
+    log(f"n_unique_uniprots = {len(set(gene_to_uniprot.values()))}")
+    log(f"n_dropped_ambiguous = {n_ambig}")
+    log(",".join(ambiguous_genes))
+    log(f"n_unseen_genes = {len(genes_not_seen)}")
+    log(",".join(genes_not_seen))
     log(f"fetched Pfam mappings for {len(uniprot_to_pfams)} UniProt IDs")
-    return uniprot_to_pfams
+
+    return gene_to_uniprot, uniprot_to_pfams
 
 
 def load_positive_pfams(conn):
@@ -129,86 +154,6 @@ def load_existing_pairs(conn):
     )
     return {tuple(sorted((a, b))) for a, b in cur}
 
-
-def _strip_evidence(s):
-    return s.split("{")[0].strip()
-
-
-def parse_swissprot(path, gene_set):
-    """Parse uniprot_sprot.dat(.gz) into gene->uniprot mapping (primary AC only).
-
-    Name-level mappings take priority over Synonym-level.
-    Genes mapping to >1 UniProt entry at the same level are dropped.
-    """
-    gene_name_map = {}
-    gene_synonym_map = {}
-    n_entries = 0
-
-    with open_idmapping(path) as fh:
-        primary_ac = None
-        gn_lines = []
-
-        for line in fh:
-            if line.startswith("AC   "):
-                if primary_ac is None:
-                    primary_ac = line[5:].strip().split(";")[0].strip()
-            elif line.startswith("GN   "):
-                gn_lines.append(line[5:].rstrip("\n"))
-            elif line.startswith("//"):
-                if primary_ac and gn_lines:
-                    n_entries += 1
-                    gn_text = " ".join(gn_lines)
-
-                    names = [_strip_evidence(n) for n in re.findall(r"Name=([^;]+);", gn_text)]
-                    synonyms = []
-                    for syn_group in re.findall(r"Synonyms=([^;]+);", gn_text):
-                        synonyms.extend(_strip_evidence(s) for s in syn_group.split(","))
-
-                    for gene in names:
-                        if gene not in gene_set:
-                            continue
-                        if gene not in gene_name_map:
-                            gene_name_map[gene] = primary_ac
-                        elif gene_name_map[gene] is not None and gene_name_map[gene] != primary_ac:
-                            log(f"{gene}: {primary_ac} and {gene_name_map[gene]}")
-                            gene_name_map[gene] = None
-
-                    for gene in synonyms:
-                        if gene not in gene_set:
-                            continue
-                        if gene not in gene_synonym_map:
-                            gene_synonym_map[gene] = primary_ac
-                        elif gene_synonym_map[gene] is not None and gene_synonym_map[gene] != primary_ac:
-                            gene_synonym_map[gene] = None
-
-                primary_ac = None
-                gn_lines = []
-
-    gene_to_uniprot = {}
-    n_ambig_name = 0
-    n_ambig_synonym = 0
-
-    for gene in set(gene_name_map) | set(gene_synonym_map):
-        name_ac = gene_name_map.get(gene)
-        if gene in gene_name_map:
-            if name_ac is not None:
-                gene_to_uniprot[gene] = name_ac
-            else:
-                n_ambig_name += 1
-        else:
-            syn_ac = gene_synonym_map.get(gene)
-            if syn_ac is not None:
-                gene_to_uniprot[gene] = syn_ac
-            else:
-                n_ambig_synonym += 1
-
-    n_dropped = n_ambig_name + n_ambig_synonym
-    log(f"parsed {n_entries} SwissProt entries with gene names")
-    log(f"n_mapped_genes = {len(gene_to_uniprot)}")
-    log(f"n_unique_uniprots = {len(set(gene_to_uniprot.values()))}")
-    log(f"n_dropped_ambiguous = {n_dropped} (name={n_ambig_name}, synonym={n_ambig_synonym})")
-
-    return gene_to_uniprot
 
 
 def _validate_columns(parquet_schema):
@@ -247,9 +192,13 @@ def _collect_genes_and_pairs(parquet_path, min_n_tested):
 
 
 def _compute_positive_degree(conn):
-    """Per-domain degree in the positive DDI set."""
+    """Per-Pfam degree in the positive DDI set."""
     rows = conn.execute(
-        "SELECT domain_id_a, domain_id_b FROM domain_domain_interaction WHERE negative = 0"
+        "SELECT da.pfam_id, db.pfam_id "
+        "FROM domain_domain_interaction AS ddi "
+        "JOIN domain AS da ON da.id = ddi.domain_id_a "
+        "JOIN domain AS db ON db.id = ddi.domain_id_b "
+        "WHERE ddi.negative = 0"
     ).fetchall()
     deg = defaultdict(int)
     for a, b in rows:
@@ -259,66 +208,64 @@ def _compute_positive_degree(conn):
 
 
 def select_degree_matched(fresh_candidates, pos_degree, n_take):
-    """Select negatives matching the positive degree distribution shape.
+    """Select negatives so each domain's negative degree matches its positive degree.
 
-    Bins positive degrees into log-spaced histogram buckets, then greedily
-    picks candidates whose domains fall in under-represented bins, weighted
-    by PPI co-occurrence count to preserve biological signal.
+    Uses a lazy-deletion max-heap scored by combined degree deficit of both
+    domains in each candidate pair.  Candidates are shuffled for random
+    tiebreaking among equal-deficit pairs.
     """
     if not fresh_candidates or n_take <= 0:
         return []
-
-    pos_vals = np.array(list(pos_degree.values()), dtype=float)
-    if len(pos_vals) == 0:
+    if not pos_degree:
         return fresh_candidates[:n_take]
 
-    n_bins = min(10, max(3, int(np.sqrt(len(pos_vals)))))
-    bin_edges = np.logspace(0, np.log10(max(pos_vals.max(), 1) + 1), n_bins + 1)
-    bin_edges[0] = 0
+    target = dict(pos_degree)
+    current = defaultdict(int)
 
-    pos_hist, _ = np.histogram(pos_vals, bins=bin_edges)
-    total_pos_pairs = sum(pos_hist)
-    if total_pos_pairs == 0:
-        return fresh_candidates[:n_take]
+    candidates = list(fresh_candidates)
+    random.shuffle(candidates)
 
-    target_per_bin = np.array([
-        max(1, int(round(n_take * count / total_pos_pairs)))
-        for count in pos_hist
-    ], dtype=float)
-    # Scale so sum matches n_take
-    target_per_bin = target_per_bin * (n_take / target_per_bin.sum())
+    remaining = set(range(len(candidates)))
 
-    filled_per_bin = np.zeros(n_bins)
+    def deficit(pfam):
+        return max(0, target.get(pfam, 0) - current[pfam])
 
-    def domain_bin(pfam_id):
-        deg = pos_degree.get(pfam_id, 0)
-        idx = int(np.searchsorted(bin_edges, deg, side="right")) - 1
-        return max(0, min(n_bins - 1, idx))
+    def score(i):
+        (pfam_a, pfam_b), _ = candidates[i]
+        return deficit(pfam_a) + deficit(pfam_b)
 
-    def pair_score(pfam_a, pfam_b, count):
-        bin_a = domain_bin(pfam_a)
-        bin_b = domain_bin(pfam_b)
-        deficit_a = max(0, target_per_bin[bin_a] - filled_per_bin[bin_a])
-        deficit_b = max(0, target_per_bin[bin_b] - filled_per_bin[bin_b])
-        return (deficit_a + deficit_b) * math.log1p(count)
-
-    scored = []
-    for (pfam_a, pfam_b), count in fresh_candidates:
-        s = pair_score(pfam_a, pfam_b, count)
-        scored.append(((pfam_a, pfam_b), count, s))
-
-    scored.sort(key=lambda x: x[2], reverse=True)
+    heap = [(-score(i), i) for i in range(len(candidates))]
+    heapq.heapify(heap)
 
     chosen = []
-    for (pfam_a, pfam_b), count, _ in scored:
-        if len(chosen) >= n_take:
-            break
-        chosen.append(((pfam_a, pfam_b), count))
-        filled_per_bin[domain_bin(pfam_a)] += 1
-        filled_per_bin[domain_bin(pfam_b)] += 1
+    while len(chosen) < n_take and heap:
+        neg_s, i = heapq.heappop(heap)
+        if i not in remaining:
+            continue
 
-    log(f"degree_matched: target_per_bin = {target_per_bin.astype(int).tolist()}")
-    log(f"degree_matched: filled_per_bin = {filled_per_bin.astype(int).tolist()}")
+        actual = score(i)
+        if actual != -neg_s:
+            if actual > 0:
+                heapq.heappush(heap, (-actual, i))
+            else:
+                remaining.discard(i)
+            continue
+
+        if actual <= 0:
+            break
+
+        (pfam_a, pfam_b), count = candidates[i]
+        chosen.append(((pfam_a, pfam_b), count))
+        remaining.discard(i)
+        current[pfam_a] += 1
+        current[pfam_b] += 1
+
+    matched = sum(1 for p in target if current.get(p, 0) >= target[p])
+    over = sum(1 for p in target if current.get(p, 0) > target[p])
+    total_deficit = sum(max(0, target[p] - current.get(p, 0)) for p in target)
+    log(f"degree_matched: {matched}/{len(target)} domains reached target degree")
+    log(f"degree_matched: {over} domains exceeded target degree")
+    log(f"degree_matched: remaining total deficit = {total_deficit}")
     return chosen
 
 
@@ -339,12 +286,7 @@ def main():
     log(f"n_ppis_after_n_tested_filter (>= {args.min_n_tested}) = {n_after}")
     log(f"n_unique_genes = {len(unique_genes)}")
 
-    log(f"parsing SwissProt file {args.swissprot}")
-    gene_to_uniprot = parse_swissprot(args.swissprot, unique_genes)
-
-    query_uniprots = set(gene_to_uniprot.values())
-    log(f"n_unique_uniprots_to_query = {len(query_uniprots)}")
-    uniprot_to_pfams = fetch_pfam_from_uniprot(query_uniprots)
+    gene_to_uniprot, uniprot_to_pfams = fetch_gene_mappings(unique_genes)
 
     log(f"writing UniProt -> Pfam mapping to {args.pfam_mapping_out}")
     with open(args.pfam_mapping_out, "w") as fh:
@@ -386,8 +328,6 @@ def main():
             continue
         row_pairs = set()
         for a, b in itertools.product(bait_pfams, prey_pfams):
-            if a == b:
-                continue
             row_pairs.add(tuple(sorted((a, b))))
         if not row_pairs:
             continue
@@ -418,14 +358,24 @@ def main():
     ).fetchone()[0]
     log(f"n_positive_ddis_in_db = {n_positive}")
     log(f"n_negatome_negatives_in_db = {n_negatome}")
-    n_take = max(0, n_positive - n_negatome)
-    log(f"n_take (target for source='{args.source_label}') = {n_take}")
+    if args.sampling_strategy == "degree_matched":
+        n_take = n_positive
+        log(f"n_take = {n_take} (degree_matched: matching positive count)")
+    else:
+        n_take = max(0, n_positive - n_negatome)
+        log(f"n_take (target for source='{args.source_label}') = {n_take}")
 
-    fresh_candidates = [
-        (key, count)
-        for key, count in candidate_counts.items()
-        if key not in existing_pairs
-    ]
+    fresh_candidates = []
+    n_positive_ddis_in_negative_ppis = 0
+
+    for key, count in candidate_counts.items():
+        if key in existing_pairs:
+            n_positive_ddis_in_negative_ppis += 1
+        else:
+            fresh_candidates.append((key, count))
+
+    log(f"n_positive_ddis_in_negative_ppis = {n_positive_ddis_in_negative_ppis}")
+
     fresh_candidates.sort(key=lambda kv: kv[1], reverse=True)
     log(f"n_fresh_candidates_after_dedup = {len(fresh_candidates)}")
 

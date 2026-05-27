@@ -22,7 +22,6 @@ workflow COLLECT_DDI_DATA {
     domainsplit_db_in
     url_3did
     url_negatome
-    uniprot_swissprot
 
     main:
     file_3did     = file(url_3did)
@@ -37,7 +36,6 @@ workflow COLLECT_DDI_DATA {
         ppi_result = INSERT_PPI_NEGATIVE_DDIS(
             domainsplit_db,
             file(params.negative_ppi_parquet),
-            uniprot_swissprot,
             params.negative_ppi_min_n_tested,
             params.negative_ppi_source_label,
             params.negative_sampling_strategy,

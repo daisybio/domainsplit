@@ -53,13 +53,6 @@
                     "default": "https://ftp.uniprot.org/pub/databases/uniprot/current_release/knowledgebase/idmapping/by_organism/HUMAN_9606_idmapping.dat.gz",
                     "fa_icon": "fas fa-link"
                 },
-                "url_uniprot_swissprot": {
-                    "type": ["string", "null"],
-                    "format": "file-path",
-                    "description": "Local path to the UniProt Swiss-Prot flat file (uniprot_sprot.dat or .dat.gz). Required when negative_ppi_parquet is set.",
-                    "default": null,
-                    "fa_icon": "fas fa-file"
-                },
                 "url_uniprot_embeddings": {
                     "type": "string",
                     "description": "URL of the per-residue ProtT5 UniProt embeddings HDF5.",
@@ -165,7 +158,7 @@
                 "negative_ppi_parquet": {
                     "type": ["string", "null"],
                     "format": "file-path",
-                    "description": "Optional path to a Y2H/MS PPI parquet (columns: gene_name_bait, gene_name_prey, n_tested, ...). When set, COLLECT_DDI_DATA derives extra negative DDIs by mapping bait/prey genes to UniProt then Pfam (via url_uniprot_swissprot) and inserting the most-frequent Pfam-pair candidates restricted to domains already in positive DDIs. Null (default) disables this source.",
+                    "description": "Optional path to a Y2H/MS PPI parquet (columns: gene_name_bait, gene_name_prey, n_tested, ...). When set, COLLECT_DDI_DATA derives extra negative DDIs by mapping bait/prey genes to UniProt then Pfam (via UniProt REST API) and inserting the most-frequent Pfam-pair candidates restricted to domains already in positive DDIs. Null (default) disables this source.",
                     "default": null,
                     "fa_icon": "fas fa-file-import"
                 },
