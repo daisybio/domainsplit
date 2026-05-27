@@ -15,6 +15,7 @@ import random
 import sqlite3
 import sys
 import time
+import math
 from collections import defaultdict
 
 import pyarrow.parquet as pq
