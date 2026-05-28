@@ -36,7 +36,7 @@ def parse_args():
     p.add_argument("--db", required=True)
     p.add_argument("--parquet", required=True)
     p.add_argument("--pfam-mapping-out", required=True,
-                   help="Output path for UniProt→Pfam JSON mapping")
+                   help="Output path for UniProt -> Pfam JSON mapping")
     p.add_argument("--min-n-tested", type=int, required=True)
     p.add_argument("--source-label", required=True)
     p.add_argument(
@@ -94,6 +94,12 @@ def fetch_gene_mappings(gene_names, batch_size=100):
             if not genes:
                 continue
             primary_gene = genes[0].get("geneName", {}).get("value")
+            if not primary_gene or primary_gene not in gene_names:
+                for synonym in genes[0].get("synonyms", []):
+                    syn_value = synonym.get("value")
+                    if syn_value in gene_names:
+                        primary_gene = syn_value
+                        break
             if not primary_gene or primary_gene not in gene_names:
                 continue
 
