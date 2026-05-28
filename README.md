@@ -5,7 +5,7 @@
 [![GitHub Actions Linting Status](https://github.com/daisybio/domainsplit/actions/workflows/linting.yml/badge.svg)](https://github.com/daisybio/domainsplit/actions/workflows/linting.yml)[![Cite with Zenodo](http://img.shields.io/badge/DOI-10.5281/zenodo.XXXXXXX-1073c8?labelColor=000000)](https://doi.org/10.5281/zenodo.XXXXXXX)
 [![nf-test](https://img.shields.io/badge/unit_tests-nf--test-337ab7.svg)](https://www.nf-test.com)
 
-[![Nextflow](https://img.shields.io/badge/version-%E2%89%A525.10.4-green?style=flat&logo=nextflow&logoColor=white&color=%230DC09D&link=https%3A%2F%2Fnextflow.io)](https://www.nextflow.io/)
+[![Nextflow](https://img.shields.io/badge/version-%E2%89%A525.10.2-green?style=flat&logo=nextflow&logoColor=white&color=%230DC09D&link=https%3A%2F%2Fnextflow.io)](https://www.nextflow.io/)
 [![nf-core template version](https://img.shields.io/badge/nf--core_template-4.0.2-green?style=flat&logo=nfcore&logoColor=white&color=%2324B064&link=https%3A%2F%2Fnf-co.re)](https://github.com/nf-core/tools/releases/tag/4.0.2)
 [![run with conda](http://img.shields.io/badge/run%20with-conda-3EB049?labelColor=000000&logo=anaconda)](https://docs.conda.io/en/latest/)
 [![run with docker](https://img.shields.io/badge/run%20with-docker-0db7ed?labelColor=000000&logo=docker)](https://www.docker.com/)
@@ -15,8 +15,7 @@
 ## Introduction
 
 **daisybio/domainsplit** is a bioinformatics pipeline that ...
-This directory contains a Nextflow translation of the CoBiNet data preparation pipeline. It downloads and processes all required files to generate the `cobinet_ddi.sqlite3` database.
-
+This directory contains a Nextflow pipeline that downloads and processes all required public databases (3did, UniProt, Negatome, STRING, Pfam, pfam2go) to generate the `domainsplit.sqlite3` database of domain-domain interactions, then splits it into train/validation/test partitions using several leakage-reduction strategies.
 
 <!-- TODO nf-core:
    Complete this sentence with a 2-3 sentence summary of what types of data the pipeline ingests, a brief overview of the
@@ -33,7 +32,6 @@ This directory contains a Nextflow translation of the CoBiNet data preparation p
 > [!NOTE]
 > If you are new to Nextflow and nf-core, please refer to [this page](https://nf-co.re/docs/get_started/environment_setup/overview) on how to set-up Nextflow. Make sure to [test your setup](https://nf-co.re/docs/get_started/run-your-first-pipeline) with `-profile test` before running the workflow on actual data.
 
-
 Now, you can run the pipeline using:
 
 <!-- TODO nf-core: update the following command to include all required parameters for a minimal example -->
@@ -49,12 +47,27 @@ nextflow run daisybio/domainsplit \
 
 ## Output
 
-The main output is the SQLite database file `cobinet_ddi.sqlite3` in the `results` directory.
+The main output is the SQLite database file `domainsplit.sqlite3` in the `results` directory, plus per-method, per-split databases under `results/split_databases/<method>/<split>.sqlite3`.
 
 ## Notes
+
 - Each process in `main.nf` is commented for clarity.
 - Some processes require external scripts (e.g., `mysql2sqlite` for 3did conversion).
 - You may need to adjust paths or URLs as needed.
+
+## Environment variables
+
+Some processes require secrets passed via environment variables. Copy `.env.example` to `.env` and fill in your values — the `.env` file is gitignored.
+
+| Variable   | Required             | Description                                                                                                     |
+| ---------- | -------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `HF_TOKEN` | Yes (ESM embeddings) | HuggingFace access token for downloading ESM model weights. Obtain at <https://huggingface.co/settings/tokens>. |
+
+On a SLURM cluster, export the variable in your job script or pass it as a [Nextflow secret](https://www.nextflow.io/docs/latest/secrets.html):
+
+```bash
+nextflow secrets set HF_TOKEN <your_token>
+```
 
 ## Credits
 

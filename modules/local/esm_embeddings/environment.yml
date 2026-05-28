@@ -8,5 +8,5 @@ dependencies:
   - pytorch-gpu
   - pip
   - pip:
-      - esm
+      - esm==3.2.3
       - httpx

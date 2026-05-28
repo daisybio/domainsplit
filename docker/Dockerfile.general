@@ -1,0 +1,56 @@
+FROM mambaorg/micromamba:1.5.10
+
+# Build/tag as konstantinpelz/domainsplit-general:1.0.0
+# Covers all CPU processes in daisybio/domainsplit pipeline:
+#   - DOWNLOAD_3DID_SQLITE (gawk + gzip + bin/mysql2sqlite)
+#   - INIT_DOMAINSPLIT_DB, INSERT_DDIS, INSERT_NEGATIVE_DDIS, INSERT_PPI_NEGATIVE_DDIS, SMOKE_FILTER (sqlite3 CLI/stdlib; INSERT_PPI_NEGATIVE_DDIS also needs pandas + pyarrow)
+#   - EXTRACT_UNIQUE_DOMAINS (sqlite3 CLI)
+#   - DOWNLOAD_PFAM_ALIGNMENT, CREATE_PROTEIN_DOMAIN_MAPPING (biopython)
+#   - INSERT_DOMAIN_GO_TERMS, INSERT_PROTEINS_WITH_EMBEDDINGS, INSERT_PROTEIN_GO_TERMS,
+#     INSERT_PPI, INSERT_DOMAIN_PROTEIN_MAPPING (pandas, numpy, h5py, biopython, tqdm, sqlite3 stdlib)
+#   - PROTT5_EMBEDDINGS_CHUNK (requests)
+#   - JOIN_HDF_FILES (h5py)
+#   - DOWNLOAD_PROTT5_EMBEDDINGS_COMPLETE (wget)
+#   - FILTER_SEQUENCES, AVERAGE_POOL_EMBEDDINGS (biopython / h5py / numpy)
+#   - RANDOM_DDI_SPLIT, RANDOM_DENOISE_SPLIT (python stdlib)
+#   - EXTRACT_PROTEIN_SEQUENCES, EXTRACT_DOMAIN_SEQUENCES (sqlite3 CLI + gzip)
+#   - ANALYZE_DDI_BIAS (matplotlib, numpy, sqlite3 stdlib)
+#   - MINIMAL_LEAKAGE_SPLIT_DOMAIN (pandas, numpy, tqdm, sqlite3 stdlib)
+#   - SPLIT_DATABASE (pandas, sqlite3 stdlib)
+LABEL org.opencontainers.image.source="https://github.com/daisybio/domainsplit"
+LABEL org.opencontainers.image.version="1.0.0"
+LABEL org.opencontainers.image.description="domainsplit CPU container (pandas, pyarrow, numpy, h5py, biopython, tqdm, requests, matplotlib, sqlite, wget, gawk)"
+
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+
+# procps gives `ps` for Nextflow metrics collection
+USER root
+RUN apt-get update && apt-get install -y --no-install-recommends procps \
+ && rm -rf /var/lib/apt/lists/*
+USER $MAMBA_USER
+
+ENV ENV_NAME=general
+ENV PATH=/opt/conda/envs/${ENV_NAME}/bin:$PATH
+ENV PYTHONUNBUFFERED=1
+ENV PIP_NO_CACHE_DIR=1
+ENV PIP_DISABLE_PIP_VERSION_CHECK=1
+
+RUN micromamba create -y -n ${ENV_NAME} \
+    -c conda-forge -c bioconda \
+    python=3.12.2 \
+    numpy=2.2.6 \
+    pandas=2.2.3 \
+    pyarrow=18.1.0 \
+    h5py=3.14.0 \
+    biopython=1.84 \
+    requests=2.32.3 \
+    tqdm=4.66.5 \
+    matplotlib=3.9.2 \
+    sqlite=3.50.4 \
+    wget=1.21.4 \
+    gawk=5.3.0 \
+    gzip=1.13 \
+ && micromamba clean --all --yes
+
+ENTRYPOINT ["micromamba", "run", "-n", "general"]
+CMD ["python"]

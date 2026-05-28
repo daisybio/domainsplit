@@ -4,5 +4,3 @@ channels:
 dependencies:
   - biopython
   - h5py
-  - requests
-  - wget

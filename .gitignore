@@ -2,6 +2,7 @@
 work/
 data/
 results/
+.env
 .DS_Store
 testing/
 testing*

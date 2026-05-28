@@ -27,18 +27,16 @@ include { PIPELINE_COMPLETION     } from './subworkflows/local/utils_nfcore_doma
 //
 workflow DAISYBIO_DOMAINSPLIT {
 
-    take:
-    samplesheet // channel: samplesheet read in from --input
-
     main:
 
     //
     // WORKFLOW: Run pipeline
     //
-    DOMAINSPLIT (
-        samplesheet,
-        params.outdir,
-    )
+    DOMAINSPLIT ()
+
+emit:
+    domainsplit_db = DOMAINSPLIT.out.domainsplit_db
+    split_db   = DOMAINSPLIT.out.split_db
 }
 /*
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -58,7 +56,6 @@ workflow {
         params.monochrome_logs,
         args,
         params.outdir,
-        params.input,
         params.help,
         params.help_full,
         params.show_hidden
@@ -67,9 +64,8 @@ workflow {
     //
     // WORKFLOW: Run main workflow
     //
-    DAISYBIO_DOMAINSPLIT (
-        PIPELINE_INITIALISATION.out.samplesheet
-    )
+    DAISYBIO_DOMAINSPLIT ()
+
     //
     // SUBWORKFLOW: Run completion tasks
     //
@@ -80,6 +76,20 @@ workflow {
         params.outdir,
         params.monochrome_logs,
     )
+
+    publish:
+    domainsplit_db = DAISYBIO_DOMAINSPLIT.out.domainsplit_db
+    split_db   = DAISYBIO_DOMAINSPLIT.out.split_db
+}
+
+output {
+    domainsplit_db {
+    }
+    split_db {
+        path {
+            it[1] >> "databases/${it[0].method}/${it[0].split}.sqlite3"
+        }
+    }
 }
 
 /*
