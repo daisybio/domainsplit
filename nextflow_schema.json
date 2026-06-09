@@ -15,6 +15,7 @@
                 "input": {
                     "type": "string",
                     "format": "file-path",
+                    "mimetype": "text/csv",
                     "description": "Unused samplesheet placeholder; this pipeline reads inputs from the url_* parameters instead.",
                     "help_text": "Kept for nf-core template compatibility. Source databases are configured via the url_* parameters in nextflow.config.",
                     "fa_icon": "fas fa-file-csv",

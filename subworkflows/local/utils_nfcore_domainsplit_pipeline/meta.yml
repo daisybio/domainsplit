@@ -1,0 +1,28 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/nf-core/modules/master/subworkflows/yaml-schema.json
+name: "PIPELINE_INITIALISATION"
+description: Subworkflow with functionality specific to the daisybio/domainsplit pipeline (initialisation and completion).
+keywords:
+  - utility
+  - pipeline
+  - initialise
+  - completion
+components:
+  - utils_nextflow_pipeline
+  - utils_nfcore_pipeline
+  - utils_nfschema_plugin
+  - completionemail
+  - completionsummary
+input:
+  - nextflow_cli_args:
+      type: list
+      description: |
+        Nextflow CLI positional arguments
+output:
+  - success:
+      type: boolean
+      description: |
+        Dummy output to indicate success
+authors:
+  - "@KonstantinPelz"
+maintainers:
+  - "@KonstantinPelz"

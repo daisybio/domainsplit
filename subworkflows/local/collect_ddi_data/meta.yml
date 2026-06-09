@@ -1,0 +1,59 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/nf-core/modules/master/subworkflows/yaml-schema.json
+name: "collect_ddi_data"
+description: Download and parse every DDI source into the pre-initialised Domainsplit SQLite, applying the fixed source-priority order and optional smoke filter.
+keywords:
+  - ddi
+  - 3did
+  - negatome
+  - ppi
+  - database
+components:
+  - download/3did/sqlite
+  - download/negatome
+  - insert/3did
+  - build/swissprot/pfam/map
+  - insert/single/domain/ppi
+  - insert/ppidm
+  - insert/negatome
+  - remove/self/interactions
+  - insert/ppi/negative/ddis
+  - smoke/filter
+input:
+  - domainsplit_db_in:
+      type: file
+      description: Pre-initialised empty Domainsplit SQLite database.
+      pattern: "*.sqlite3"
+  - url_3did:
+      type: string
+      description: URL of the 3did flat file dump.
+  - url_negatome:
+      type: string
+      description: URL of the Negatome combined dataset.
+  - url_uniprot_swissprot_pfam:
+      type: string
+      description: URL of the UniProt SwissProt-to-Pfam mapping used to build single-domain PPIs.
+  - hippie_tsv:
+      type: file
+      description: HIPPIE PPI table used to derive single-domain positive DDIs.
+      pattern: "*.{tsv,txt}"
+  - ppidm_tsv:
+      type: file
+      description: PPIDM inferred domain-domain interaction table.
+      pattern: "*.{tsv,txt}"
+  - negative_ppi_parquet:
+      type: file
+      description: High-confidence non-PPI pairs used to derive negative DDIs.
+      pattern: "*.parquet"
+output:
+  - domainsplit_db:
+      type: file
+      description: Domainsplit SQLite populated with positive and negative DDIs.
+      pattern: "*.sqlite3"
+  - pfam_mapping:
+      type: file
+      description: SwissProt protein-to-Pfam domain mapping produced while building single-domain PPIs.
+      pattern: "*.{tsv,parquet}"
+authors:
+  - "@KonstantinPelz"
+maintainers:
+  - "@KonstantinPelz"

@@ -1,0 +1,29 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/nf-core/modules/master/subworkflows/yaml-schema.json
+name: "generate_embeddings"
+description: Generate ESM per-residue protein embeddings and pooled per-domain embeddings against the supplied protein-to-domain map.
+keywords:
+  - esm
+  - embeddings
+  - protein
+  - domain
+components:
+  - generate/esm/embeddings
+input:
+  - protein_domain_map:
+      type: file
+      description: Protein-to-Pfam-domain mapping used to pool per-domain embeddings.
+  - input_uniprot_sequences:
+      type: file
+      description: UniProt protein sequences to embed.
+      pattern: "*.{fasta,fa,gz}"
+output:
+  - esm_protein_embeddings:
+      type: file
+      description: ESM per-residue protein embeddings.
+  - esm_domain_embeddings:
+      type: file
+      description: ESM pooled per-domain embeddings.
+authors:
+  - "@KonstantinPelz"
+maintainers:
+  - "@KonstantinPelz"
