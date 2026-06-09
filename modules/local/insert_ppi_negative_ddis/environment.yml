@@ -6,4 +6,5 @@ dependencies:
   - sqlite
   - pandas
   - pyarrow
+  - numpy
   - requests

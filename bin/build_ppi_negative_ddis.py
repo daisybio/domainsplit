@@ -2,22 +2,27 @@
 """
 Build negative DDIs from a Y2H/MS PPI parquet and append them to the
 domainsplit SQLite, restricted to Pfam domains already present in positive
-DDIs.  In degree_matched mode, selects pairs so each domain's negative
-degree matches its positive degree.  In frequency mode, takes the top-N
-by PPI co-occurrence count, capped at (n_positive - n_negatome).
+DDIs.
+
+Selection uses degree-aware node sampling (DANS, Cappelletti et al. 2024,
+Bioinformatics Advances vbae036) applied to the PPI-derived candidate pool:
+each candidate Pfam pair is sampled (without replacement) with probability
+proportional to the preferential attachment of its two domains in the positive
+graph -- the product of their positive degrees.  This makes the negative
+degree / preferential-attachment distribution track the positives, avoiding the
+inflated downstream evaluation that uniform negative sampling produces.
 """
 
 import argparse
-import heapq
 import itertools
 import json
-import random
 import sqlite3
 import sys
 import time
 import math
 from collections import defaultdict
 
+import numpy as np
 import pyarrow.parquet as pq
 import requests
 
@@ -42,11 +47,10 @@ def parse_args():
     p.add_argument("--min-n-tested", type=int, required=True)
     p.add_argument("--source-label", default="inferred_ppi_screen_negative")
     p.add_argument(
-        "--sampling-strategy",
-        choices=["frequency", "degree_matched"],
-        default="degree_matched",
-        help="'frequency' = top-N by co-occurrence (old behavior). "
-             "'degree_matched' = sample to match positive degree distribution.",
+        "--seed",
+        type=int,
+        default=42,
+        help="Random seed for reproducible DANS negative sampling.",
     )
     p.add_argument(
         "--no-self",
@@ -227,65 +231,52 @@ def _compute_positive_degree(conn):
     return deg
 
 
-def select_degree_matched(fresh_candidates, pos_degree, n_take):
-    """Select negatives so each domain's negative degree matches its positive degree.
+def select_dans(fresh_candidates, pos_degree, n_take, seed=42):
+    """Degree-aware node sampling (DANS) over the PPI candidate pool.
 
-    Uses a lazy-deletion max-heap scored by combined degree deficit of both
-    domains in each candidate pair.  Candidates are shuffled for random
-    tiebreaking among equal-deficit pairs.
+    Cappelletti et al. 2024 (Bioinformatics Advances, vbae036) sample negative
+    edges so endpoint node-degrees track the positive distribution; the induced
+    edge probability is proportional to the preferential attachment of the two
+    endpoints, ``PA = deg(a) * deg(b)``.  Here we apply that distribution to the
+    fixed pool of PPI-derived candidate Pfam pairs: each candidate is drawn
+    without replacement with probability proportional to the product of its two
+    domains' positive degrees, so the selected negatives mirror the positive
+    degree / PA distribution while staying biologically grounded in the PPI
+    screen.
     """
-    if not fresh_candidates or n_take <= 0:
+    if n_take <= 0 or not fresh_candidates:
         return []
-    if not pos_degree:
-        return fresh_candidates[:n_take]
+    if n_take >= len(fresh_candidates):
+        return list(fresh_candidates)
 
-    target = dict(pos_degree)
-    current = defaultdict(int)
+    weights = np.array(
+        [pos_degree.get(a, 0) * pos_degree.get(b, 0) for (a, b), _ in fresh_candidates],
+        dtype=float,
+    )
+    # Defensive fallback: if positive-degree info is missing/degenerate (or too
+    # few non-zero weights to draw n_take distinct pairs), sample uniformly.
+    if weights.sum() <= 0 or int((weights > 0).sum()) < n_take:
+        log("DANS: degenerate weights -> uniform fallback")
+        weights = np.ones(len(fresh_candidates), dtype=float)
 
-    candidates = list(fresh_candidates)
-    random.shuffle(candidates)
+    probs = weights / weights.sum()
+    rng = np.random.default_rng(seed)
+    idx = rng.choice(len(fresh_candidates), size=n_take, replace=False, p=probs)
 
-    remaining = set(range(len(candidates)))
+    chosen = [fresh_candidates[i] for i in idx]
 
-    def deficit(pfam):
-        return max(0, target.get(pfam, 0) - current[pfam])
+    def pa(a, b):
+        return pos_degree.get(a, 0) * pos_degree.get(b, 0)
 
-    def score(i):
-        (pfam_a, pfam_b), _ = candidates[i]
-        return deficit(pfam_a) + deficit(pfam_b)
-
-    heap = [(-score(i), i) for i in range(len(candidates))]
-    heapq.heapify(heap)
-
-    chosen = []
-    while len(chosen) < n_take and heap:
-        neg_s, i = heapq.heappop(heap)
-        if i not in remaining:
-            continue
-
-        actual = score(i)
-        if actual != -neg_s:
-            if actual > 0:
-                heapq.heappush(heap, (-actual, i))
-            else:
-                remaining.discard(i)
-            continue
-
-        if actual <= 0:
-            break
-
-        (pfam_a, pfam_b), count = candidates[i]
-        chosen.append(((pfam_a, pfam_b), count))
-        remaining.discard(i)
-        current[pfam_a] += 1
-        current[pfam_b] += 1
-
-    matched = sum(1 for p in target if current.get(p, 0) >= target[p])
-    over = sum(1 for p in target if current.get(p, 0) > target[p])
-    total_deficit = sum(max(0, target[p] - current.get(p, 0)) for p in target)
-    log(f"degree_matched: {matched}/{len(target)} domains reached target degree")
-    log(f"degree_matched: {over} domains exceeded target degree")
-    log(f"degree_matched: remaining total deficit = {total_deficit}")
+    chosen_degree = defaultdict(int)
+    for (a, b), _ in chosen:
+        chosen_degree[a] += 1
+        chosen_degree[b] += 1
+    pool_pa = float(np.mean([pa(a, b) for (a, b), _ in fresh_candidates]))
+    sel_pa = float(np.mean([pa(a, b) for (a, b), _ in chosen]))
+    log(f"DANS: selected {len(chosen)} negatives from pool of {len(fresh_candidates)}")
+    log(f"DANS: {len(chosen_degree)} domains used ({len(pos_degree)} in the positive set); "
+        f"mean PA pool={pool_pa:.1f} selected={sel_pa:.1f}")
     return chosen
 
 
@@ -375,18 +366,7 @@ def main():
         "SELECT COUNT(*) FROM domain_domain_interaction "
         "WHERE negative = 0 AND source = '3did'"
     ).fetchone()[0]
-    n_negatome = conn.execute(
-        "SELECT COUNT(*) FROM domain_domain_interaction "
-        "WHERE negative = 1 AND source = 'negatome'"
-    ).fetchone()[0]
     log(f"n_positive_ddis_in_db = {n_positive}")
-    log(f"n_negatome_negatives_in_db = {n_negatome}")
-    if args.sampling_strategy == "degree_matched":
-        n_take = n_positive
-        log(f"n_take = {n_take} (degree_matched: matching positive count)")
-    else:
-        n_take = max(0, n_positive - n_negatome)
-        log(f"n_take (target for source='{args.source_label}') = {n_take}")
 
     fresh_candidates = []
     n_positive_ddis_in_negative_ppis = 0
@@ -399,16 +379,11 @@ def main():
 
     log(f"n_positive_ddis_in_negative_ppis = {n_positive_ddis_in_negative_ppis}")
 
-    fresh_candidates.sort(key=lambda kv: kv[1], reverse=True)
     log(f"n_fresh_candidates_after_dedup = {len(fresh_candidates)}")
 
-    if args.sampling_strategy == "degree_matched":
-        log("using degree-matched sampling strategy")
-        pos_degree = _compute_positive_degree(conn)
-        chosen = select_degree_matched(fresh_candidates, pos_degree, n_take)
-    else:
-        log("using frequency-ranked sampling strategy")
-        chosen = fresh_candidates[:n_take]
+    log("selecting negatives via degree-aware node sampling (DANS)")
+    pos_degree = _compute_positive_degree(conn)
+    chosen = select_dans(fresh_candidates, pos_degree, n_positive, seed=args.seed)
     log(f"n_chosen = {len(chosen)}")
 
     if chosen:

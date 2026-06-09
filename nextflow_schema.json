@@ -177,13 +177,6 @@
                     "minimum": 1,
                     "fa_icon": "fas fa-layer-group"
                 },
-                "negative_sampling_strategy": {
-                    "type": "string",
-                    "description": "Strategy for sampling negative DDIs from the PPI parquet source.",
-                    "default": "degree_matched",
-                    "enum": ["frequency", "degree_matched"],
-                    "fa_icon": "fas fa-random"
-                },
                 "url_uniprot_swissprot_pfam": {
                     "type": "string",
                     "description": "UniProt stream URL (or local TSV path) of reviewed human proteins with fields accession, entry name, gene names and Pfam xrefs. Used to detect single-domain proteins for the HIPPIE-derived positive DDIs.",

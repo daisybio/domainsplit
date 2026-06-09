@@ -7,7 +7,7 @@
                 "nf-core": {
                     "mmseqs/easycluster": {
                         "branch": "master",
-                        "git_sha": "38697a933bef7041bb935c9b8374d9948ce6c794",
+                        "git_sha": "6d46786420b4d7bc88eba026eb389c0c5535d120",
                         "installed_by": ["modules"]
                     }
                 }

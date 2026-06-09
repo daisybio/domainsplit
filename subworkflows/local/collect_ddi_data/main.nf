@@ -77,7 +77,6 @@ workflow COLLECT_DDI_DATA {
         domainsplit_db,
         file(negative_ppi_parquet),
         params.negative_ppi_min_n_tested,
-        params.negative_sampling_strategy,
         params.self_interaction,
     )
     domainsplit_db = ppi_result.domainsplit_db
