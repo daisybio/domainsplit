@@ -58,7 +58,7 @@ workflow ENRICH_DDI_DATABASE {
         db_after_ppi,
         protein_domain_map,
         esm_domain_embeddings
-    ).domainsplit_db.first()
+    ).domainsplit_db
 
     emit:
     domainsplit_db

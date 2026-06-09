@@ -55,7 +55,7 @@
                     "default": "https://ftp.uniprot.org/pub/databases/uniprot/current_release/knowledgebase/idmapping/by_organism/HUMAN_9606_idmapping.dat.gz",
                     "fa_icon": "fas fa-link"
                 },
-                "url_uniprot_embeddings": {
+                "url_uniprot_prott5_embeddings": {
                     "type": "string",
                     "description": "URL of the per-residue ProtT5 UniProt embeddings HDF5.",
                     "default": "https://ftp.ebi.ac.uk/pub/contrib/UniProt/embeddings/current_release/UP000005640_9606/per-residue.h5",
@@ -96,12 +96,6 @@
                     "description": "Template URL for downloading per-Pfam alignment archives; `{pfam_id}` is substituted per family.",
                     "default": "https://www.ebi.ac.uk/interpro/wwwapi//entry/pfam/{pfam_id}/?annotation=alignment:full&download",
                     "fa_icon": "fas fa-link"
-                },
-                "prott5_per_residue_h5": {
-                    "type": "string",
-                    "description": "Optional local path to a pre-downloaded ProtT5 per-residue HDF5 file. When set and present it is used; otherwise the file is downloaded from url_uniprot_embeddings.",
-                    "default": null,
-                    "fa_icon": "fas fa-file"
                 },
                 "esm_protein_shards": {
                     "type": "integer",

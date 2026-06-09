@@ -6,7 +6,7 @@
     ESM path produces both per-residue protein embeddings and pooled domain
     embeddings against the supplied protein <-> domain map.
 
-    ProtT5 embeddings are supplied externally via params.prott5_per_residue_h5
+    ProtT5 embeddings are supplied externally via params.url_uniprot_prott5_embeddings
     and resolved in the top-level workflow (domainsplit.nf).
 ----------------------------------------------------------------------------*/
 

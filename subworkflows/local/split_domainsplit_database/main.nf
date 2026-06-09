@@ -45,7 +45,7 @@ workflow SPLIT_DOMAINSPLIT_DATABASE {
     }
 
     clusters = MMSEQS_EASYCLUSTER(cluster_input)
-    def clusters_tsv = clusters.tsv.filter { it[0].id == "domain" }.map { it[1] }.first()
+    def clusters_tsv = clusters.tsv.filter { it[0].id == "domain" }.map { it[1] }
 
     def splits = [
         ["train", 0.6],

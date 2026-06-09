@@ -28,16 +28,7 @@ main:
     input_string             = file(params.url_string)
     input_pfam2go            = file(params.url_pfam2go)
 
-    // ProtT5 per-residue embeddings: prefer a pre-downloaded local file when it
-    // exists, otherwise fall back to downloading url_uniprot_embeddings. Always
-    // populated, so ProtT5 embeddings are a compulsory step.
-    def prott5_file = file(params.url_uniprot_embeddings)
-    if (params.prott5_per_residue_h5 && file(params.prott5_per_residue_h5).exists()) {
-        prott5_file = file(params.prott5_per_residue_h5)
-        log.info "Using local ProtT5 HDF5 at '${params.prott5_per_residue_h5}'"
-    } else {
-        log.info "Using ProtT5 HDF5 from url_uniprot_embeddings"
-    }
+    def prott5_file = file(params.url_uniprot_prott5_embeddings)
 
     empty_db = INIT_DOMAINSPLIT_DB().domainsplit_db
 
