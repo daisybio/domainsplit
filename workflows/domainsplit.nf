@@ -23,22 +23,20 @@ include { ANALYZE_DDI_BIAS            } from '../modules/local/analyze_ddi_bias/
 workflow DOMAINSPLIT {
 main:
     input_uniprot_id_mapping = file(params.url_uniprot_id_mapping)
-    input_uniprot_embeddings = file(params.url_uniprot_embeddings)
     input_uniprot_go_terms   = file(params.url_uniprot_go_terms)
     input_uniprot_sequences  = file(params.url_uniprot_sequences)
     input_string             = file(params.url_string)
     input_pfam2go            = file(params.url_pfam2go)
 
-    def prott5_file = []
-    if (params.prott5_per_residue_h5) {
-        def f = file(params.prott5_per_residue_h5)
-        if (f.exists()) {
-            prott5_file = f
-        } else {
-            log.warn "ProtT5 HDF5 not found at '${params.prott5_per_residue_h5}' — skipping ProtT5 embeddings"
-        }
+    // ProtT5 per-residue embeddings: prefer a pre-downloaded local file when it
+    // exists, otherwise fall back to downloading url_uniprot_embeddings. Always
+    // populated, so ProtT5 embeddings are a compulsory step.
+    def prott5_file = file(params.url_uniprot_embeddings)
+    if (params.prott5_per_residue_h5 && file(params.prott5_per_residue_h5).exists()) {
+        prott5_file = file(params.prott5_per_residue_h5)
+        log.info "Using local ProtT5 HDF5 at '${params.prott5_per_residue_h5}'"
     } else {
-        log.warn "params.prott5_per_residue_h5 not set — skipping ProtT5 embeddings"
+        log.info "Using ProtT5 HDF5 from url_uniprot_embeddings"
     }
 
     empty_db = INIT_DOMAINSPLIT_DB().domainsplit_db
@@ -47,6 +45,10 @@ main:
         empty_db,
         params.url_3did,
         params.url_negatome,
+        params.url_uniprot_swissprot_pfam,
+        params.hippie_tsv,
+        params.ppidm_tsv,
+        params.negative_ppi_parquet,
     )
 
     domainsplit_db_ddi = COLLECT_DDI_DATA.out.domainsplit_db

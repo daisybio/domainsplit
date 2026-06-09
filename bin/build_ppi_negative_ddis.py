@@ -21,6 +21,8 @@ from collections import defaultdict
 import pyarrow.parquet as pq
 import requests
 
+from ddi_db_utils import pfam_sort_key
+
 
 TAG = "[ppi_neg]"
 BATCH_SIZE = 500_000
@@ -38,13 +40,19 @@ def parse_args():
     p.add_argument("--pfam-mapping-out", required=True,
                    help="Output path for UniProt -> Pfam JSON mapping")
     p.add_argument("--min-n-tested", type=int, required=True)
-    p.add_argument("--source-label", required=True)
+    p.add_argument("--source-label", default="inferred_ppi_screen_negative")
     p.add_argument(
         "--sampling-strategy",
         choices=["frequency", "degree_matched"],
         default="degree_matched",
         help="'frequency' = top-N by co-occurrence (old behavior). "
              "'degree_matched' = sample to match positive degree distribution.",
+    )
+    p.add_argument(
+        "--no-self",
+        action="store_true",
+        help="Skip self-pairs (domain interacting with itself) "
+             "when self_interaction is disabled.",
     )
     return p.parse_args()
 
@@ -142,12 +150,17 @@ def fetch_gene_mappings(gene_names, batch_size=100):
     return gene_to_uniprot, uniprot_to_pfams
 
 
-def load_positive_pfams(conn):
+def load_3did_pfams(conn):
+    """Pfam IDs that appear in a 3did positive DDI.
+
+    Negatives are inferred (and degree-matched) only over the 3did domain
+    universe, so single-domain / PPIDM positives never widen the candidate set.
+    """
     cur = conn.execute(
         "SELECT DISTINCT d.pfam_id "
         "FROM domain AS d JOIN domain_domain_interaction AS ddi "
         "  ON d.id IN (ddi.domain_id_a, ddi.domain_id_b) "
-        "WHERE ddi.negative = 0"
+        "WHERE ddi.negative = 0 AND ddi.source = '3did'"
     )
     return {row[0] for row in cur}
 
@@ -159,7 +172,7 @@ def load_existing_pairs(conn):
         "JOIN domain AS da ON da.id = ddi.domain_id_a "
         "JOIN domain AS db ON db.id = ddi.domain_id_b"
     )
-    return {tuple(sorted((a, b))) for a, b in cur}
+    return {tuple(sorted((a, b), key=pfam_sort_key)) for a, b in cur}
 
 
 
@@ -199,13 +212,13 @@ def _collect_genes_and_pairs(parquet_path, min_n_tested):
 
 
 def _compute_positive_degree(conn):
-    """Per-Pfam degree in the positive DDI set."""
+    """Per-Pfam degree in the 3did positive DDI set."""
     rows = conn.execute(
         "SELECT da.pfam_id, db.pfam_id "
         "FROM domain_domain_interaction AS ddi "
         "JOIN domain AS da ON da.id = ddi.domain_id_a "
         "JOIN domain AS db ON db.id = ddi.domain_id_b "
-        "WHERE ddi.negative = 0"
+        "WHERE ddi.negative = 0 AND ddi.source = '3did'"
     ).fetchall()
     deg = defaultdict(int)
     for a, b in rows:
@@ -310,8 +323,8 @@ def main():
     conn.execute("PRAGMA journal_mode=OFF")
     conn.execute("PRAGMA synchronous=OFF")
 
-    pos_pfam = load_positive_pfams(conn)
-    log(f"n_positive_pfams = {len(pos_pfam)}")
+    pos_pfam = load_3did_pfams(conn)
+    log(f"n_3did_pfams = {len(pos_pfam)}")
 
     existing_pairs = load_existing_pairs(conn)
     log(f"n_existing_ddis = {len(existing_pairs)}")
@@ -335,7 +348,9 @@ def main():
             continue
         row_pairs = set()
         for a, b in itertools.product(bait_pfams, prey_pfams):
-            row_pairs.add(tuple(sorted((a, b))))
+            if args.no_self and a == b:
+                continue
+            row_pairs.add(tuple(sorted((a, b), key=pfam_sort_key)))
         if not row_pairs:
             continue
         n_rows_with_pairs += 1
@@ -357,7 +372,8 @@ def main():
         )
 
     n_positive = conn.execute(
-        "SELECT COUNT(*) FROM domain_domain_interaction WHERE negative = 0"
+        "SELECT COUNT(*) FROM domain_domain_interaction "
+        "WHERE negative = 0 AND source = '3did'"
     ).fetchone()[0]
     n_negatome = conn.execute(
         "SELECT COUNT(*) FROM domain_domain_interaction "
@@ -404,9 +420,15 @@ def main():
 
         insert_rows = []
         for (pfam_a, pfam_b), _ in chosen:
+            # normalise by Pfam accession number (matching ddi_db_utils.insert_ddis)
+            # so swapped pairs collapse and dedup consistently with the other sources
             for d_a in pfam_to_domain_ids.get(pfam_a, ()):
                 for d_b in pfam_to_domain_ids.get(pfam_b, ()):
-                    insert_rows.append((d_a, d_b, True, args.source_label))
+                    if pfam_sort_key(pfam_a) <= pfam_sort_key(pfam_b):
+                        lo, hi = d_a, d_b
+                    else:
+                        lo, hi = d_b, d_a
+                    insert_rows.append((lo, hi, True, args.source_label))
 
         conn.executemany(
             "INSERT OR IGNORE INTO domain_domain_interaction"

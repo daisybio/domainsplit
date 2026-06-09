@@ -8,8 +8,8 @@ process INSERT_PPI_NEGATIVE_DDIS {
     path domainsplit_db_in, stageAs: 'input.domainsplit.sqlite3'
     path negative_ppi_parquet
     val  min_n_tested
-    val  source_label
     val  sampling_strategy
+    val  self_interaction
 
     output:
     path "domainsplit.sqlite3",        emit: domainsplit_db
@@ -17,6 +17,7 @@ process INSERT_PPI_NEGATIVE_DDIS {
     path "versions.yml",               emit: versions
 
     script:
+    def no_self = self_interaction ? "" : "--no-self"
     """
     cp "${domainsplit_db_in}" domainsplit.sqlite3
 
@@ -25,8 +26,8 @@ process INSERT_PPI_NEGATIVE_DDIS {
         --parquet "${negative_ppi_parquet}" \\
         --pfam-mapping-out uniprot_pfam_mapping.json \\
         --min-n-tested ${min_n_tested} \\
-        --source-label "${source_label}" \\
-        --sampling-strategy "${sampling_strategy}"
+        --sampling-strategy "${sampling_strategy}" \\
+        ${no_self}
 
     cat <<-END_VERSIONS > versions.yml
     "${task.process}":

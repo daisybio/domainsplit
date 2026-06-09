@@ -7,6 +7,7 @@ process RANDOM_DDI_SPLIT {
     input:
     path 'domainsplit.sqlite3'
     val split_fractions  // e.g., [("train", 0.6), ("optimization", 0.2), ("test", 0.2)]
+    val source_filter    // list of DDI source strings to include; [] = all sources
 
     output:
     path('*.sqlite3'), emit: split_dbs
@@ -25,6 +26,9 @@ process RANDOM_DDI_SPLIT {
     def split_fraction_dict_str = output_file_fraction_dict.collect { k, v -> "'${k}': ${v}" }.join(", ")
     def split_fraction_dict_py = "{" + split_fraction_dict_str + "}"
 
+    def src_list = source_filter.collect { "'${it}'" }.join(", ")
+    def where_clause = source_filter ? "WHERE source IN (${src_list})" : ""
+
     """
     #!/usr/bin/env python3
 
@@ -39,7 +43,7 @@ process RANDOM_DDI_SPLIT {
     split_fractions = ${split_fraction_dict_py}
 
     conn = sqlite3.connect(input_db_path)
-    ddi_ids = [row[0] for row in conn.execute("SELECT id FROM domain_domain_interaction")]
+    ddi_ids = [row[0] for row in conn.execute("SELECT id FROM domain_domain_interaction ${where_clause}")]
     conn.close()
 
     random.shuffle(ddi_ids)

@@ -36,10 +36,11 @@
             }
         },
         "source_database_options": {
-            "title": "Source database URLs",
+            "title": "Source databases",
             "type": "object",
             "fa_icon": "fas fa-database",
-            "description": "URLs of the public source databases used to assemble the domainsplit database.",
+            "description": "Public source databases (URLs and local file paths) used to assemble the domainsplit database.",
+            "required": ["hippie_tsv", "ppidm_tsv", "negative_ppi_parquet"],
             "properties": {
                 "url_3did": {
                     "type": "string",
@@ -97,7 +98,7 @@
                 },
                 "prott5_per_residue_h5": {
                     "type": "string",
-                    "description": "Local path to the EBI ProtT5 per-residue HDF5 file. When null or file missing, ProtT5 embeddings are skipped with a warning.",
+                    "description": "Optional local path to a pre-downloaded ProtT5 per-residue HDF5 file. When set and present it is used; otherwise the file is downloaded from url_uniprot_embeddings.",
                     "default": null,
                     "fa_icon": "fas fa-file"
                 },
@@ -158,7 +159,7 @@
                 "negative_ppi_parquet": {
                     "type": ["string", "null"],
                     "format": "file-path",
-                    "description": "Optional path to a Y2H/MS PPI parquet (columns: gene_name_bait, gene_name_prey, n_tested, ...). When set, COLLECT_DDI_DATA derives extra negative DDIs by mapping bait/prey genes to UniProt then Pfam (via UniProt REST API) and inserting the most-frequent Pfam-pair candidates restricted to domains already in positive DDIs. Null (default) disables this source.",
+                    "description": "Required path to a Y2H/MS PPI parquet (columns: gene_name_bait, gene_name_prey, n_tested, ...). COLLECT_DDI_DATA derives negative DDIs by mapping bait/prey genes to UniProt then Pfam (via UniProt REST API) and inserting Pfam-pair candidates (degree-matched or by frequency) restricted to domains already in positive DDIs.",
                     "default": null,
                     "fa_icon": "fas fa-file-import"
                 },
@@ -168,12 +169,6 @@
                     "default": 5,
                     "minimum": 1,
                     "fa_icon": "fas fa-filter"
-                },
-                "negative_ppi_source_label": {
-                    "type": "string",
-                    "description": "Value written to the `source` column of domain_domain_interaction for DDIs derived from negative_ppi_parquet.",
-                    "default": "y2h_ms",
-                    "fa_icon": "fas fa-tag"
                 },
                 "pfam_download_batch_size": {
                     "type": "integer",
@@ -188,6 +183,46 @@
                     "default": "degree_matched",
                     "enum": ["frequency", "degree_matched"],
                     "fa_icon": "fas fa-random"
+                },
+                "url_uniprot_swissprot_pfam": {
+                    "type": "string",
+                    "description": "UniProt stream URL (or local TSV path) of reviewed human proteins with fields accession, entry name, gene names and Pfam xrefs. Used to detect single-domain proteins for the HIPPIE-derived positive DDIs.",
+                    "default": "https://rest.uniprot.org/uniprotkb/stream?compressed=true&format=tsv&fields=accession%2Cid%2Cgene_names%2Cxref_pfam&query=%28%28reviewed%3Atrue%29+AND+%28organism_id%3A9606%29%29",
+                    "fa_icon": "fas fa-link"
+                },
+                "hippie_tsv": {
+                    "type": ["string", "null"],
+                    "format": "file-path",
+                    "description": "Required path to a HIPPIE PPI TSV. COLLECT_DDI_DATA adds positive DDIs inferred from PPIs between two single-domain proteins.",
+                    "default": null,
+                    "fa_icon": "fas fa-file-import"
+                },
+                "hippie_min_score": {
+                    "type": "number",
+                    "description": "Minimum HIPPIE confidence score (column 5) required to keep a PPI row when inferring single-domain positive DDIs.",
+                    "default": 0.63,
+                    "minimum": 0,
+                    "maximum": 1,
+                    "fa_icon": "fas fa-filter"
+                },
+                "ppidm_tsv": {
+                    "type": ["string", "null"],
+                    "format": "file-path",
+                    "description": "Required path to a PPIDM predictions TSV (columns: domain_1, domain_2, class). COLLECT_DDI_DATA adds positive DDIs tagged with source 'PPIDM_<Class>'.",
+                    "default": null,
+                    "fa_icon": "fas fa-file-import"
+                },
+                "ppidm_classes": {
+                    "type": "string",
+                    "description": "Comma-separated PPIDM confidence classes to include.",
+                    "default": "Bronze,Silver,Gold",
+                    "fa_icon": "fas fa-tags"
+                },
+                "self_interaction": {
+                    "type": "boolean",
+                    "description": "When false, all self-interactions (a domain interacting with itself) are removed after the positive/negatome sources are inserted, and the high-confidence non-PPI negative builder skips self-pairs.",
+                    "default": true,
+                    "fa_icon": "fas fa-redo"
                 }
             }
         },
