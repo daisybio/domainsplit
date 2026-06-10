@@ -11,10 +11,16 @@ exist as DDIs).  It performs NO sampling and NO insertion -- selection fans out
 into parallel per-seed jobs (``select_ppi_negative_dans.py``) that read the dump,
 and the winning selection is inserted by ``insert_ppi_negative_selection.py``.
 
-The dump also carries the positive-graph statistics the selector needs:
-``pos_degree`` (per-domain positive degree, the cap), the positive-edge
-preferential-attachment (PA = deg(a)*deg(b)) array, the target negative count
-(``n_positive``) and the positive domain count (``n_positive_domains``).
+The dump carries what both negative-construction methods need (uncapped DANS,
+Cappelletti et al. vbae036):
+  * Method 1 "deletion" -- the candidate pool ``cand_a``/``cand_b``, the pool
+    domain universe ``pool_dom`` and the *reduced* positive degrees
+    ``pool_deg_r`` (3did positives restricted to pool domains), plus the reduced
+    positive-edge PA and target count.
+  * Method 2 "random_addition" -- the full positive edge endpoint multiset
+    ``pos_a``/``pos_b`` (DANS samples node-pairs proportional to degree from it),
+    the full positive degrees/PA/count, and the forbidden-pair set
+    ``forbidden_a``/``forbidden_b`` (all existing DDIs) that DANS must avoid.
 """
 
 import argparse
@@ -334,19 +340,62 @@ def main():
 
     cand_a = np.array([a for a, b in fresh_pairs], dtype=object)
     cand_b = np.array([b for a, b in fresh_pairs], dtype=object)
+
+    # ---- Method 1 ("deletion"): reduce the positives to the candidate-domain
+    #      universe so positive and candidate domains coincide; DANS then draws
+    #      degree-aware over the fixed candidate pool. ----
+    pool_domains = {d for pair in fresh_pairs for d in pair}
+    pos_edges_r = [
+        (a, b) for a, b in pos_edges if a in pool_domains and b in pool_domains
+    ]
+    pos_degree_r = defaultdict(int)
+    for a, b in pos_edges_r:
+        pos_degree_r[a] += 1
+        pos_degree_r[b] += 1
+    n_positive_r = len(pos_edges_r)
+    n_positive_domains_r = len(pos_degree_r)
+    pos_edge_pa_r = np.array(
+        [pos_degree_r[a] * pos_degree_r[b] for a, b in pos_edges_r], dtype=np.int64
+    )
+    # Every pool domain carries its reduced-positive degree (0 if it has no edge
+    # in the reduced positive graph); the selector turns these into PA weights.
+    pool_dom = np.array(sorted(pool_domains, key=pfam_sort_key), dtype=object)
+    pool_deg_r = np.array([pos_degree_r[d] for d in pool_dom], dtype=np.int64)
+    log(f"n_pool_domains = {len(pool_dom)}")
+    log(f"n_reduced_positive_ddis = {n_positive_r}")
+    log(f"n_reduced_positive_domains = {n_positive_domains_r}")
+
+    # ---- Method 2 ("random_addition"): plain DANS over the full positive set.
+    #      The selector samples node-pairs proportional to degree by drawing from
+    #      the endpoint multiset of these edges and rejects existing pairs. ----
+    pos_a = np.array([a for a, b in pos_edges], dtype=object)
+    pos_b = np.array([b for a, b in pos_edges], dtype=object)
     pos_dom = np.array(list(pos_degree.keys()), dtype=object)
     pos_deg = np.array([pos_degree[d] for d in pos_dom], dtype=np.int64)
+    forbidden_a = np.array([a for a, b in existing_pairs], dtype=object)
+    forbidden_b = np.array([b for a, b in existing_pairs], dtype=object)
 
     log(f"writing candidate pool to {args.pool_out}")
     np.savez(
         args.pool_out,
+        # --- Method 1 (deletion) ---
         cand_a=cand_a,
         cand_b=cand_b,
+        pool_dom=pool_dom,
+        pool_deg_r=pool_deg_r,
+        pos_edge_pa_r=pos_edge_pa_r,
+        n_positive_r=np.int64(n_positive_r),
+        n_positive_domains_r=np.int64(n_positive_domains_r),
+        # --- Method 2 (random_addition) ---
+        pos_a=pos_a,
+        pos_b=pos_b,
         pos_dom=pos_dom,
         pos_deg=pos_deg,
         pos_edge_pa=pos_edge_pa,
         n_positive=np.int64(n_positive),
         n_positive_domains=np.int64(n_positive_domains),
+        forbidden_a=forbidden_a,
+        forbidden_b=forbidden_b,
     )
     log("done")
 

@@ -27,9 +27,10 @@ include { INSERT_SINGLE_DOMAIN_PPI  } from '../../../modules/local/insert_single
 include { INSERT_PPIDM              } from '../../../modules/local/insert_ppidm/main.nf'
 include { INSERT_NEGATOME           } from '../../../modules/local/insert_negatome/main.nf'
 include { REMOVE_SELF_INTERACTIONS  } from '../../../modules/local/remove_self_interactions/main.nf'
-include { BUILD_PPI_NEGATIVE_POOL       } from '../../../modules/local/build_ppi_negative_pool/main.nf'
-include { SELECT_PPI_NEGATIVE_DANS      } from '../../../modules/local/select_ppi_negative_dans/main.nf'
-include { INSERT_PPI_NEGATIVE_SELECTION } from '../../../modules/local/insert_ppi_negative_selection/main.nf'
+include { BUILD_PPI_NEGATIVE_POOL                            } from '../../../modules/local/build_ppi_negative_pool/main.nf'
+include { SELECT_PPI_NEGATIVE_DANS as SELECT_DELETION        } from '../../../modules/local/select_ppi_negative_dans/main.nf'
+include { SELECT_PPI_NEGATIVE_DANS as SELECT_RANDOM_ADDITION } from '../../../modules/local/select_ppi_negative_dans/main.nf'
+include { INSERT_PPI_NEGATIVE_SELECTION                      } from '../../../modules/local/insert_ppi_negative_selection/main.nf'
 include { SMOKE_FILTER              } from '../../../modules/local/smoke_filter/main.nf'
 
 workflow COLLECT_DDI_DATA {
@@ -74,10 +75,17 @@ workflow COLLECT_DDI_DATA {
         domainsplit_db = REMOVE_SELF_INTERACTIONS(domainsplit_db).domainsplit_db
     }
 
-    // 7. high-confidence non-PPI negatives (inferred only over 3did domains).
+    // 7. high-confidence non-PPI negatives via uncapped DANS (Cappelletti et al.
+    //    vbae036), in two flavours that coexist under distinct source labels:
+    //      * "deletion"        -- DANS over the PPI candidate pool, with the
+    //                             positives reduced to the candidate-domain
+    //                             universe (labels 3did_deletion /
+    //                             inferred_ppi_screen_negative_for_deletion).
+    //      * "random_addition" -- plain DANS over the full positive set (labels
+    //                             3did_random_addition /
+    //                             inferred_ppi_screen_negative_for_random_addition).
     //    The expensive, deterministic UniProt fetch + candidate-pool build runs
-    //    once; selection fans out over 5 seeds (base+1..+5) in parallel SLURM
-    //    jobs, and the best-scoring (degree/PA-matched) selection is inserted.
+    //    once; each method is a single deterministic selection (no pick-best).
     pool = BUILD_PPI_NEGATIVE_POOL(
         domainsplit_db,
         file(negative_ppi_parquet),
@@ -85,24 +93,18 @@ workflow COLLECT_DDI_DATA {
         params.self_interaction,
     )
 
-    // Pair the single shared pool file with each seed (combine avoids the
-    // queue-exhaustion that mixing a one-shot channel with a 5-item queue causes).
-    seeds = Channel.of(1, 2, 3, 4, 5).map { params.negative_ppi_seed + it }
-    sel   = SELECT_PPI_NEGATIVE_DANS(seeds.combine(pool.neg_pool))
+    del  = SELECT_DELETION('deletion', params.negative_ppi_seed, pool.neg_pool)
+    rand = SELECT_RANDOM_ADDITION('random_addition', params.negative_ppi_seed, pool.neg_pool)
 
-    sel.result
-        .multiMap { seed, score, pairs ->
-            scores: score
-            pairs:  pairs
-        }
-        .set { selection }
-
-    best = INSERT_PPI_NEGATIVE_SELECTION(
+    inserted = INSERT_PPI_NEGATIVE_SELECTION(
         pool.domainsplit_db,
-        selection.scores.collect(),
-        selection.pairs.collect(),
+        pool.neg_pool,
+        del.pairs,
+        rand.pairs,
+        del.score,
+        rand.score,
     )
-    domainsplit_db = best.domainsplit_db
+    domainsplit_db = inserted.domainsplit_db
     pfam_mapping   = pool.pfam_mapping
 
     if (params.smoke_test_n_ddis != null) {

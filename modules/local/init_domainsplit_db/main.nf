@@ -31,7 +31,7 @@ process INIT_DOMAINSPLIT_DB {
             source VARCHAR(255),
             FOREIGN KEY(domain_id_a) REFERENCES domain ON DELETE CASCADE,
             FOREIGN KEY(domain_id_b) REFERENCES domain ON DELETE CASCADE,
-            UNIQUE(domain_id_a, domain_id_b)
+            UNIQUE(domain_id_a, domain_id_b, source)
         );
 
         CREATE TABLE protein (

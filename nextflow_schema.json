@@ -167,7 +167,7 @@
                 },
                 "negative_ppi_seed": {
                     "type": "integer",
-                    "description": "Base random seed for the multi-seed negative-DDI selection. Five parallel jobs run the degree-capped PA-weighted sampler with seeds base+1..+5; the lowest-scoring (best degree/PA/coverage-matched) selection is inserted.",
+                    "description": "Random seed for the single-run, uncapped DANS negative-DDI selection (used by both the deletion and random_addition methods).",
                     "default": 42,
                     "fa_icon": "fas fa-dice"
                 },
