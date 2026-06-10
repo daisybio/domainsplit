@@ -1,16 +1,20 @@
 #!/usr/bin/env python3
 """
-Build negative DDIs from a Y2H/MS PPI parquet and append them to the
-domainsplit SQLite, restricted to Pfam domains already present in positive
-DDIs.
+Build the candidate pool for negative DDIs from a Y2H/MS PPI parquet and dump it
+to ``neg_pool.npz`` for the (seed-dependent) selection step.
 
-Selection uses degree-aware node sampling (DANS, Cappelletti et al. 2024,
-Bioinformatics Advances vbae036) applied to the PPI-derived candidate pool:
-each candidate Pfam pair is sampled (without replacement) with probability
-proportional to the preferential attachment of its two domains in the positive
-graph -- the product of their positive degrees.  This makes the negative
-degree / preferential-attachment distribution track the positives, avoiding the
-inflated downstream evaluation that uniform negative sampling produces.
+This is the EXPENSIVE, DETERMINISTIC half of negative-DDI construction: it
+streams the parquet, maps bait/prey genes to UniProt + Pfam via the UniProt REST
+API, and assembles the pool of candidate Pfam pairs (restricted to Pfam domains
+that already appear in a 3did positive DDI, and excluding pairs that already
+exist as DDIs).  It performs NO sampling and NO insertion -- selection fans out
+into parallel per-seed jobs (``select_ppi_negative_dans.py``) that read the dump,
+and the winning selection is inserted by ``insert_ppi_negative_selection.py``.
+
+The dump also carries the positive-graph statistics the selector needs:
+``pos_degree`` (per-domain positive degree, the cap), the positive-edge
+preferential-attachment (PA = deg(a)*deg(b)) array, the target negative count
+(``n_positive``) and the positive domain count (``n_positive_domains``).
 """
 
 import argparse
@@ -44,14 +48,9 @@ def parse_args():
     p.add_argument("--parquet", required=True)
     p.add_argument("--pfam-mapping-out", required=True,
                    help="Output path for UniProt -> Pfam JSON mapping")
+    p.add_argument("--pool-out", required=True,
+                   help="Output path for the candidate-pool .npz dump")
     p.add_argument("--min-n-tested", type=int, required=True)
-    p.add_argument("--source-label", default="inferred_ppi_screen_negative")
-    p.add_argument(
-        "--seed",
-        type=int,
-        default=42,
-        help="Random seed for reproducible DANS negative sampling.",
-    )
     p.add_argument(
         "--no-self",
         action="store_true",
@@ -179,6 +178,16 @@ def load_existing_pairs(conn):
     return {tuple(sorted((a, b), key=pfam_sort_key)) for a, b in cur}
 
 
+def load_positive_3did_edges(conn):
+    """The 3did positive DDIs as (pfam_a, pfam_b) pairs."""
+    return conn.execute(
+        "SELECT da.pfam_id, db.pfam_id "
+        "FROM domain_domain_interaction AS ddi "
+        "JOIN domain AS da ON da.id = ddi.domain_id_a "
+        "JOIN domain AS db ON db.id = ddi.domain_id_b "
+        "WHERE ddi.negative = 0 AND ddi.source = '3did'"
+    ).fetchall()
+
 
 def _validate_columns(parquet_schema):
     available = set(parquet_schema.names)
@@ -215,71 +224,6 @@ def _collect_genes_and_pairs(parquet_path, min_n_tested):
     return n_input, unique_genes, baits, preys
 
 
-def _compute_positive_degree(conn):
-    """Per-Pfam degree in the 3did positive DDI set."""
-    rows = conn.execute(
-        "SELECT da.pfam_id, db.pfam_id "
-        "FROM domain_domain_interaction AS ddi "
-        "JOIN domain AS da ON da.id = ddi.domain_id_a "
-        "JOIN domain AS db ON db.id = ddi.domain_id_b "
-        "WHERE ddi.negative = 0 AND ddi.source = '3did'"
-    ).fetchall()
-    deg = defaultdict(int)
-    for a, b in rows:
-        deg[a] += 1
-        deg[b] += 1
-    return deg
-
-
-def select_dans(fresh_candidates, pos_degree, n_take, seed=42):
-    """Degree-aware node sampling (DANS) over the PPI candidate pool.
-
-    Cappelletti et al. 2024 (Bioinformatics Advances, vbae036) sample negative
-    edges so endpoint node-degrees track the positive distribution; the induced
-    edge probability is proportional to the preferential attachment of the two
-    endpoints, ``PA = deg(a) * deg(b)``.  Here we apply that distribution to the
-    fixed pool of PPI-derived candidate Pfam pairs: each candidate is drawn
-    without replacement with probability proportional to the product of its two
-    domains' positive degrees, so the selected negatives mirror the positive
-    degree / PA distribution while staying biologically grounded in the PPI
-    screen.
-    """
-    if n_take <= 0 or not fresh_candidates:
-        return []
-    if n_take >= len(fresh_candidates):
-        return list(fresh_candidates)
-
-    weights = np.array(
-        [pos_degree.get(a, 0) * pos_degree.get(b, 0) for (a, b), _ in fresh_candidates],
-        dtype=float,
-    )
-    # Defensive fallback: if positive-degree info is missing/degenerate (or too
-    # few non-zero weights to draw n_take distinct pairs), sample uniformly.
-    if weights.sum() <= 0 or int((weights > 0).sum()) < n_take:
-        log("DANS: degenerate weights -> uniform fallback")
-        weights = np.ones(len(fresh_candidates), dtype=float)
-
-    probs = weights / weights.sum()
-    rng = np.random.default_rng(seed)
-    idx = rng.choice(len(fresh_candidates), size=n_take, replace=False, p=probs)
-
-    chosen = [fresh_candidates[i] for i in idx]
-
-    def pa(a, b):
-        return pos_degree.get(a, 0) * pos_degree.get(b, 0)
-
-    chosen_degree = defaultdict(int)
-    for (a, b), _ in chosen:
-        chosen_degree[a] += 1
-        chosen_degree[b] += 1
-    pool_pa = float(np.mean([pa(a, b) for (a, b), _ in fresh_candidates]))
-    sel_pa = float(np.mean([pa(a, b) for (a, b), _ in chosen]))
-    log(f"DANS: selected {len(chosen)} negatives from pool of {len(fresh_candidates)}")
-    log(f"DANS: {len(chosen_degree)} domains used ({len(pos_degree)} in the positive set); "
-        f"mean PA pool={pool_pa:.1f} selected={sel_pa:.1f}")
-    return chosen
-
-
 def main():
     args = parse_args()
 
@@ -310,9 +254,6 @@ def main():
     log(f"n_pfam_domains_for_input_proteins = {n_pfam_unique}")
 
     conn = sqlite3.connect(args.db)
-    conn.execute("PRAGMA foreign_keys=ON")
-    conn.execute("PRAGMA journal_mode=OFF")
-    conn.execute("PRAGMA synchronous=OFF")
 
     pos_pfam = load_3did_pfams(conn)
     log(f"n_3did_pfams = {len(pos_pfam)}")
@@ -362,64 +303,52 @@ def main():
             f"(observed in {most_common_count} PPI rows)"
         )
 
-    n_positive = conn.execute(
-        "SELECT COUNT(*) FROM domain_domain_interaction "
-        "WHERE negative = 0 AND source = '3did'"
-    ).fetchone()[0]
+    # Positive 3did graph statistics: degree (the per-domain cap), edge PA, and
+    # the target negative count.
+    pos_edges = load_positive_3did_edges(conn)
+    pos_degree = defaultdict(int)
+    for a, b in pos_edges:
+        pos_degree[a] += 1
+        pos_degree[b] += 1
+    n_positive = len(pos_edges)
+    n_positive_domains = len(pos_degree)
+    pos_edge_pa = np.array(
+        [pos_degree[a] * pos_degree[b] for a, b in pos_edges], dtype=np.int64
+    )
     log(f"n_positive_ddis_in_db = {n_positive}")
+    log(f"n_positive_domains = {n_positive_domains}")
+    log(f"positive mean PA = {float(pos_edge_pa.mean()):.1f}")
 
-    fresh_candidates = []
+    # Drop candidates that already exist as a DDI (positive or negative).
+    fresh_pairs = []
     n_positive_ddis_in_negative_ppis = 0
-
-    for key, count in candidate_counts.items():
+    for key in candidate_counts:
         if key in existing_pairs:
             n_positive_ddis_in_negative_ppis += 1
         else:
-            fresh_candidates.append((key, count))
+            fresh_pairs.append(key)
 
     log(f"n_positive_ddis_in_negative_ppis = {n_positive_ddis_in_negative_ppis}")
-
-    log(f"n_fresh_candidates_after_dedup = {len(fresh_candidates)}")
-
-    log("selecting negatives via degree-aware node sampling (DANS)")
-    pos_degree = _compute_positive_degree(conn)
-    chosen = select_dans(fresh_candidates, pos_degree, n_positive, seed=args.seed)
-    log(f"n_chosen = {len(chosen)}")
-
-    if chosen:
-        # Pre-load pfam_id -> domain.id mapping to avoid per-row subqueries
-        pfam_to_domain_ids = defaultdict(list)
-        for did, pfam in conn.execute("SELECT id, pfam_id FROM domain"):
-            pfam_to_domain_ids[pfam].append(did)
-        log(f"loaded {len(pfam_to_domain_ids)} pfam -> domain mappings")
-
-        insert_rows = []
-        for (pfam_a, pfam_b), _ in chosen:
-            # normalise by Pfam accession number (matching ddi_db_utils.insert_ddis)
-            # so swapped pairs collapse and dedup consistently with the other sources
-            for d_a in pfam_to_domain_ids.get(pfam_a, ()):
-                for d_b in pfam_to_domain_ids.get(pfam_b, ()):
-                    if pfam_sort_key(pfam_a) <= pfam_sort_key(pfam_b):
-                        lo, hi = d_a, d_b
-                    else:
-                        lo, hi = d_b, d_a
-                    insert_rows.append((lo, hi, True, args.source_label))
-
-        conn.executemany(
-            "INSERT OR IGNORE INTO domain_domain_interaction"
-            "(domain_id_a, domain_id_b, negative, source) "
-            "VALUES (?, ?, ?, ?)",
-            insert_rows,
-        )
-        conn.commit()
-        log(f"batch-inserted {len(insert_rows)} rows")
-
-    n_inserted = conn.execute(
-        "SELECT COUNT(*) FROM domain_domain_interaction WHERE source = ?",
-        (args.source_label,),
-    ).fetchone()[0]
-    log(f"n_inserted_for_source = {n_inserted}")
+    log(f"n_fresh_candidates_after_dedup = {len(fresh_pairs)}")
     conn.close()
+
+    cand_a = np.array([a for a, b in fresh_pairs], dtype=object)
+    cand_b = np.array([b for a, b in fresh_pairs], dtype=object)
+    pos_dom = np.array(list(pos_degree.keys()), dtype=object)
+    pos_deg = np.array([pos_degree[d] for d in pos_dom], dtype=np.int64)
+
+    log(f"writing candidate pool to {args.pool_out}")
+    np.savez(
+        args.pool_out,
+        cand_a=cand_a,
+        cand_b=cand_b,
+        pos_dom=pos_dom,
+        pos_deg=pos_deg,
+        pos_edge_pa=pos_edge_pa,
+        n_positive=np.int64(n_positive),
+        n_positive_domains=np.int64(n_positive_domains),
+    )
+    log("done")
 
 
 if __name__ == "__main__":

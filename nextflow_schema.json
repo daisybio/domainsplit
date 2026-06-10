@@ -165,6 +165,12 @@
                     "minimum": 1,
                     "fa_icon": "fas fa-filter"
                 },
+                "negative_ppi_seed": {
+                    "type": "integer",
+                    "description": "Base random seed for the multi-seed negative-DDI selection. Five parallel jobs run the degree-capped PA-weighted sampler with seeds base+1..+5; the lowest-scoring (best degree/PA/coverage-matched) selection is inserted.",
+                    "default": 42,
+                    "fa_icon": "fas fa-dice"
+                },
                 "pfam_download_batch_size": {
                     "type": "integer",
                     "description": "Number of Pfam IDs grouped into a single download job to reduce scheduler overhead.",

@@ -56,7 +56,7 @@ workflow SPLIT_DOMAINSPLIT_DATABASE {
     // The two methods that mimic a within-distribution evaluation use only the
     // "core" sources: 3did positives + high-confidence non-PPI negatives.
     // 'inferred_ppi_screen_negative' must stay in sync with the --source-label
-    // default in bin/build_ppi_negative_ddis.py.
+    // default in bin/insert_ppi_negative_selection.py.
     def core_sources = ['3did', 'inferred_ppi_screen_negative']
 
     // External-validation test set: held-out sources placed as is.

@@ -1,5 +1,5 @@
-process INSERT_PPI_NEGATIVE_DDIS {
-    tag "insert_ppi_negative_ddis"
+process BUILD_PPI_NEGATIVE_POOL {
+    tag "build_ppi_negative_pool"
     label 'process_low'
     conda "${moduleDir}/environment.yml"
     container "docker://konstantinpelz/domainsplit-general:1.0.0"
@@ -12,6 +12,7 @@ process INSERT_PPI_NEGATIVE_DDIS {
 
     output:
     path "domainsplit.sqlite3",        emit: domainsplit_db
+    path "neg_pool.npz",               emit: neg_pool
     path "uniprot_pfam_mapping.json",  emit: pfam_mapping
     path "versions.yml",               emit: versions
 
@@ -20,10 +21,11 @@ process INSERT_PPI_NEGATIVE_DDIS {
     """
     cp "${domainsplit_db_in}" domainsplit.sqlite3
 
-    build_ppi_negative_ddis.py \\
+    build_ppi_negative_pool.py \\
         --db domainsplit.sqlite3 \\
         --parquet "${negative_ppi_parquet}" \\
         --pfam-mapping-out uniprot_pfam_mapping.json \\
+        --pool-out neg_pool.npz \\
         --min-n-tested ${min_n_tested} \\
         ${no_self}
 

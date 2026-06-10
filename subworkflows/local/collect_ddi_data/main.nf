@@ -27,7 +27,9 @@ include { INSERT_SINGLE_DOMAIN_PPI  } from '../../../modules/local/insert_single
 include { INSERT_PPIDM              } from '../../../modules/local/insert_ppidm/main.nf'
 include { INSERT_NEGATOME           } from '../../../modules/local/insert_negatome/main.nf'
 include { REMOVE_SELF_INTERACTIONS  } from '../../../modules/local/remove_self_interactions/main.nf'
-include { INSERT_PPI_NEGATIVE_DDIS  } from '../../../modules/local/insert_ppi_negative_ddis/main.nf'
+include { BUILD_PPI_NEGATIVE_POOL       } from '../../../modules/local/build_ppi_negative_pool/main.nf'
+include { SELECT_PPI_NEGATIVE_DANS      } from '../../../modules/local/select_ppi_negative_dans/main.nf'
+include { INSERT_PPI_NEGATIVE_SELECTION } from '../../../modules/local/insert_ppi_negative_selection/main.nf'
 include { SMOKE_FILTER              } from '../../../modules/local/smoke_filter/main.nf'
 
 workflow COLLECT_DDI_DATA {
@@ -72,15 +74,36 @@ workflow COLLECT_DDI_DATA {
         domainsplit_db = REMOVE_SELF_INTERACTIONS(domainsplit_db).domainsplit_db
     }
 
-    // 7. high-confidence non-PPI negatives (inferred only over 3did domains)
-    ppi_result = INSERT_PPI_NEGATIVE_DDIS(
+    // 7. high-confidence non-PPI negatives (inferred only over 3did domains).
+    //    The expensive, deterministic UniProt fetch + candidate-pool build runs
+    //    once; selection fans out over 5 seeds (base+1..+5) in parallel SLURM
+    //    jobs, and the best-scoring (degree/PA-matched) selection is inserted.
+    pool = BUILD_PPI_NEGATIVE_POOL(
         domainsplit_db,
         file(negative_ppi_parquet),
         params.negative_ppi_min_n_tested,
         params.self_interaction,
     )
-    domainsplit_db = ppi_result.domainsplit_db
-    pfam_mapping   = ppi_result.pfam_mapping
+
+    // Pair the single shared pool file with each seed (combine avoids the
+    // queue-exhaustion that mixing a one-shot channel with a 5-item queue causes).
+    seeds = Channel.of(1, 2, 3, 4, 5).map { params.negative_ppi_seed + it }
+    sel   = SELECT_PPI_NEGATIVE_DANS(seeds.combine(pool.neg_pool))
+
+    sel.result
+        .multiMap { seed, score, pairs ->
+            scores: score
+            pairs:  pairs
+        }
+        .set { selection }
+
+    best = INSERT_PPI_NEGATIVE_SELECTION(
+        pool.domainsplit_db,
+        selection.scores.collect(),
+        selection.pairs.collect(),
+    )
+    domainsplit_db = best.domainsplit_db
+    pfam_mapping   = pool.pfam_mapping
 
     if (params.smoke_test_n_ddis != null) {
         domainsplit_db = SMOKE_FILTER(domainsplit_db, params.smoke_test_n_ddis).domainsplit_db
