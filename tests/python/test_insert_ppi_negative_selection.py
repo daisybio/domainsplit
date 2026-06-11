@@ -56,11 +56,12 @@ def count(conn, source):
 
 
 def write_score(path, method):
-    json.dump({
-        "method": method, "seed": 7, "J": 0.1, "pa": 0.1, "deg": 0.1,
-        "cov": 0.0, "n_sel": 2, "n_dom": 3, "mean_pa": 1.0,
-        "pos_n_sel": 3, "pos_n_dom": 4, "pos_mean_pa": 2.0,
-    }, open(path, "w"))
+    with open(path, "w") as fh:
+        json.dump({
+            "method": method, "seed": 7, "J": 0.1, "pa": 0.1, "deg": 0.1,
+            "cov": 0.0, "n_sel": 2, "n_dom": 3, "mean_pa": 1.0,
+            "pos_n_sel": 3, "pos_n_dom": 4, "pos_mean_pa": 2.0,
+        }, fh)
 
 
 def write_pairs(path, pairs):

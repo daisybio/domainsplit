@@ -152,10 +152,9 @@
                     "fa_icon": "fas fa-hashtag"
                 },
                 "negative_ppi_parquet": {
-                    "type": ["string", "null"],
+                    "type": ["string"],
                     "format": "file-path",
                     "description": "Required path to a Y2H/MS PPI parquet (columns: gene_name_bait, gene_name_prey, n_tested, ...). COLLECT_DDI_DATA derives negative DDIs by mapping bait/prey genes to UniProt then Pfam (via UniProt REST API) and inserting Pfam-pair candidates (degree-matched or by frequency) restricted to domains already in positive DDIs.",
-                    "default": null,
                     "fa_icon": "fas fa-file-import"
                 },
                 "negative_ppi_min_n_tested": {
@@ -185,10 +184,9 @@
                     "fa_icon": "fas fa-link"
                 },
                 "hippie_tsv": {
-                    "type": ["string", "null"],
+                    "type": ["string"],
                     "format": "file-path",
                     "description": "Required path to a HIPPIE PPI TSV. COLLECT_DDI_DATA adds positive DDIs inferred from PPIs between two single-domain proteins.",
-                    "default": null,
                     "fa_icon": "fas fa-file-import"
                 },
                 "hippie_min_score": {
@@ -200,10 +198,9 @@
                     "fa_icon": "fas fa-filter"
                 },
                 "ppidm_tsv": {
-                    "type": ["string", "null"],
+                    "type": ["string"],
                     "format": "file-path",
                     "description": "Required path to a PPIDM predictions TSV (columns: domain_1, domain_2, class). COLLECT_DDI_DATA adds positive DDIs tagged with source 'PPIDM_<Class>'.",
-                    "default": null,
                     "fa_icon": "fas fa-file-import"
                 },
                 "ppidm_classes": {

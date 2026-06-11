@@ -44,6 +44,10 @@ workflow COLLECT_DDI_DATA {
     negative_ppi_parquet
 
     main:
+    if( !hippie_tsv || !ppidm_tsv || !negative_ppi_parquet ) {
+        log.error "Required inputs missing: hippie_tsv, ppidm_tsv, and negative_ppi_parquet must be provided"
+        exit 1
+    }
     file_3did     = file(url_3did)
     sqlite_3did   = DOWNLOAD_3DID_SQLITE(file_3did).sqlite
     negatome_file = DOWNLOAD_NEGATOME(url_negatome).negatome
