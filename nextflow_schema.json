@@ -46,7 +46,7 @@
                 "url_3did": {
                     "type": "string",
                     "description": "URL of the 3did SQL dump archive.",
-                    "default": "https://3did.irbbarcelona.org/download/2022_01/3did.sql.gz",
+                    "default": "https://3did.irbbarcelona.org/download/current/3did.sql.gz",
                     "fa_icon": "fas fa-link"
                 },
                 "url_uniprot_id_mapping": {
