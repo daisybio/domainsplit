@@ -2,7 +2,7 @@ process SELECT_PPI_NEGATIVE_DANS {
     tag "select_ppi_negative_dans:${method}"
     label 'process_low'
     conda "${moduleDir}/environment.yml"
-    container "konstantinpelz/domainsplit-general:1.0.0"
+    container "docker.io/konstantinpelz/domainsplit-general:1.0.0"
 
     input:
     val  method

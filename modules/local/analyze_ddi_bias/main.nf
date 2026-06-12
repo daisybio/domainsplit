@@ -2,7 +2,7 @@ process ANALYZE_DDI_BIAS {
     tag "bias_analysis"
     label 'process_low'
     conda "${moduleDir}/environment.yml"
-    container "konstantinpelz/domainsplit-general:1.0.0"
+    container "docker.io/konstantinpelz/domainsplit-general:1.0.0"
 
     input:
     path "domainsplit.sqlite3"

@@ -15,7 +15,7 @@ process SHARD_FASTA {
     tag { "${input_fasta.simpleName}:${num_shards}" }
     label 'process_low'
     conda "${moduleDir}/environment.yml"
-    container "konstantinpelz/domainsplit-general:1.0.0"
+    container "docker.io/konstantinpelz/domainsplit-general:1.0.0"
 
     input:
     tuple val(meta), path(input_fasta)
@@ -58,7 +58,7 @@ process JOIN_HDF_FILES {
     tag { output_name }
     label 'process_low'
     conda "${moduleDir}/environment.yml"
-    container "konstantinpelz/domainsplit-general:1.0.0"
+    container "docker.io/konstantinpelz/domainsplit-general:1.0.0"
 
     input:
     val output_name

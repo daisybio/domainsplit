@@ -2,7 +2,7 @@ process BUILD_PPI_NEGATIVE_POOL {
     tag "build_ppi_negative_pool"
     label 'process_low'
     conda "${moduleDir}/environment.yml"
-    container "konstantinpelz/domainsplit-general:1.0.0"
+    container "docker.io/konstantinpelz/domainsplit-general:1.0.0"
 
     input:
     path domainsplit_db_in, stageAs: 'input.domainsplit.sqlite3'

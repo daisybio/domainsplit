@@ -2,7 +2,7 @@ process DOWNLOAD_3DID_SQLITE {
     tag "3did"
     label 'process_low'
     conda "${moduleDir}/environment.yml"
-    container "konstantinpelz/domainsplit-general:1.0.0"
+    container "docker.io/konstantinpelz/domainsplit-general:1.0.0"
 
     input:
     path mysql_gz_file

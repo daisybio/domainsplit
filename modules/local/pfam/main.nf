@@ -2,7 +2,7 @@ process DOWNLOAD_PFAM_ALIGNMENTS_BATCH {
     tag { "batch_${pfam_ids_list.size()}" }
     label 'process_low'
     conda "${moduleDir}/environment.yml"
-    container "konstantinpelz/domainsplit-general:1.0.0"
+    container "docker.io/konstantinpelz/domainsplit-general:1.0.0"
 
     maxRetries 3
     errorStrategy { task.attempt <= 3 ? 'retry' : 'ignore' }
@@ -88,7 +88,7 @@ process CREATE_PROTEIN_DOMAIN_MAPPING {
     tag { "${uniprot_map_file.simpleName}" }
     label 'process_medium'
     conda "${moduleDir}/environment.yml"
-    container "konstantinpelz/domainsplit-general:1.0.0"
+    container "docker.io/konstantinpelz/domainsplit-general:1.0.0"
 
     input:
     path uniprot_map_file

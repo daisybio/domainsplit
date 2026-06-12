@@ -22,7 +22,7 @@ process FILTER_SEQUENCES {
     tag { "${protein_domain_map.simpleName}" }
     label 'process_medium'
     conda "${moduleDir}/environment.yml"
-    container "konstantinpelz/domainsplit-general:1.0.0"
+    container "docker.io/konstantinpelz/domainsplit-general:1.0.0"
 
     input:
     path protein_domain_map
@@ -83,7 +83,7 @@ process GENERATE_PROTEIN_ESM_EMBEDDINGS_CHUNK {
     label 'process_gpu_large'
     secret 'HF_TOKEN'
     conda "${moduleDir}/environment.yml"
-    container "konstantinpelz/domainsplit-gpu:1.0.0"
+    container "docker.io/konstantinpelz/domainsplit-gpu:1.0.0"
     containerOptions {
         workflow.containerEngine == 'singularity' || workflow.containerEngine == 'apptainer'
             ? '--env HF_TOKEN --env HF_HOME --env HUGGINGFACE_HUB_CACHE'
@@ -132,7 +132,7 @@ process GENERATE_DOMAIN_ESM_EMBEDDINGS_CHUNK {
     label 'process_gpu_large'
     secret 'HF_TOKEN'
     conda "${moduleDir}/environment.yml"
-    container "konstantinpelz/domainsplit-gpu:1.0.0"
+    container "docker.io/konstantinpelz/domainsplit-gpu:1.0.0"
     containerOptions {
         workflow.containerEngine == 'singularity' || workflow.containerEngine == 'apptainer'
             ? '--env HF_TOKEN --env HF_HOME --env HUGGINGFACE_HUB_CACHE'
