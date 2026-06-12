@@ -6,6 +6,8 @@ nextflow_pipeline {
 
     test("-profile test") {
 
+        options "-stub"
+
         when {
             params {
                 outdir = "$outputDir"
@@ -13,20 +15,23 @@ nextflow_pipeline {
         }
 
         then {
-            // stable_path: All files + folders in ${params.outdir}/ with a stable path (including file name)
-            def stable_path = getAllFilesFromDir(params.outdir, relative: true, includeDir: true, ignore: ['pipeline_info/*.{html,json,txt}'])
-            // stable_content: All files in ${params.outdir}/ with stable content
-            def stable_content = getAllFilesFromDir(params.outdir, ignoreFile: 'tests/.nftignore')
-            assert workflow.success
+            // This is a `-stub` wiring test: every process runs its stub block and
+            // emits empty placeholder files, so file *content* is meaningless (and
+            // empty .gz/.h5 stubs break content hashing). We therefore snapshot only
+            // the set of produced output paths -- this verifies the whole DAG wires
+            // together (channel topology, the split fan-out, publish paths) end to
+            // end without any downloads, GPU, or containers. Everything under
+            // pipeline_info/ is ignored because those filenames embed a run
+            // timestamp (e.g. params_<timestamp>.json), which is non-deterministic.
+            def stable_path = getAllFilesFromDir(params.outdir, relative: true, includeDir: true, ignore: ['pipeline_info/*'])
+            // Snapshot the collated software versions with the Nextflow version line
+            // stripped (so the assertion survives Nextflow upgrades). This also
+            // satisfies the nf-core `nf_test_content` lint rule, which requires a
+            // `versions.yml` to be snapshotted by every `*.nf.test`.
+            def versions_yml = removeNextflowVersion("$outputDir/pipeline_info/nf_core_pipeline_software_mqc_versions.yml")
             assertAll(
-                { assert snapshot(
-                    // pipeline versions.yml file for multiqc from which Nextflow version is removed because we test pipelines on multiple Nextflow versions
-                    removeNextflowVersion("$outputDir/pipeline_info/domainsplit_software_mqc_versions.yml"),
-                    // All stable path name, with a relative path
-                    stable_path,
-                    // All files with stable contents
-                    stable_content
-                ).match() }
+                { assert workflow.success },
+                { assert snapshot(stable_path, versions_yml).match() }
             )
         }
     }

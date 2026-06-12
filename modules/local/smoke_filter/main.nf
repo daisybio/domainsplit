@@ -2,7 +2,7 @@ process SMOKE_FILTER {
     tag "smoke_filter"
     label 'process_low'
     conda "${moduleDir}/environment.yml"
-    container "docker://konstantinpelz/domainsplit-general:1.0.0"
+    container "docker.io/konstantinpelz/domainsplit-general:1.0.0"
 
     input:
     path domainsplit_db
@@ -87,5 +87,12 @@ process SMOKE_FILTER {
         f.write('"${task.process}":\\n')
         f.write(f"    python: {sys.version.split()[0]}\\n")
         f.write(f"    sqlite3: {sqlite3.sqlite_version}\\n")
+    """
+
+    stub:
+    """
+    touch domainsplit.smoke.sqlite3
+    echo '"${task.process}":' > versions.yml
+    echo '    stub: "true"' >> versions.yml
     """
 }

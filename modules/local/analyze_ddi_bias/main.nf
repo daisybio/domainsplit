@@ -2,7 +2,7 @@ process ANALYZE_DDI_BIAS {
     tag "bias_analysis"
     label 'process_low'
     conda "${moduleDir}/environment.yml"
-    container "docker://konstantinpelz/domainsplit-general:1.0.0"
+    container "docker.io/konstantinpelz/domainsplit-general:1.0.0"
 
     input:
     path "domainsplit.sqlite3"
@@ -23,5 +23,12 @@ process ANALYZE_DDI_BIAS {
         numpy: \$(python3 -c 'import numpy; print(numpy.__version__)')
         matplotlib: \$(python3 -c 'import matplotlib; print(matplotlib.__version__)')
     END_VERSIONS
+    """
+
+    stub:
+    """
+    mkdir bias_analysis
+    echo '"${task.process}":' > versions.yml
+    echo '    stub: "true"' >> versions.yml
     """
 }

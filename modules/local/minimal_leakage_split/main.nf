@@ -2,7 +2,7 @@ process EXTRACT_DOMAIN_SEQUENCES {
     tag "domains"
     label 'process_medium'
     conda "${moduleDir}/environment.yml"
-    container "docker://konstantinpelz/domainsplit-general:1.0.0"
+    container "docker.io/konstantinpelz/domainsplit-general:1.0.0"
 
     input:
     path "domainsplit.sqlite3"
@@ -29,18 +29,26 @@ process EXTRACT_DOMAIN_SEQUENCES {
         sqlite3: \$(sqlite3 --version | awk '{print \$1}')
     END_VERSIONS
     """
+
+    stub:
+    """
+    touch domain_sequences.fasta.gz
+    echo '"${task.process}":' > versions.yml
+    echo '    stub: "true"' >> versions.yml
+    """
 }
 
 process MINIMAL_LEAKAGE_SPLIT_DOMAIN {
     tag "minimal_leakage_domain"
     label 'process_high'
     conda "${moduleDir}/environment.yml"
-    container "docker://konstantinpelz/domainsplit-general:1.0.0"
+    container "docker.io/konstantinpelz/domainsplit-general:1.0.0"
 
     input:
     path "domainsplit.sqlite3"
     val split_fractions  // e.g., [("train", 0.6), ("optimization", 0.2), ("test", 0.2)]
     path ("domain_clusters.tsv")
+    val source_filter    // list of DDI source strings to include; [] = all sources
 
     output:
     path('*.sqlite3'), emit: split_dbs
@@ -58,6 +66,9 @@ process MINIMAL_LEAKAGE_SPLIT_DOMAIN {
 
     def split_fraction_dict_str = output_file_fraction_dict.collect { k, v -> "'${k}': ${v}" }.join(", ")
     def split_fraction_dict_py = "{" + split_fraction_dict_str + "}"
+
+    def src_list = source_filter.collect { "'${it}'" }.join(", ")
+    def where_clause = source_filter ? "WHERE source IN (${src_list})" : ""
 
     """
     #!/usr/bin/env python3
@@ -112,7 +123,7 @@ process MINIMAL_LEAKAGE_SPLIT_DOMAIN {
     # ── Load DDI data ────────────────────────────────────────────────
     conn = sqlite3.connect(input_db_path)
     ddi_rows = conn.execute(
-        "SELECT id, domain_id_a, domain_id_b FROM domain_domain_interaction"
+        "SELECT id, domain_id_a, domain_id_b FROM domain_domain_interaction ${where_clause}"
     ).fetchall()
     conn.close()
     print(f"Loaded {len(ddi_rows)} DDIs")
@@ -392,5 +403,15 @@ process MINIMAL_LEAKAGE_SPLIT_DOMAIN {
         f.write('"${task.process}":\\n')
         f.write(f"    python: {_sys.version.split()[0]}\\n")
         f.write(f"    numpy: {np.__version__}\\n")
+    """
+
+    stub:
+    output_split_info = []
+    split_fractions.each { name, fraction -> output_split_info << ["${name}.sqlite3", name] }
+    def touch_cmds = output_split_info.collect { "touch ${it[0]}" }.join("\n    ")
+    """
+    ${touch_cmds}
+    echo '"${task.process}":' > versions.yml
+    echo '    stub: "true"' >> versions.yml
     """
 }

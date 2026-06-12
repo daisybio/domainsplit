@@ -7,10 +7,10 @@ keywords:
   - clustering
 components:
   - mmseqs/easycluster
-  - random_ddi_split
-  - random_denoise_split
-  - minimal_leakage_split
-  - split_database
+  - random/ddi/split
+  - extract/domain/sequences
+  - minimal/leakage/split/domain
+  - subset/ddis/by/source
 input:
   - domainsplit_db_ch:
       type: file

@@ -208,8 +208,15 @@ other_scripts/*
 test-eval-env/*
 *.txt
 
+# Tests
+.nf-test/
+
 # Added by code-review-graph
 .code-review-graph/
 # Claude
 .claude/
 .mcp.json
+
+# nf-test fixtures (override the broad ignores above)
+!tests/data/
+!tests/data/**

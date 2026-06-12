@@ -2,7 +2,7 @@ process DOWNLOAD_PFAM_ALIGNMENTS_BATCH {
     tag { "batch_${pfam_ids_list.size()}" }
     label 'process_low'
     conda "${moduleDir}/environment.yml"
-    container "docker://konstantinpelz/domainsplit-general:1.0.0"
+    container "docker.io/konstantinpelz/domainsplit-general:1.0.0"
 
     maxRetries 3
     errorStrategy { task.attempt <= 3 ? 'retry' : 'ignore' }
@@ -75,13 +75,20 @@ with open("versions.yml", "w") as f:
     f.write('"${task.process}":\\n')
     f.write(f"    python: {sys.version.split()[0]}\\n")
     """
+
+    stub:
+    """
+    touch PF00001.alignment.full.gz
+    echo '"${task.process}":' > versions.yml
+    echo '    stub: "true"' >> versions.yml
+    """
 }
 
 process CREATE_PROTEIN_DOMAIN_MAPPING {
     tag { "${uniprot_map_file.simpleName}" }
     label 'process_medium'
     conda "${moduleDir}/environment.yml"
-    container "docker://konstantinpelz/domainsplit-general:1.0.0"
+    container "docker.io/konstantinpelz/domainsplit-general:1.0.0"
 
     input:
     path uniprot_map_file
@@ -168,5 +175,13 @@ with gzip.open("$out_path", 'wt') as out:
 with open("versions.yml", "w") as f:
     f.write('"${task.process}":\\n')
     f.write(f"    python: {sys.version.split()[0]}\\n")
+    """
+
+    stub:
+    out_path = 'protein_domain_mapping.csv.gz'
+    """
+    touch ${out_path}
+    echo '"${task.process}":' > versions.yml
+    echo '    stub: "true"' >> versions.yml
     """
 }
