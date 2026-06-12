@@ -11,7 +11,7 @@ process SUBSET_DDIS_BY_SOURCE {
     tag "subset_${split_name}"
     label 'process_medium'
     conda "${moduleDir}/environment.yml"
-    container "docker://konstantinpelz/domainsplit-general:1.0.0"
+    container "konstantinpelz/domainsplit-general:1.0.0"
 
     input:
     path 'domainsplit.sqlite3'

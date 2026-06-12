@@ -2,7 +2,7 @@ process BUILD_SWISSPROT_PFAM_MAP {
     tag "swissprot_map"
     label 'process_low'
     conda "${moduleDir}/environment.yml"
-    container "docker://konstantinpelz/domainsplit-general:1.0.0"
+    container "konstantinpelz/domainsplit-general:1.0.0"
 
     input:
     val url

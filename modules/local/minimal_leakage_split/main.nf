@@ -2,7 +2,7 @@ process EXTRACT_DOMAIN_SEQUENCES {
     tag "domains"
     label 'process_medium'
     conda "${moduleDir}/environment.yml"
-    container "docker://konstantinpelz/domainsplit-general:1.0.0"
+    container "konstantinpelz/domainsplit-general:1.0.0"
 
     input:
     path "domainsplit.sqlite3"
@@ -42,7 +42,7 @@ process MINIMAL_LEAKAGE_SPLIT_DOMAIN {
     tag "minimal_leakage_domain"
     label 'process_high'
     conda "${moduleDir}/environment.yml"
-    container "docker://konstantinpelz/domainsplit-general:1.0.0"
+    container "konstantinpelz/domainsplit-general:1.0.0"
 
     input:
     path "domainsplit.sqlite3"

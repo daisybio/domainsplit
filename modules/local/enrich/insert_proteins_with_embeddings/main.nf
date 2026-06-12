@@ -2,7 +2,7 @@ process INSERT_PROTEINS_WITH_EMBEDDINGS {
     tag "insert_proteins_with_embeddings"
     label 'process_high'
     conda "${moduleDir}/environment.yml"
-    container "docker://konstantinpelz/domainsplit-general:1.0.0"
+    container "konstantinpelz/domainsplit-general:1.0.0"
 
     input:
     path domainsplit_db_in, stageAs: 'input.domainsplit.sqlite3'

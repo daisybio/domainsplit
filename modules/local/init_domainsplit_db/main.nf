@@ -2,7 +2,7 @@ process INIT_DOMAINSPLIT_DB {
     tag "init_domainsplit_db"
     label 'process_low'
     conda "${moduleDir}/environment.yml"
-    container "docker://konstantinpelz/domainsplit-general:1.0.0"
+    container "konstantinpelz/domainsplit-general:1.0.0"
 
     output:
     path "domainsplit.sqlite3", emit: domainsplit_db
