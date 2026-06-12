@@ -1,0 +1,194 @@
+{
+    "-profile test": {
+        "content": [
+            [
+                "analyze",
+                "analyze/bias_analysis",
+                "create",
+                "create/protein_domain_mapping.csv.gz",
+                "databases",
+                "databases/external_validation_deletion",
+                "databases/external_validation_deletion/test.sqlite3",
+                "databases/external_validation_deletion/train.sqlite3",
+                "databases/external_validation_deletion/validation.sqlite3",
+                "databases/external_validation_random_addition",
+                "databases/external_validation_random_addition/test.sqlite3",
+                "databases/external_validation_random_addition/train.sqlite3",
+                "databases/external_validation_random_addition/validation.sqlite3",
+                "databases/minimal_leakage_domain_deletion",
+                "databases/minimal_leakage_domain_deletion/optimization.sqlite3",
+                "databases/minimal_leakage_domain_deletion/test.sqlite3",
+                "databases/minimal_leakage_domain_deletion/train.sqlite3",
+                "databases/minimal_leakage_domain_random_addition",
+                "databases/minimal_leakage_domain_random_addition/optimization.sqlite3",
+                "databases/minimal_leakage_domain_random_addition/test.sqlite3",
+                "databases/minimal_leakage_domain_random_addition/train.sqlite3",
+                "databases/random_ddi_deletion",
+                "databases/random_ddi_deletion/optimization.sqlite3",
+                "databases/random_ddi_deletion/test.sqlite3",
+                "databases/random_ddi_deletion/train.sqlite3",
+                "databases/random_ddi_random_addition",
+                "databases/random_ddi_random_addition/optimization.sqlite3",
+                "databases/random_ddi_random_addition/test.sqlite3",
+                "databases/random_ddi_random_addition/train.sqlite3",
+                "domainsplit.sqlite3",
+                "download",
+                "download/3did.sqlite3",
+                "download/PF00001.alignment.full.gz",
+                "download/combined_pfam.txt",
+                "extract",
+                "extract/domain_sequences.fasta.gz",
+                "filter",
+                "filter/domain_sequences.fasta.gz",
+                "filter/uniprot_filtered.fasta.gz",
+                "generate",
+                "generate/domain_sequences_shard_0.esm.h5",
+                "generate/protein_sequences_shard_0.esm.h5",
+                "join",
+                "join/esm_domain_embeddings.h5",
+                "join/esm_protein_embeddings.h5",
+                "mls",
+                "mls/optimization.sqlite3",
+                "mls/test.sqlite3",
+                "mls/train.sqlite3",
+                "mls/validation.sqlite3",
+                "mmseqs",
+                "mmseqs/domain.tsv",
+                "mmseqs/domain_all_seqs.fasta",
+                "mmseqs/domain_rep_seq.fasta",
+                "negative_ppi",
+                "negative_ppi/negative_ppi_method_scores.tsv",
+                "pipeline_info",
+                "pipeline_info/nf_core_pipeline_software_mqc_versions.yml",
+                "pipeline_info/params_2026-06-12_11-10-10.json",
+                "random",
+                "random/optimization.sqlite3",
+                "random/test.sqlite3",
+                "random/train.sqlite3",
+                "shard",
+                "shard/domain_sequences_shard_0.fasta.gz",
+                "shard/protein_sequences_shard_0.fasta.gz",
+                "subset",
+                "subset/test.sqlite3"
+            ],
+            {
+                "ANALYZE_DDI_BIAS": {
+                    "stub": "true"
+                },
+                "BUILD_PPI_NEGATIVE_POOL": {
+                    "stub": "true"
+                },
+                "BUILD_SWISSPROT_PFAM_MAP": {
+                    "stub": "true"
+                },
+                "CREATE_PROTEIN_DOMAIN_MAPPING": {
+                    "stub": "true"
+                },
+                "DOWNLOAD_3DID_SQLITE": {
+                    "stub": "true"
+                },
+                "DOWNLOAD_NEGATOME": {
+                    "stub": "true"
+                },
+                "DOWNLOAD_PFAM_ALIGNMENTS_BATCH": {
+                    "stub": "true"
+                },
+                "EXTRACT_DOMAIN_SEQUENCES": {
+                    "stub": "true"
+                },
+                "EXTRACT_UNIQUE_DOMAINS": {
+                    "stub": "true"
+                },
+                "FILTER_SEQUENCES": {
+                    "stub": "true"
+                },
+                "GENERATE_DOMAIN_ESM_EMBEDDINGS_CHUNK": {
+                    "stub": "true"
+                },
+                "GENERATE_PROTEIN_ESM_EMBEDDINGS_CHUNK": {
+                    "stub": "true"
+                },
+                "INIT_DOMAINSPLIT_DB": {
+                    "stub": "true"
+                },
+                "INSERT_3DID": {
+                    "stub": "true"
+                },
+                "INSERT_DOMAIN_GO_TERMS": {
+                    "stub": "true"
+                },
+                "INSERT_DOMAIN_PROTEIN_MAPPING": {
+                    "stub": "true"
+                },
+                "INSERT_NEGATOME": {
+                    "stub": "true"
+                },
+                "INSERT_PPI": {
+                    "stub": "true"
+                },
+                "INSERT_PPIDM": {
+                    "stub": "true"
+                },
+                "INSERT_PPI_NEGATIVE_SELECTION": {
+                    "stub": "true"
+                },
+                "INSERT_PROTEINS_WITH_EMBEDDINGS": {
+                    "stub": "true"
+                },
+                "INSERT_PROTEIN_GO_TERMS": {
+                    "stub": "true"
+                },
+                "INSERT_SINGLE_DOMAIN_PPI": {
+                    "stub": "true"
+                },
+                "JOIN_DOMAIN_EMBEDDINGS": {
+                    "stub": "true"
+                },
+                "JOIN_PROTEIN_EMBEDDINGS": {
+                    "stub": "true"
+                },
+                "MLS_DOMAIN_DEL": {
+                    "stub": "true"
+                },
+                "MLS_DOMAIN_RAND": {
+                    "stub": "true"
+                },
+                "MLS_TRAINVAL_DEL": {
+                    "stub": "true"
+                },
+                "MLS_TRAINVAL_RAND": {
+                    "stub": "true"
+                },
+                "RANDOM_DDI_SPLIT_DEL": {
+                    "stub": "true"
+                },
+                "RANDOM_DDI_SPLIT_RAND": {
+                    "stub": "true"
+                },
+                "SELECT_DELETION": {
+                    "stub": "true"
+                },
+                "SELECT_RANDOM_ADDITION": {
+                    "stub": "true"
+                },
+                "SHARD_DOMAIN_FASTA": {
+                    "stub": "true"
+                },
+                "SHARD_PROTEIN_FASTA": {
+                    "stub": "true"
+                },
+                "SUBSET_DDIS_BY_SOURCE": {
+                    "stub": "true"
+                },
+                "Workflow": {
+                    "daisybio/domainsplit": "v1.0.0dev"
+                }
+            }
+        ],
+        "timestamp": "2026-06-12T11:10:24.222393192",
+        "meta": {
+            "nf-test": "0.9.5",
+            "nextflow": "26.04.0"
+        }
+    }
+}

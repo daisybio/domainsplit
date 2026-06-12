@@ -24,4 +24,11 @@ process ANALYZE_DDI_BIAS {
         matplotlib: \$(python3 -c 'import matplotlib; print(matplotlib.__version__)')
     END_VERSIONS
     """
+
+    stub:
+    """
+    mkdir bias_analysis
+    echo '"${task.process}":' > versions.yml
+    echo '    stub: "true"' >> versions.yml
+    """
 }

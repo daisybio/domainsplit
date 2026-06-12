@@ -29,4 +29,11 @@ process SELECT_PPI_NEGATIVE_DANS {
         numpy: \$(python3 -c 'import numpy; print(numpy.__version__)')
     END_VERSIONS
     """
+
+    stub:
+    """
+    touch score_${method}.json pairs_${method}.tsv
+    echo '"${task.process}":' > versions.yml
+    echo '    stub: "true"' >> versions.yml
+    """
 }

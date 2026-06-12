@@ -83,4 +83,11 @@ process INIT_DOMAINSPLIT_DB {
         f.write(f"    python: {sys.version.split()[0]}\\n")
         f.write(f"    sqlite3: {sqlite3.sqlite_version}\\n")
     """
+
+    stub:
+    """
+    touch domainsplit.sqlite3
+    echo '"${task.process}":' > versions.yml
+    echo '    stub: "true"' >> versions.yml
+    """
 }

@@ -56,6 +56,14 @@ runs:
         channel-priority: strict
         conda-remove-defaults: true
 
+    - name: Set dummy Nextflow secrets for stub tests
+      shell: bash
+      run: |
+        # The pipeline stub test (tests/default.nf.test) exercises the ESM
+        # embedding processes, which declare `secret 'HF_TOKEN'`. Nextflow
+        # requires the secret to exist even under -stub, so register a dummy.
+        nextflow secrets set HF_TOKEN "stub" || true
+
     - name: Run nf-test
       shell: bash
       env:

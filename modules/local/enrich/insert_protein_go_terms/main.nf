@@ -20,4 +20,11 @@ process INSERT_PROTEIN_GO_TERMS {
         --versions versions.yml \\
         --process-name "${task.process}"
     """
+
+    stub:
+    """
+    touch domainsplit.sqlite3
+    echo '"${task.process}":' > versions.yml
+    echo '    stub: "true"' >> versions.yml
+    """
 }

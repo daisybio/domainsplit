@@ -37,4 +37,11 @@ process BUILD_PPI_NEGATIVE_POOL {
         sqlite3: \$(python3 -c 'import sqlite3; print(sqlite3.sqlite_version)')
     END_VERSIONS
     """
+
+    stub:
+    """
+    touch domainsplit.sqlite3 neg_pool.npz uniprot_pfam_mapping.json
+    echo '"${task.process}":' > versions.yml
+    echo '    stub: "true"' >> versions.yml
+    """
 }

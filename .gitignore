@@ -216,3 +216,7 @@ test-eval-env/*
 # Claude
 .claude/
 .mcp.json
+
+# nf-test fixtures (override the broad ignores above)
+!tests/data/
+!tests/data/**

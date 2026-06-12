@@ -60,6 +60,15 @@ workflow ENRICH_DDI_DATABASE {
         esm_domain_embeddings
     ).domainsplit_db
 
+    ch_versions = Channel.empty().mix(
+        INSERT_DOMAIN_GO_TERMS.out.versions,
+        INSERT_PROTEINS_WITH_EMBEDDINGS.out.versions,
+        INSERT_PROTEIN_GO_TERMS.out.versions,
+        INSERT_PPI.out.versions,
+        INSERT_DOMAIN_PROTEIN_MAPPING.out.versions,
+    )
+
     emit:
     domainsplit_db
+    versions = ch_versions
 }

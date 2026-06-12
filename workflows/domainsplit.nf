@@ -9,7 +9,7 @@ include { methodsDescriptionText      } from '../subworkflows/local/utils_nfcore
 include { INIT_DOMAINSPLIT_DB         } from '../modules/local/init_domainsplit_db/main.nf'
 include { COLLECT_DDI_DATA            } from '../subworkflows/local/collect_ddi_data/main.nf'
 include { CURATE_DOMAINS              } from '../subworkflows/local/curate_domains/main.nf'
-include { GENERATE_EMBEDDINGS         } from '../subworkflows/local/generate_embeddings/main.nf'
+include { generate_esm_embeddings     } from '../modules/local/esm_embeddings/main.nf'
 include { ENRICH_DDI_DATABASE         } from '../subworkflows/local/enrich_ddi_database/main.nf'
 include { SPLIT_DOMAINSPLIT_DATABASE  } from '../subworkflows/local/split_domainsplit_database/main.nf'
 include { ANALYZE_DDI_BIAS            } from '../modules/local/analyze_ddi_bias/main.nf'
@@ -22,6 +22,8 @@ include { ANALYZE_DDI_BIAS            } from '../modules/local/analyze_ddi_bias/
 
 workflow DOMAINSPLIT {
 main:
+    ch_versions = Channel.empty()
+
     input_uniprot_id_mapping = file(params.url_uniprot_id_mapping)
     input_uniprot_go_terms   = file(params.url_uniprot_go_terms)
     input_uniprot_sequences  = file(params.url_uniprot_sequences)
@@ -51,9 +53,9 @@ main:
 
     protein_domain_map = CURATE_DOMAINS.out.protein_domain_map
 
-    GENERATE_EMBEDDINGS(
-        protein_domain_map,
+    generate_esm_embeddings(
         input_uniprot_sequences,
+        protein_domain_map,
     )
 
     ENRICH_DDI_DATABASE(
@@ -65,8 +67,8 @@ main:
         input_uniprot_go_terms,
         input_string,
         input_uniprot_id_mapping,
-        GENERATE_EMBEDDINGS.out.esm_protein_embeddings,
-        GENERATE_EMBEDDINGS.out.esm_domain_embeddings,
+        generate_esm_embeddings.out.protein_embeddings,
+        generate_esm_embeddings.out.domain_embeddings,
     )
 
     ANALYZE_DDI_BIAS(
@@ -76,6 +78,27 @@ main:
     SPLIT_DOMAINSPLIT_DATABASE(
         ENRICH_DDI_DATABASE.out.domainsplit_db
     )
+
+    //
+    // Collate and save software versions
+    //
+    ch_versions = ch_versions.mix(
+        INIT_DOMAINSPLIT_DB.out.versions,
+        COLLECT_DDI_DATA.out.versions,
+        CURATE_DOMAINS.out.versions,
+        generate_esm_embeddings.out.versions,
+        ENRICH_DDI_DATABASE.out.versions,
+        ANALYZE_DDI_BIAS.out.versions,
+        SPLIT_DOMAINSPLIT_DATABASE.out.versions,
+    )
+
+    softwareVersionsToYAML(ch_versions)
+        .collectFile(
+            storeDir: "${params.outdir}/pipeline_info",
+            name: 'nf_core_' + 'pipeline_software_' + 'mqc_' + 'versions.yml',
+            sort: true,
+            newLine: true,
+        )
 
 emit:
     domainsplit_db  = ENRICH_DDI_DATABASE.out.domainsplit_db

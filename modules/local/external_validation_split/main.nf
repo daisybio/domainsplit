@@ -101,4 +101,12 @@ process SUBSET_DDIS_BY_SOURCE {
         f.write(f"    python: {sys.version.split()[0]}\\n")
         f.write(f"    sqlite3: {sqlite3.sqlite_version}\\n")
     """
+
+    stub:
+    output_split_info = [["${split_name}.sqlite3", split_name]]
+    """
+    touch ${split_name}.sqlite3
+    echo '"${task.process}":' > versions.yml
+    echo '    stub: "true"' >> versions.yml
+    """
 }

@@ -16,7 +16,9 @@ components:
   - insert/ppidm
   - insert/negatome
   - remove/self/interactions
-  - insert/ppi/negative/ddis
+  - build/ppi/negative/pool
+  - select/ppi/negative/dans
+  - insert/ppi/negative/selection
   - smoke/filter
 input:
   - domainsplit_db_in:

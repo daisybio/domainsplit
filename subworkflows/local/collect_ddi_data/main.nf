@@ -44,6 +44,8 @@ workflow COLLECT_DDI_DATA {
     negative_ppi_parquet
 
     main:
+    ch_versions = Channel.empty()
+
     if( !hippie_tsv || !ppidm_tsv || !negative_ppi_parquet ) {
         log.error "Required inputs missing: hippie_tsv, ppidm_tsv, and negative_ppi_parquet must be provided"
         exit 1
@@ -77,6 +79,7 @@ workflow COLLECT_DDI_DATA {
     // 6. optional removal of all self-interactions
     if (!params.self_interaction) {
         domainsplit_db = REMOVE_SELF_INTERACTIONS(domainsplit_db).domainsplit_db
+        ch_versions = ch_versions.mix(REMOVE_SELF_INTERACTIONS.out.versions)
     }
 
     // 7. high-confidence non-PPI negatives via uncapped DANS (Cappelletti et al.
@@ -113,9 +116,25 @@ workflow COLLECT_DDI_DATA {
 
     if (params.smoke_test_n_ddis != null) {
         domainsplit_db = SMOKE_FILTER(domainsplit_db, params.smoke_test_n_ddis).domainsplit_db
+        ch_versions = ch_versions.mix(SMOKE_FILTER.out.versions)
     }
+
+    ch_versions = ch_versions.mix(
+        DOWNLOAD_3DID_SQLITE.out.versions,
+        DOWNLOAD_NEGATOME.out.versions,
+        INSERT_3DID.out.versions,
+        BUILD_SWISSPROT_PFAM_MAP.out.versions,
+        INSERT_SINGLE_DOMAIN_PPI.out.versions,
+        INSERT_PPIDM.out.versions,
+        INSERT_NEGATOME.out.versions,
+        BUILD_PPI_NEGATIVE_POOL.out.versions,
+        SELECT_DELETION.out.versions,
+        SELECT_RANDOM_ADDITION.out.versions,
+        INSERT_PPI_NEGATIVE_SELECTION.out.versions,
+    )
 
     emit:
     domainsplit_db
     pfam_mapping
+    versions = ch_versions
 }

@@ -37,4 +37,11 @@ process INSERT_PPI_NEGATIVE_SELECTION {
         sqlite3: \$(python3 -c 'import sqlite3; print(sqlite3.sqlite_version)')
     END_VERSIONS
     """
+
+    stub:
+    """
+    touch domainsplit.sqlite3 negative_ppi_method_scores.tsv
+    echo '"${task.process}":' > versions.yml
+    echo '    stub: "true"' >> versions.yml
+    """
 }

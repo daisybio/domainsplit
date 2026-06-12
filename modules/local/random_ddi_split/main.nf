@@ -126,4 +126,14 @@ process RANDOM_DDI_SPLIT {
         f.write('"${task.process}":\\n')
         f.write(f"    python: {_sys.version.split()[0]}\\n")
     """
+
+    stub:
+    output_split_info = []
+    split_fractions.each { name, fraction -> output_split_info << ["${name}.sqlite3", name] }
+    def touch_cmds = output_split_info.collect { "touch ${it[0]}" }.join("\n    ")
+    """
+    ${touch_cmds}
+    echo '"${task.process}":' > versions.yml
+    echo '    stub: "true"' >> versions.yml
+    """
 }

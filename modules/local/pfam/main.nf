@@ -75,6 +75,13 @@ with open("versions.yml", "w") as f:
     f.write('"${task.process}":\\n')
     f.write(f"    python: {sys.version.split()[0]}\\n")
     """
+
+    stub:
+    """
+    touch PF00001.alignment.full.gz
+    echo '"${task.process}":' > versions.yml
+    echo '    stub: "true"' >> versions.yml
+    """
 }
 
 process CREATE_PROTEIN_DOMAIN_MAPPING {
@@ -168,5 +175,13 @@ with gzip.open("$out_path", 'wt') as out:
 with open("versions.yml", "w") as f:
     f.write('"${task.process}":\\n')
     f.write(f"    python: {sys.version.split()[0]}\\n")
+    """
+
+    stub:
+    out_path = 'protein_domain_mapping.csv.gz'
+    """
+    touch ${out_path}
+    echo '"${task.process}":' > versions.yml
+    echo '    stub: "true"' >> versions.yml
     """
 }

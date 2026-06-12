@@ -119,6 +119,20 @@ workflow SPLIT_DOMAINSPLIT_DATABASE {
         map_split_dbs(SUBSET_DDIS_BY_SOURCE.out.split_info, SUBSET_DDIS_BY_SOURCE.out.split_dbs, "external_validation_random_addition")
     )
 
+    // NB: MMSEQS_EASYCLUSTER (nf-core) reports its version via the `versions`
+    // channel topic, not an `emit: versions` output, so it is not mixed here.
+    ch_versions = Channel.empty().mix(
+        EXTRACT_DOMAIN_SEQUENCES.out.versions,
+        RANDOM_DDI_SPLIT_DEL.out.versions,
+        RANDOM_DDI_SPLIT_RAND.out.versions,
+        MLS_DOMAIN_DEL.out.versions,
+        MLS_DOMAIN_RAND.out.versions,
+        MLS_TRAINVAL_DEL.out.versions,
+        MLS_TRAINVAL_RAND.out.versions,
+        SUBSET_DDIS_BY_SOURCE.out.versions,
+    )
+
     emit:
     split_db = split_ch
+    versions = ch_versions
 }

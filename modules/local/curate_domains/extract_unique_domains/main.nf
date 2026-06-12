@@ -32,4 +32,11 @@ process EXTRACT_UNIQUE_DOMAINS {
         sqlite3: \$(sqlite3 --version | awk '{print \$1}')
     END_VERSIONS
     """
+
+    stub:
+    """
+    echo PF00001 > pfam_ids.txt
+    echo '"${task.process}":' > versions.yml
+    echo '    stub: "true"' >> versions.yml
+    """
 }
