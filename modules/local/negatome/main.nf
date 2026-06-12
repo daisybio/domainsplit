@@ -2,7 +2,7 @@ process DOWNLOAD_NEGATOME {
     tag "negatome"
     label 'process_low'
     conda "${moduleDir}/environment.yml"
-    container "docker://konstantinpelz/domainsplit-general:1.0.0"
+    container "docker.io/konstantinpelz/domainsplit-general:1.0.0"
 
     input:
     val url
@@ -52,5 +52,12 @@ process DOWNLOAD_NEGATOME {
     with open("versions.yml", "w") as f:
         f.write('"${task.process}":\\n')
         f.write(f"    python: {sys.version.split()[0]}\\n")
+    """
+
+    stub:
+    """
+    touch combined_pfam.txt
+    echo '"${task.process}":' > versions.yml
+    echo '    stub: "true"' >> versions.yml
     """
 }

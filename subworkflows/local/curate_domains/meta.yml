@@ -1,0 +1,30 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/nf-core/modules/master/subworkflows/yaml-schema.json
+name: "curate_domains"
+description: Enumerate the unique Pfam domains referenced by the DDI set, download their Pfam alignments, and build a protein-to-domain map.
+keywords:
+  - pfam
+  - domain
+  - alignment
+  - mapping
+components:
+  - extract/unique/domains
+  - download/pfam/alignments/batch
+  - create/protein/domain/mapping
+input:
+  - domainsplit_db:
+      type: file
+      description: Domainsplit SQLite after DDI collection and smoke filtering.
+      pattern: "*.sqlite3"
+  - input_uniprot_id_mapping:
+      type: file
+      description: UniProt ID mapping used to associate proteins with Pfam domains.
+      pattern: "*.{tsv,dat,gz}"
+output:
+  - protein_domain_map:
+      type: file
+      description: Protein-to-Pfam-domain mapping derived from the Pfam alignments.
+      pattern: "*.{tsv,parquet}"
+authors:
+  - "@KonstantinPelz"
+maintainers:
+  - "@KonstantinPelz"

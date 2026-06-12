@@ -2,7 +2,7 @@ process INSERT_DOMAIN_GO_TERMS {
     tag "insert_domain_go_terms"
     label 'process_low'
     conda "${moduleDir}/environment.yml"
-    container "docker://konstantinpelz/domainsplit-general:1.0.0"
+    container "docker.io/konstantinpelz/domainsplit-general:1.0.0"
 
     input:
     path domainsplit_db_in, stageAs: 'input.domainsplit.sqlite3'
@@ -19,5 +19,12 @@ process INSERT_DOMAIN_GO_TERMS {
         --pfam2go ${pfam2go} \\
         --versions versions.yml \\
         --process-name "${task.process}"
+    """
+
+    stub:
+    """
+    touch domainsplit.sqlite3
+    echo '"${task.process}":' > versions.yml
+    echo '    stub: "true"' >> versions.yml
     """
 }

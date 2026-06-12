@@ -22,7 +22,7 @@ process FILTER_SEQUENCES {
     tag { "${protein_domain_map.simpleName}" }
     label 'process_medium'
     conda "${moduleDir}/environment.yml"
-    container "docker://konstantinpelz/domainsplit-general:1.0.0"
+    container "docker.io/konstantinpelz/domainsplit-general:1.0.0"
 
     input:
     path protein_domain_map
@@ -66,6 +66,15 @@ process FILTER_SEQUENCES {
         f.write(f"    python: {sys.version.split()[0]}\\n")
         f.write(f"    biopython: {Bio.__version__}\\n")
     """
+
+    stub:
+    protein_meta = [id: "protein_sequences"]
+    domain_meta = [id: "domain_sequences"]
+    """
+    touch uniprot_filtered.fasta.gz domain_sequences.fasta.gz
+    echo '"${task.process}":' > versions.yml
+    echo '    stub: "true"' >> versions.yml
+    """
 }
 
 // Per-residue protein embeddings. One task per FASTA shard.
@@ -74,7 +83,7 @@ process GENERATE_PROTEIN_ESM_EMBEDDINGS_CHUNK {
     label 'process_gpu_large'
     secret 'HF_TOKEN'
     conda "${moduleDir}/environment.yml"
-    container "docker://konstantinpelz/domainsplit-gpu:1.0.0"
+    container "docker.io/konstantinpelz/domainsplit-gpu:1.0.0"
     containerOptions {
         workflow.containerEngine == 'singularity' || workflow.containerEngine == 'apptainer'
             ? '--env HF_TOKEN --env HF_HOME --env HUGGINGFACE_HUB_CACHE'
@@ -108,6 +117,13 @@ process GENERATE_PROTEIN_ESM_EMBEDDINGS_CHUNK {
         --max-len ${params.esm_max_len} \\
         --smoke-limit ${smoke}
     """
+
+    stub:
+    """
+    touch ${input_fasta.simpleName}.esm.h5
+    echo '"${task.process}":' > versions.yml
+    echo '    stub: "true"' >> versions.yml
+    """
 }
 
 // GPU-pooled domain embeddings. One task per FASTA shard.
@@ -116,7 +132,7 @@ process GENERATE_DOMAIN_ESM_EMBEDDINGS_CHUNK {
     label 'process_gpu_large'
     secret 'HF_TOKEN'
     conda "${moduleDir}/environment.yml"
-    container "docker://konstantinpelz/domainsplit-gpu:1.0.0"
+    container "docker.io/konstantinpelz/domainsplit-gpu:1.0.0"
     containerOptions {
         workflow.containerEngine == 'singularity' || workflow.containerEngine == 'apptainer'
             ? '--env HF_TOKEN --env HF_HOME --env HUGGINGFACE_HUB_CACHE'
@@ -150,6 +166,13 @@ process GENERATE_DOMAIN_ESM_EMBEDDINGS_CHUNK {
         --max-len ${params.esm_max_len} \\
         --smoke-limit ${smoke}
     """
+
+    stub:
+    """
+    touch ${input_fasta.simpleName}.esm.h5
+    echo '"${task.process}":' > versions.yml
+    echo '    stub: "true"' >> versions.yml
+    """
 }
 
 workflow generate_esm_embeddings {
@@ -169,7 +192,18 @@ workflow generate_esm_embeddings {
     protein_embeddings = JOIN_PROTEIN_EMBEDDINGS('esm_protein_embeddings', protein_chunks.chunk.collect()).joined
     domain_embeddings  = JOIN_DOMAIN_EMBEDDINGS('esm_domain_embeddings',  domain_chunks.chunk.collect() ).joined
 
+    ch_versions = Channel.empty().mix(
+        FILTER_SEQUENCES.out.versions,
+        SHARD_PROTEIN_FASTA.out.versions,
+        SHARD_DOMAIN_FASTA.out.versions,
+        GENERATE_PROTEIN_ESM_EMBEDDINGS_CHUNK.out.versions,
+        GENERATE_DOMAIN_ESM_EMBEDDINGS_CHUNK.out.versions,
+        JOIN_PROTEIN_EMBEDDINGS.out.versions,
+        JOIN_DOMAIN_EMBEDDINGS.out.versions,
+    )
+
     emit:
     protein_embeddings
     domain_embeddings
+    versions = ch_versions
 }

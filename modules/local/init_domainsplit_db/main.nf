@@ -2,7 +2,7 @@ process INIT_DOMAINSPLIT_DB {
     tag "init_domainsplit_db"
     label 'process_low'
     conda "${moduleDir}/environment.yml"
-    container "docker://konstantinpelz/domainsplit-general:1.0.0"
+    container "docker.io/konstantinpelz/domainsplit-general:1.0.0"
 
     output:
     path "domainsplit.sqlite3", emit: domainsplit_db
@@ -31,7 +31,7 @@ process INIT_DOMAINSPLIT_DB {
             source VARCHAR(255),
             FOREIGN KEY(domain_id_a) REFERENCES domain ON DELETE CASCADE,
             FOREIGN KEY(domain_id_b) REFERENCES domain ON DELETE CASCADE,
-            UNIQUE(domain_id_a, domain_id_b)
+            UNIQUE(domain_id_a, domain_id_b, source)
         );
 
         CREATE TABLE protein (
@@ -82,5 +82,12 @@ process INIT_DOMAINSPLIT_DB {
         f.write('"${task.process}":\\n')
         f.write(f"    python: {sys.version.split()[0]}\\n")
         f.write(f"    sqlite3: {sqlite3.sqlite_version}\\n")
+    """
+
+    stub:
+    """
+    touch domainsplit.sqlite3
+    echo '"${task.process}":' > versions.yml
+    echo '    stub: "true"' >> versions.yml
     """
 }

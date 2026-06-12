@@ -2,7 +2,7 @@ process DOWNLOAD_3DID_SQLITE {
     tag "3did"
     label 'process_low'
     conda "${moduleDir}/environment.yml"
-    container "docker://konstantinpelz/domainsplit-general:1.0.0"
+    container "docker.io/konstantinpelz/domainsplit-general:1.0.0"
 
     input:
     path mysql_gz_file
@@ -26,5 +26,12 @@ process DOWNLOAD_3DID_SQLITE {
         python: \$(python3 --version | awk '{print \$2}')
         sqlite3: \$(python3 -c 'import sqlite3; print(sqlite3.sqlite_version)')
     END_VERSIONS
+    """
+
+    stub:
+    """
+    touch 3did.sqlite3
+    echo '"${task.process}":' > versions.yml
+    echo '    stub: "true"' >> versions.yml
     """
 }

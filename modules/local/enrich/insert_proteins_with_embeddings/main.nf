@@ -2,7 +2,7 @@ process INSERT_PROTEINS_WITH_EMBEDDINGS {
     tag "insert_proteins_with_embeddings"
     label 'process_high'
     conda "${moduleDir}/environment.yml"
-    container "docker://konstantinpelz/domainsplit-general:1.0.0"
+    container "docker.io/konstantinpelz/domainsplit-general:1.0.0"
 
     input:
     path domainsplit_db_in, stageAs: 'input.domainsplit.sqlite3'
@@ -26,5 +26,12 @@ process INSERT_PROTEINS_WITH_EMBEDDINGS {
         --esm-protein-embeddings ${esm_protein_embeddings} \\
         --versions versions.yml \\
         --process-name "${task.process}"
+    """
+
+    stub:
+    """
+    touch domainsplit.sqlite3
+    echo '"${task.process}":' > versions.yml
+    echo '    stub: "true"' >> versions.yml
     """
 }

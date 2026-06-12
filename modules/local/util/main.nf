@@ -15,7 +15,7 @@ process SHARD_FASTA {
     tag { "${input_fasta.simpleName}:${num_shards}" }
     label 'process_low'
     conda "${moduleDir}/environment.yml"
-    container "docker://konstantinpelz/domainsplit-general:1.0.0"
+    container "docker.io/konstantinpelz/domainsplit-general:1.0.0"
 
     input:
     tuple val(meta), path(input_fasta)
@@ -39,6 +39,13 @@ process SHARD_FASTA {
     print(f"    biopython: {Bio.__version__}")
     PY
     """
+
+    stub:
+    """
+    touch ${meta.id}_shard_0.fasta.gz
+    echo '"${task.process}":' > versions.yml
+    echo '    stub: "true"' >> versions.yml
+    """
 }
 
 // Merge a collection of HDF5 chunks (plain or gzipped) into one HDF5 file.
@@ -51,7 +58,7 @@ process JOIN_HDF_FILES {
     tag { output_name }
     label 'process_low'
     conda "${moduleDir}/environment.yml"
-    container "docker://konstantinpelz/domainsplit-general:1.0.0"
+    container "docker.io/konstantinpelz/domainsplit-general:1.0.0"
 
     input:
     val output_name
@@ -88,5 +95,12 @@ process JOIN_HDF_FILES {
         f.write('"${task.process}":\\n')
         f.write(f"    python: {sys.version.split()[0]}\\n")
         f.write(f"    h5py: {h5py.__version__}\\n")
+    """
+
+    stub:
+    """
+    touch ${output_name}.h5
+    echo '"${task.process}":' > versions.yml
+    echo '    stub: "true"' >> versions.yml
     """
 }

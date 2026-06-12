@@ -3,7 +3,4 @@ channels:
   - bioconda
 dependencies:
   - python=3.12
-  - sqlite
-  - pandas
-  - pyarrow
-  - requests
+  - numpy

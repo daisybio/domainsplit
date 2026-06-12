@@ -2,7 +2,7 @@ process EXTRACT_UNIQUE_DOMAINS {
     tag { "${domainsplit_db.simpleName}" }
     label 'process_low'
     conda "${moduleDir}/environment.yml"
-    container "docker://konstantinpelz/domainsplit-general:1.0.0"
+    container "docker.io/konstantinpelz/domainsplit-general:1.0.0"
 
     input:
     path domainsplit_db
@@ -31,5 +31,12 @@ process EXTRACT_UNIQUE_DOMAINS {
     "${task.process}":
         sqlite3: \$(sqlite3 --version | awk '{print \$1}')
     END_VERSIONS
+    """
+
+    stub:
+    """
+    echo PF00001 > pfam_ids.txt
+    echo '"${task.process}":' > versions.yml
+    echo '    stub: "true"' >> versions.yml
     """
 }

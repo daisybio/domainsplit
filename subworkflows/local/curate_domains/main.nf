@@ -28,6 +28,13 @@ workflow CURATE_DOMAINS {
         pfam_files.collect()
     ).mapping
 
+    ch_versions = Channel.empty().mix(
+        EXTRACT_UNIQUE_DOMAINS.out.versions,
+        DOWNLOAD_PFAM_ALIGNMENTS_BATCH.out.versions,
+        CREATE_PROTEIN_DOMAIN_MAPPING.out.versions,
+    )
+
     emit:
     protein_domain_map
+    versions = ch_versions
 }
