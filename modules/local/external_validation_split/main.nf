@@ -9,7 +9,7 @@
 
 process SUBSET_DDIS_BY_SOURCE {
     tag "subset_${split_name}"
-    label 'process_medium'
+    label 'process_high'
     conda "${moduleDir}/environment.yml"
     container "docker.io/konstantinpelz/domainsplit-general:1.0.0"
 

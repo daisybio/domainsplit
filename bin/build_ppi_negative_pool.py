@@ -69,7 +69,7 @@ def parse_args():
 def fetch_gene_mappings(gene_names, batch_size=100):
     BASE_URL = "https://rest.uniprot.org/uniprotkb/search"
     HEADERS = {"accept": "application/json"}
-    MAX_RETRIES = 3
+    MAX_RETRIES = 10
 
     gene_list = sorted(gene_names)
     gene_to_uniprot = {}
@@ -98,7 +98,7 @@ def fetch_gene_mappings(gene_names, batch_size=100):
                 break
             except requests.RequestException as exc:
                 if attempt < MAX_RETRIES - 1:
-                    wait = 2 ** (attempt + 1)
+                    wait = min(2 ** (attempt + 1), 60)
                     log(f"batch {batch_num}/{n_batches} attempt {attempt + 1} failed: {exc}; retrying in {wait}s")
                     time.sleep(wait)
                 else:
@@ -247,7 +247,7 @@ def main():
     log(f"n_ppis_after_n_tested_filter (>= {args.min_n_tested}) = {n_after}")
     log(f"n_unique_genes = {len(unique_genes)}")
 
-    gene_to_uniprot, uniprot_to_pfams = fetch_gene_mappings(unique_genes)
+    gene_to_uniprot, uniprot_to_pfams = fetch_gene_mappings(unique_genes, batch_size=50)
 
     log(f"writing UniProt -> Pfam mapping to {args.pfam_mapping_out}")
     with open(args.pfam_mapping_out, "w") as fh:
