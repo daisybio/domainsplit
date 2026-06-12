@@ -59,8 +59,6 @@
                 "negative_ppi",
                 "negative_ppi/negative_ppi_method_scores.tsv",
                 "pipeline_info",
-                "pipeline_info/nf_core_pipeline_software_mqc_versions.yml",
-                "pipeline_info/params_2026-06-12_11-10-10.json",
                 "random",
                 "random/optimization.sqlite3",
                 "random/test.sqlite3",

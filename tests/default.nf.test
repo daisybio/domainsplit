@@ -20,9 +20,10 @@ nextflow_pipeline {
             // empty .gz/.h5 stubs break content hashing). We therefore snapshot only
             // the set of produced output paths -- this verifies the whole DAG wires
             // together (channel topology, the split fan-out, publish paths) end to
-            // end without any downloads, GPU, or containers. pipeline_info/ is
-            // ignored because its filenames embed a run timestamp.
-            def stable_path = getAllFilesFromDir(params.outdir, relative: true, includeDir: true, ignore: ['pipeline_info/execution_*', 'pipeline_info/pipeline_dag_*'])
+            // end without any downloads, GPU, or containers. Everything under
+            // pipeline_info/ is ignored because those filenames embed a run
+            // timestamp (e.g. params_<timestamp>.json), which is non-deterministic.
+            def stable_path = getAllFilesFromDir(params.outdir, relative: true, includeDir: true, ignore: ['pipeline_info/*'])
             // Snapshot the collated software versions with the Nextflow version line
             // stripped (so the assertion survives Nextflow upgrades). This also
             // satisfies the nf-core `nf_test_content` lint rule, which requires a
