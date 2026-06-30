@@ -11,6 +11,7 @@ include { COLLECT_DDI_DATA            } from '../subworkflows/local/collect_ddi_
 include { CURATE_DOMAINS              } from '../subworkflows/local/curate_domains/main.nf'
 include { generate_esm_embeddings     } from '../modules/local/esm_embeddings/main.nf'
 include { ENRICH_DDI_DATABASE         } from '../subworkflows/local/enrich_ddi_database/main.nf'
+//include { ENRICH_STRUCTURAL           } from '../subworkflows/local/enrich_structural/main.nf'
 include { SPLIT_DOMAINSPLIT_DATABASE  } from '../subworkflows/local/split_domainsplit_database/main.nf'
 include { ANALYZE_DDI_BIAS            } from '../modules/local/analyze_ddi_bias/main.nf'
 
@@ -29,6 +30,7 @@ main:
     input_uniprot_sequences  = file(params.url_uniprot_sequences)
     input_string             = file(params.url_string)
     input_pfam2go            = file(params.url_pfam2go)
+    input_3did               = file(params.url_3did)
 
     def prott5_file = file(params.url_uniprot_prott5_embeddings)
 
@@ -70,6 +72,17 @@ main:
         generate_esm_embeddings.out.protein_embeddings,
         generate_esm_embeddings.out.domain_embeddings,
     )
+
+    // if (params.structural) {
+    //     ENRICH_STRUCTURAL(
+    //         ENRICH_DDI_DATABASE.out.domainsplit_db,
+    //         input_3did
+    //     )
+    //     final_db = ENRICH_STRUCTURAL.out.domainsplit_db
+    // } else {
+    //     final_db = ENRICH_DDI_DATABASE.out.domainsplit_db
+    // }
+
 
     ANALYZE_DDI_BIAS(
         ENRICH_DDI_DATABASE.out.domainsplit_db
