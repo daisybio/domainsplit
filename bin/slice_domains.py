@@ -1,5 +1,6 @@
 #! /usr/bin/env python3
 
+import os
 import shutil
 import sys
 from pathlib import Path
@@ -15,36 +16,34 @@ SOURCES = ("AF3", "RF2")
 
 def parse_args():
     p = ap.ArgumentParser(description=__doc__, formatter_class=ap.RawDescriptionHelpFormatter)
-    p.add_argument("--db_in", required=True, help="SQLite DB with complex_chain_map populated by the predictors")
+    p.add_argument("--db_in", required=True)
     p.add_argument("--db_out", required=True)
-    p.add_argument("--pdb_dir", required=True)
+    p.add_argument("--pdb_dir_af", required=True)
+    p.add_argument("--pdb_dir_rf", required=True)
     p.add_argument("--versions", required=True)
     p.add_argument("--process_name", required=True)
     return p.parse_args()
 
 
 
-def slice_complex(conn, pdb_dir: Path, source: str, protein_id_a: int, uniprot_id_a: str, chain_id_a: str, protein_id_b: int, uniprot_id_b: str, chain_id_b: str):
+def slice_complex(conn, pdb_file: Path, source: str):
     """
     Slice every domain (single) and every matching DDI pair out of one
-    predicted complex.  Returns (n_domains_stored, n_ddis_stored).
+    predicted complex.
     """
-    pdb_path = pdb_dir / f"{uniprot_id_a}_{uniprot_id_b}_{source}.pdb"
-    if not pdb_path.exists():
-        print(f"  WARNING: missing predicted PDB for {uniprot_id_a}/{uniprot_id_b} "
-              f"({source}): {pdb_path}", flush=True)
-        return 0, 0
+    protein_id_a, protein_id_b = pdb_file.stem.split("_")
+    chain_id_a, chain_id_b = "A", "B"
 
-    domains_a = utils_struct.get_domain_mapping(conn, protein_id_a)
-    domains_b = utils_struct.get_domain_mapping(conn, protein_id_b)
+    domains_a = utils_struct.get_domain_mapping(conn, int(protein_id_a))
+    domains_b = utils_struct.get_domain_mapping(conn, int(protein_id_b))
 
     if not domains_a or not domains_b:
         print(f"  WARNING: missing domain mapping for "
-              f"{uniprot_id_a}/{uniprot_id_b} ({source}) -- "
+              f"{protein_id_a}/{protein_id_b} ({source}) -- "
               f"domains_a={len(domains_a)}, domains_b={len(domains_b)}", flush=True)
 
 
-    n_ddis = 0
+    
     for (domain_id_a, start_a, end_a) in domains_a:
         for (domain_id_b, start_b, end_b) in domains_b:
             ddi_id = utils_struct.check_ddi_exists(conn, domain_id_a, domain_id_b)
@@ -53,17 +52,37 @@ def slice_complex(conn, pdb_dir: Path, source: str, protein_id_a: int, uniprot_i
 
             try:
                 pdb_gz = utils_struct.ddi_pair_to_bytes(
-                    str(pdb_path),
+                    str(pdb_file),
                     chain_id_a, start_a, end_a,
                     chain_id_b, start_b, end_b,
                 )
             except Exception as exc:
                 print(f"  WARNING: could not slice DDI pair "
-                      f"{domain_id_a}/{domain_id_b} from {pdb_path}: {exc}", flush=True)
+                      f"{domain_id_a}/{domain_id_b} from {pdb_file}: {exc}", flush=True)
                 continue
 
-            utils_struct.store_domain_slice(conn, protein_id_a, protein_id_b, ddi_id, pdb_gz, source)
-            n_ddis += 1
+            utils_struct.store_domain_slice(conn, ddi_id, int(domain_id_a), int(domain_id_b), int(protein_id_a), int(protein_id_b), pdb_gz, source)
+
+
+
+
+    # for (domain_id_a, start_a, end_a) in domains_a:
+    #     # Subset to single domains and store them as well in the protein_domain_map using utils_struct.add_pdb_to_mapping(conn, domain_id, protein_id, pdb_gz, source)
+    #     try:
+    #         pdb_gz_a = utils_struct.domain_to_bytes(str(pdb_file), chain_id_a, start_a, end_a)
+    #         utils_struct.add_pdb_to_mapping(conn, domain_id_a, int(protein_id_a), pdb_gz_a, source)
+    #     except Exception as exc:
+    #         print(f"  WARNING: could not slice domain "
+    #               f"{domain_id_a} from {pdb_file}: {exc}", flush=True)
+    # for (domain_id_b, start_b, end_b) in domains_b:
+    #     try:
+    #         pdb_gz_b = utils_struct.domain_to_bytes(str(pdb_file), chain_id_b, start_b, end_b)
+    #         utils_struct.add_pdb_to_mapping(conn, domain_id_b, int(protein_id_b), pdb_gz_b, source)
+    #     except Exception as exc:
+    #         print(f"  WARNING: could not slice domain "
+    #               f"{domain_id_b} from {pdb_file}: {exc}", flush=True)
+            
+
 
 
 def _write_versions(versions_path: str, process_name: str) -> None:
@@ -73,34 +92,61 @@ def _write_versions(versions_path: str, process_name: str) -> None:
         fh.write(f"    biopython: {Bio.__version__}\n")
 
 
+
+
+def enrich_db_with_predictions(conn, pdb_dir: Path, source: str):
+    
+    pdb_files = list(pdb_dir.glob(f"*.pdb"))
+    print(f"[slice_domains] source={source}: {len(pdb_files)} predicted "
+          f"complexes to slice", flush=True)
+
+    for pdb_path in pdb_files:
+        slice_complex(conn, pdb_path, source)     
+        conn.commit()
+   
+
+
 def main():
     args = parse_args()
-    pdb_dir = Path(args.pdb_dir) # contains predicted PDBs
+    
+    pdb_dir_af = Path(args.pdb_dir_af) # contains predicted PDBs for AF3
+    pdb_dir_rf = Path(args.pdb_dir_rf) # contains predicted PDBs for RF2
 
     shutil.copy(args.db_in, args.db_out)
     conn = utils_struct.connect_db(args.db_out)
-    utils_struct.create_tables(conn)
+    utils_struct.create_ds_table(conn)
 
-    total_domains = total_ddis = total_complexes = 0
-
-    for source in SOURCES:
-        complexes = utils_struct.get_predicted_complexes(conn, source)
-        print(f"[slice_domains] source={source}: {len(complexes)} predicted "
-              f"complexes to slice", flush=True)
-
-        for (protein_id_a, uniprot_id_a, chain_a, protein_id_b, uniprot_id_b, chain_b) in complexes:
-            slice_complex(
-                conn, pdb_dir, source,
-                protein_id_a, uniprot_id_a, chain_a,
-                protein_id_b, uniprot_id_b, chain_b,
-            )
-            conn.commit()
-
+    # Check if output directories exist, if not skip slicing for that source
+    if not pdb_dir_af.exists():
+        print(f"[slice_domains] WARNING: AF3 PDB directory {pdb_dir_af} does not exist, skipping AF3 slicing", flush=True)
+    else:
+        enrich_db_with_predictions(conn, pdb_dir_af, "AF3")
+    if not pdb_dir_rf.exists():
+        print(f"[slice_domains] WARNING: RF PDB directory {pdb_dir_rf} does not exist, skipping RF slicing", flush=True)
+    else:
+        enrich_db_with_predictions(conn, pdb_dir_rf, "RF")
+    enrich_db_with_predictions(conn, pdb_dir_af, "AF3")
+    enrich_db_with_predictions(conn, pdb_dir_rf, "RF")
     conn.close()
+
+    
+    
+
+    # for source in SOURCES:
+    #     # Access pdb files for this source and slice out domains and DDI pairs
+    #     print(f"[slice_domains] source={source}: {len(complexes)} predicted "
+    #           f"complexes to slice", flush=True)
+
+    #     for (protein_id_a, uniprot_id_a, chain_a, protein_id_b, uniprot_id_b, chain_b) in complexes:
+    #         slice_complex(
+    #             conn, pdb_dir, source,
+    #             protein_id_a, uniprot_id_a, chain_a,
+    #             protein_id_b, uniprot_id_b, chain_b,
+    #         )
+    #         conn.commit()
+
+    # conn.close()
     _write_versions(args.versions, args.process_name)
-    print(f"[slice_domains] done: {total_complexes} complexes processed, "
-          f"{total_domains} domain slices, {total_ddis} DDI-pair slices stored",
-          flush=True)
 
 
 

@@ -41,6 +41,7 @@ process INIT_DOMAINSPLIT_DB {
             prott5_per_residue,
             esm3_per_residue,
             esmc_per_residue,
+            esm3_per_residue_structure,
             UNIQUE(uniprot_id)
         );
         CREATE TABLE protein_go_terms(
@@ -58,7 +59,7 @@ process INIT_DOMAINSPLIT_DB {
             domain_id REFERENCES domain ON DELETE CASCADE,
             protein_id REFERENCES protein ON DELETE CASCADE,
             domain_sequence, start_pos, end_pos,
-            esm3_per_domain, esmc_per_domain,
+            esm3_per_domain, esmc_per_domain, esm3_per_domain_structure,
             UNIQUE(domain_id, protein_id)
         );
 

@@ -76,6 +76,8 @@ def main() -> int:
             seq_id = record[0]
             esm3_key = f"{seq_id}/esm3"
             esmc_key = f"{seq_id}/esmc"
+            esm3_struct_key = f"{seq_id}/esm3_structure"
+            
             esm3_embedding = (
                 np.array(esm_protein_embeddings[esm3_key]).dumps()
                 if esm3_key in esm_protein_embeddings
@@ -86,7 +88,14 @@ def main() -> int:
                 if esmc_key in esm_protein_embeddings
                 else None
             )
-            return (esm3_embedding, esmc_embedding)
+            
+            esm3_struct_embedding = (
+                np.array(esm_protein_embeddings[esm3_struct_key]).dumps()
+                if esm3_struct_key in esm_protein_embeddings
+                else None
+            )
+            
+            return (esm3_embedding, esmc_embedding, esm3_struct_embedding)
 
         uniprot_records = map(
             lambda record: record + get_esm_embeddings(record), uniprot_records
@@ -96,9 +105,9 @@ def main() -> int:
         conn.executemany(
             """INSERT INTO protein (
                 uniprot_id, sequence,
-                prott5_per_residue, esm3_per_residue, esmc_per_residue
+                prott5_per_residue, esm3_per_residue, esmc_per_residue, esm3_per_residue_structure
             )
-            VALUES (?, ?, ?, ?, ?);""",
+            VALUES (?, ?, ?, ?, ?, ?);""",
             uniprot_records,
         )
     conn.commit()

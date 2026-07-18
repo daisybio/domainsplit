@@ -77,6 +77,41 @@ process FILTER_SEQUENCES {
     """
 }
 
+
+
+process FETCH_PROTEIN_STRUCTURES {
+    tag { protein_fasta.simpleName }
+    label 'process_medium'
+    conda "${moduleDir}/environment.yml"
+    container "docker.io/konstantinpelz/domainsplit-general:1.0.0"
+
+    input:
+    tuple val(protein_meta), path(protein_fasta)
+
+    output:
+    path "protein_pdb_mapping.csv", emit: mapping
+    path "structure_report.csv", emit: report
+    path "versions.yml", emit: versions
+
+    script:
+    """
+    fetch_pdb_structures.py \\
+        --input-fasta ${protein_fasta} \\
+        --output-mapping protein_pdb_mapping.csv \\
+        --report structure_report.csv \\
+        --versions versions.yml \\
+        --process-name "${task.process}"
+    """
+    stub:
+    """
+    touch protein_pdb_mapping.csv structure_report.csv
+    echo '"${task.process}":' > versions.yml
+    echo '    stub: "true"' >> versions.yml
+    """
+}
+
+
+
 // Per-residue protein embeddings. One task per FASTA shard.
 process GENERATE_PROTEIN_ESM_EMBEDDINGS_CHUNK {
     tag { input_fasta.simpleName }
@@ -92,6 +127,7 @@ process GENERATE_PROTEIN_ESM_EMBEDDINGS_CHUNK {
 
     input:
     path input_fasta
+    path structures_mapping
 
     output:
     path "${input_fasta.simpleName}.esm.h5", emit: chunk
@@ -100,6 +136,8 @@ process GENERATE_PROTEIN_ESM_EMBEDDINGS_CHUNK {
     script:
     def smoke = params.esm_smoke_test ? 100 : 0
     def hf_cache = params.esm_hf_cache_dir ?: ''
+    def struct_flag = "--structures-mapping \"${structures_mapping}\"" // params.esm_use_structure ?  : ''
+
     """
     if [ -n "${hf_cache}" ]; then
         mkdir -p "${hf_cache}"
@@ -115,7 +153,8 @@ process GENERATE_PROTEIN_ESM_EMBEDDINGS_CHUNK {
         --mode per_residue \\
         --batch-size ${params.esm_batch_size_protein} \\
         --max-len ${params.esm_max_len} \\
-        --smoke-limit ${smoke}
+        --smoke-limit ${smoke} \\
+        ${struct_flag} 
     """
 
     stub:
@@ -141,6 +180,7 @@ process GENERATE_DOMAIN_ESM_EMBEDDINGS_CHUNK {
 
     input:
     path input_fasta
+    path structures_mapping
 
     output:
     path "${input_fasta.simpleName}.esm.h5", emit: chunk
@@ -149,6 +189,7 @@ process GENERATE_DOMAIN_ESM_EMBEDDINGS_CHUNK {
     script:
     def smoke = params.esm_smoke_test ? 100 : 0
     def hf_cache = params.esm_hf_cache_dir ?: ''
+    def struct_flag = "--structures-mapping \"${structures_mapping}\"" // params.esm_use_structure ? "--structures-mapping \"${structures_mapping}\"" : ''
     """
     if [ -n "${hf_cache}" ]; then
         mkdir -p "${hf_cache}"
@@ -164,7 +205,8 @@ process GENERATE_DOMAIN_ESM_EMBEDDINGS_CHUNK {
         --mode pooled \\
         --batch-size ${params.esm_batch_size_domain} \\
         --max-len ${params.esm_max_len} \\
-        --smoke-limit ${smoke}
+        --smoke-limit ${smoke} \\
+        ${struct_flag}
     """
 
     stub:
@@ -183,17 +225,21 @@ workflow generate_esm_embeddings {
     main:
     filter_result = FILTER_SEQUENCES(protein_domain_map, uniprotkb_database)
 
+    structures_result = FETCH_PROTEIN_STRUCTURES(filter_result.protein_sequences)
+    mapping = structures_result.mapping
+
     protein_shards = SHARD_PROTEIN_FASTA(filter_result.protein_sequences, params.esm_protein_shards).shards.flatten()
     domain_shards  = SHARD_DOMAIN_FASTA(filter_result.domain_sequences,  params.esm_domain_shards ).shards.flatten()
 
-    protein_chunks = GENERATE_PROTEIN_ESM_EMBEDDINGS_CHUNK(protein_shards)
-    domain_chunks  = GENERATE_DOMAIN_ESM_EMBEDDINGS_CHUNK(domain_shards)
+    protein_chunks = GENERATE_PROTEIN_ESM_EMBEDDINGS_CHUNK(protein_shards, mapping)
+    domain_chunks  = GENERATE_DOMAIN_ESM_EMBEDDINGS_CHUNK(domain_shards, mapping)
 
     protein_embeddings = JOIN_PROTEIN_EMBEDDINGS('esm_protein_embeddings', protein_chunks.chunk.collect()).joined
     domain_embeddings  = JOIN_DOMAIN_EMBEDDINGS('esm_domain_embeddings',  domain_chunks.chunk.collect() ).joined
 
     ch_versions = Channel.empty().mix(
         FILTER_SEQUENCES.out.versions,
+        FETCH_PROTEIN_STRUCTURES.out.versions,
         SHARD_PROTEIN_FASTA.out.versions,
         SHARD_DOMAIN_FASTA.out.versions,
         GENERATE_PROTEIN_ESM_EMBEDDINGS_CHUNK.out.versions,
@@ -205,5 +251,6 @@ workflow generate_esm_embeddings {
     emit:
     protein_embeddings
     domain_embeddings
+    structure_report = structures_result.report
     versions = ch_versions
 }

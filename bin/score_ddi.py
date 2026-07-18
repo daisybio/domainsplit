@@ -41,7 +41,7 @@ from pathlib import Path
 
 import numpy as np
 from Bio.PDB.PDBParser import PDBParser
-from utils_struct import bytes_to_tempfile, BACKBONE_ATOMS, CC_VDW, NO_SB, extract_domain_residues, residues_contact, get_domain_structures
+from utils_struct import bytes_to_tempfile, BACKBONE_ATOMS, CC_VDW, NO_SB, calculate_rsa_residue_level, extract_domain_residues, residues_contact, get_domain_structures
 
 # Constants
 TRIALS = 1000
@@ -63,6 +63,11 @@ FALLBACK_SCORES = {
     'mc_mc': -0.5
 }
 
+CHAIN_A = "A"
+CHAIN_B = "B"
+
+ZSCORE_THRESHOLD = 2.3  # default threshold for interaction_confirmed (99% significance per 3did paper)
+
 
 def parse_args():
     p = argparse.ArgumentParser(description=__doc__,
@@ -77,9 +82,9 @@ def parse_args():
                    help="db_freq.csv from build_scoring_matrix.py")
     p.add_argument("--t_db",             required=True,
                    help="t_db.txt from build_scoring_matrix.py")
-    p.add_argument("--zscore_threshold", type=float, default=2.3,
-                   help="Z-score threshold for interaction_confirmed (default: 2.3, "
-                        "i.e. 99%% significance per the 3did paper)")
+    # p.add_argument("--zscore_threshold", type=float, default=2.3,
+    #                help="Z-score threshold for interaction_confirmed (default: 2.3, "
+    #                     "i.e. 99%% significance per the 3did paper)")
     p.add_argument("--versions",         required=True,
                    help="Path to write versions.yml")
     p.add_argument("--process_name",     required=True,
@@ -156,6 +161,16 @@ def check_for_interaction(resA, resB):
     return best_itype
 
 
+def check_rsa(domain, threshold=0.1):
+    # For each residue ensure that its RSA is above the threshold (0.1) to be considered surface-exposed.
+    rsa_residue_values = calculate_rsa_residue_level(domain)
+    checked = []
+    for res_id, rsa in rsa_residue_values.items():
+        if rsa is not None and rsa > threshold:
+            checked.append(res_id)
+    return checked
+
+
 def find_interacting_residues(res_a, res_b):
     """
     Build the residue-pair interaction matrix for a domain pair.
@@ -168,8 +183,15 @@ def find_interacting_residues(res_a, res_b):
     matrix = [[] * n_b for _ in range(n_a)]
     n_interacting = 0
 
+    res_a_checked = check_rsa(res_a, threshold=0.1)
+    res_b_checked = check_rsa(res_b, threshold=0.1)
+
     for i, rA in enumerate(res_a):
+        if rA.get_id() not in res_a_checked:
+            continue
         for j, rB in enumerate(res_b):
+            if rB.get_id() not in res_b_checked:
+                continue
             itype = check_for_interaction(rA, rB)
             if itype is not None:
                 matrix[i][j] = itype
@@ -270,14 +292,61 @@ def connect_db(db_path):
     return conn
 
 
-def update_score(conn, ds_id, z_score):
-    # Update domain_structure table with the computed z_score
-    conn.execute("""
-        UPDATE domain_structure
-        SET z_score = ?
+def aggregate_scores(scores):
+    """
+    Aggregate score, different possible methods, return ddi_id -> confirmed
+    1. Majority vote on confirmed
+    2. Mean z-score -> confirmed if mean z-score >= threshold
+    """
+    aggregated = {}
+    for ddi_id, score_list in scores.items():
+        confirmed_votes = sum(confirmed for _, confirmed in score_list)
+        mean_z_score = np.mean([z for z, _ in score_list])
+        # Majority vote
+        majority_confirmed = int(confirmed_votes > len(score_list) / 2)
+        # Mean z-score
+        mean_confirmed = int(mean_z_score >= ZSCORE_THRESHOLD)
+        aggregated[ddi_id] = {
+            'majority_confirmed': majority_confirmed,
+            'mean_confirmed': mean_confirmed
+        }
+
+    return aggregated
+
+
+def update_scores_in_db(conn, aggregated_scores, source):
+    """
+    Update DDI table with the column interaction_confirmed based on the aggregated scores.
+    NOTE: for now add for both majority and mean confirmed, but in practice we might choose one method.
+    """
+
+    new_column_names = [f'interaction_confirmed_majority_{source}', f'interaction_confirmed_mean_{source}']
+
+    conn.execute(f"""
+        ALTER TABLE domain_domain_interaction ADD COLUMN {new_column_names[0]} INTEGER DEFAULT 0;
+    """)
+    conn.execute(f"""
+        ALTER TABLE domain_domain_interaction ADD COLUMN {new_column_names[1]} INTEGER DEFAULT 0;
+    """)
+
+    conn.executemany(f"""
+        UPDATE domain_domain_interaction
+        SET {new_column_names[0]} = ?,
+            {new_column_names[1]} = ?
         WHERE id = ?
-    """, (z_score, ds_id))
+    """, [(scores['majority_confirmed'], scores['mean_confirmed'], ddi_id) for ddi_id, scores in aggregated_scores.items()])
     conn.commit()
+
+
+
+# def update_score(conn, ds_id, z_score):
+#     # Update domain_structure table with the computed z_score
+#     conn.execute("""
+#         UPDATE domain_structure
+#         SET z_score = ?
+#         WHERE id = ?
+#     """, (z_score, ds_id))
+#     conn.commit()
 
 
 
@@ -295,13 +364,13 @@ def write_versions(path, process_name):
 def main():
     args = parse_args()
 
-    print(f"[score_ddi] zscore_threshold={args.zscore_threshold}, "
-          f"trials={args.trials}", flush=True)
-    zscore_threshold = args.zscore_threshold
+    print(f"[score_ddi] zscore_threshold={ZSCORE_THRESHOLD}, "
+          f"trials={TRIALS}", flush=True)
+    
 
     # Load precomputed database-wide scoring artefacts
-    load_c_ab_matrix(args.matrix)
-    load_db_freq(args.dbfreq)
+    load_c_ab_matrix(args.c_ab_matrix)
+    load_db_freq(args.db_freq)
     load_t_db(args.t_db)
     print(f"  Loaded T_DB={T_DB}, {len(C_AB_MATRIX)} C_ab entries, "
           f"{len(DB_FREQ)} frequency entries", flush=True)
@@ -310,50 +379,71 @@ def main():
     shutil.copy(args.db_in, args.db_out)
     conn_out = connect_db(args.db_out)
     
+    scores = {}
 
-    for (ds_id, ddi_id, chain_id_a, chain_id_b, pdb_gz) in get_domain_structures(args.db_in):
+    sources = ["AF3", "RF"]
+
+    domain_structures = get_domain_structures(args.db_in)
     
 
-        print(f"[score_ddi] ddi_id={ddi_id}, chains={chain_id_a}/{chain_id_b}", flush=True)
+    for source in sources:
+        print(f"[score_ddi] Processing source={source}", flush=True)
+        
+        source_structures = [ds for ds in domain_structures if ds[3] == source]
 
-        path_to_tmp_pdb = bytes_to_tempfile(pdb_gz)
-        structure = None
-        try:
-            structure = PDBParser(QUIET=True).get_structure(f"ddi_{ddi_id}", path_to_tmp_pdb)
-        except Exception as e:
-            print(f"WARNING: Failed to parse PDB for DDI {ddi_id}: {e}", file=sys.stderr)
+        print(f"[score_ddi] source={source}: {len(source_structures)} predicted "
+              f"complexes to score", flush=True)
 
-        res_a = extract_domain_residues(structure, chain_id_a)
-        res_b = extract_domain_residues(structure, chain_id_b)
-
-        if not res_a or not res_b:
-            print(f"  WARNING: no residues extracted for ddi {ddi_id}"
-                    f"(chains {chain_id_a}/{chain_id_b})", file=sys.stderr)
+        if len(source_structures) == 0:
+            print(f"[score_ddi] WARNING: No domain structures found for source={source}, skipping scoring", flush=True)
             continue
+        
+        for (ds_id, ddi_id, pdb_gz) in source_structures:
 
-        # Step 1: find interacting residue pairs and require >= 5 (3did rule)
-        matrix, n_interacting = find_interacting_residues(res_a, res_b)
-        if n_interacting < MIN_INTERACTING_PAIRS:
-            print(f"  Row {ddi_id} in {pdb_gz}: only {n_interacting} interacting pairs "
-                    f"(< {MIN_INTERACTING_PAIRS}) -- not interacting, "
-                    f"z_score=0, confirmed=0", flush=True)
-            update_score(args.db_out, ds_id, 0.0)
-            continue
+            path_to_tmp_pdb = bytes_to_tempfile(pdb_gz)
+            structure = None
+            try:
+                structure = PDBParser(QUIET=True).get_structure(f"ddi_{ddi_id}", path_to_tmp_pdb)
+            except Exception as e:
+                print(f"WARNING: Failed to parse PDB for DDI {ddi_id}: {e}", file=sys.stderr)
 
-        # Step 2: score the real complex
-        real_score = compute_empirical_potential(res_a, res_b, matrix)
+            res_a = extract_domain_residues(structure, CHAIN_A)
+            res_b = extract_domain_residues(structure, CHAIN_B)
 
-        # Step 3: score random trials (same geometry, DB-wide AA sampling)
-        random_scores = run_random_trials(len(res_a), len(res_b), matrix, args.trials)
 
-        # Step 4: z-score and significance
-        z_score = compute_z_score(real_score, random_scores)
-        confirmed = int(z_score >= zscore_threshold)
 
-        print(f"  Row {ddi_id} {ds_id}: n_interacting={n_interacting}, "
-                f"score={real_score:.3f}, z={z_score:.3f}, "
-                f"confirmed={confirmed}", flush=True)
-        update_score(conn_out, ds_id, z_score)
+            if not res_a or not res_b:
+                print(f"  WARNING: no residues extracted for ddi {ddi_id}", file=sys.stderr)
+                continue
+
+            # Step 1: find interacting residue pairs and require >= 5 (3did rule)
+            matrix, n_interacting = find_interacting_residues(res_a, res_b)
+            if n_interacting < MIN_INTERACTING_PAIRS:
+                print(f"  Row {ddi_id} in {pdb_gz}: only {n_interacting} interacting pairs "
+                        f"(< {MIN_INTERACTING_PAIRS}) -- not interacting, "
+                        f"z_score=0, confirmed=0", flush=True)
+                # update_score(args.db_out, ds_id, 0.0)
+                continue
+
+            # Step 2: score the real complex
+            real_score = compute_empirical_potential(res_a, res_b, matrix)
+
+            # Step 3: score random trials (same geometry, DB-wide AA sampling)
+            random_scores = run_random_trials(len(res_a), len(res_b), matrix, TRIALS)
+
+            # Step 4: z-score and significance
+            z_score = compute_z_score(real_score, random_scores)
+            confirmed = int(z_score >= ZSCORE_THRESHOLD)
+
+            print(f"  Row {ddi_id} {ds_id}: n_interacting={n_interacting}, "
+                    f"score={real_score:.3f}, z={z_score:.3f}, "
+                    f"confirmed={confirmed}", flush=True)
+            # update_score(conn_out, ds_id, z_score)
+            if ddi_id not in scores:
+                scores[ddi_id] = []
+            scores[ddi_id].append((z_score, confirmed))
+        updated_scores = aggregate_scores(scores)
+        update_scores_in_db(conn_out, updated_scores, source)
     conn_out.close()
 
 

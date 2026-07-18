@@ -1,4 +1,4 @@
-#! /usr/bin/env python3
+#!/usr/bin/env python3
 
 import gzip
 import io
@@ -9,6 +9,41 @@ import random
 
 from Bio.PDB.PDBParser import PDBParser
 from Bio.PDB.PDBIO import PDBIO, Select
+from Bio.PDB.SASA import ShrakeRupley
+
+
+def calculate_sasa_residue_level(domain):
+    sr = ShrakeRupley()
+    sr.compute(domain, level="R")  # Compute SASA at the residue level
+    sasa_values = {}
+    for residue in domain.get_residues():
+        sasa_values[residue.get_id()] = residue.sasa
+    return sasa_values
+
+
+def calculate_rsa_residue_level(domain):
+    sasa_residue = calculate_sasa_residue_level(domain)
+
+    # MAxSASA values by Tien et al. 2013, "Maximum allowed solvent accessibilities of residues in proteins" (https://doi.org/10.1002/prot.24286)
+    max_sasa_values = {
+        'ALA': 129.0, 'ARG': 274.0, 'ASN': 195.0, 'ASP': 193.0, 'CYS': 167.0,
+        'GLN': 223.0, 'GLU': 225.0, 'GLY': 104.0, 'HIS': 224.0, 'ILE': 197.0,
+        'LEU': 201.0, 'LYS': 236.0, 'MET': 224.0, 'PHE': 240.0, 'PRO': 159.0,
+        'SER': 155.0, 'THR': 172.0, 'TRP': 285.0, 'TYR': 263.0, 'VAL': 174.0
+    }
+
+    rsa_residue = {}
+    for residue in domain.get_residues():
+        resname = residue.get_resname()
+        rid = residue.get_id()
+        sasa_value = sasa_residue.get(rid, 0)
+        max_sasa = max_sasa_values.get(resname, None)
+        if max_sasa is not None and max_sasa > 0:
+            rsa_residue[rid] = sasa_value / max_sasa
+        else:
+            rsa_residue[rid] = None
+
+    return rsa_residue
 
 
 # ---------------------------------------------------------------------------
@@ -132,23 +167,15 @@ def connect_db(db_path: str):
     return conn
 
 
-def create_tables(conn):
+def create_ds_table(conn):
     conn.executescript("""
-        CREATE TABLE IF NOT EXISTS complex_chain_map (
-            id           INTEGER PRIMARY KEY AUTOINCREMENT,
-            protein_id_a INTEGER NOT NULL REFERENCES protein(id),
-            protein_id_b INTEGER NOT NULL REFERENCES protein(id),
-            source       TEXT    NOT NULL, -- 'AF3' | 'RF2'
-            chain_id_a   TEXT    NOT NULL,
-            chain_id_b   TEXT    NOT NULL,
-            UNIQUE (protein_id_a, protein_id_b, source)
-        );
-
         CREATE TABLE IF NOT EXISTS domain_structure (
             id         INTEGER PRIMARY KEY AUTOINCREMENT,
-            ddi_id INTEGER NOT NULL REFERENCES domain_domain_interaction(id),
-            protein1 INTEGER NOT NULL REFERENCES protein(id),
-            protein2 INTEGER NOT NULL REFERENCES protein(id),
+            ddi_id     INTEGER NOT NULL REFERENCES domain_domain_interaction(id),
+            domain1    INTEGER NOT NULL REFERENCES domain(id),
+            domain2    INTEGER NOT NULL REFERENCES domain(id),
+            protein1   INTEGER NOT NULL REFERENCES protein(id),
+            protein2   INTEGER NOT NULL REFERENCES protein(id),
             source     TEXT    NOT NULL,
             pdb_gz     BLOB    NOT NULL,
             z_score    REAL,
@@ -156,6 +183,25 @@ def create_tables(conn):
         );
     """)
     conn.commit()
+
+
+def add_pdb_to_mapping(conn, domain_id, protein_id, pdb_gz, source):
+    # Add single-domain psb to domain_protein_map table (for single-domain structures, not DDIs)
+    # If source is 'AF3', add to column pdb_gz_af, if source is 'RF2', add to column pdb_gz_rf, otherwise skip
+    if source == 'AF3':
+        conn.execute("""
+            UPDATE domain_protein_map
+            SET pdb_gz_af = ?
+            WHERE domain_id = ? AND protein_id = ?
+        """, (pdb_gz, domain_id, protein_id))
+    elif source == 'RF2':
+        conn.execute("""
+            UPDATE domain_protein_map
+            SET pdb_gz_rf = ?
+            WHERE domain_id = ? AND protein_id = ?
+        """, (pdb_gz, domain_id, protein_id))
+    else:
+        print(f"Warning: unknown source '{source}' for domain {domain_id}, protein {protein_id}. Skipping PDB addition.")
 
 
 def get_ppis(conn):
@@ -184,20 +230,20 @@ def get_domain_mapping(conn, protein_id: int):
     """, (protein_id,)).fetchall()
 
 
-def store_chain_map(conn, protein_id_a: int, protein_id_b: int, chain_id_a: str, chain_id_b: str, source_model: str) -> None:
-    return conn.execute("""
-        INSERT OR REPLACE INTO complex_chain_map
-            (protein_id_a, protein_id_b, source, chain_id_a, chain_id_b)
-        VALUES (?, ?, ?, ?, ?)
-    """, (protein_id_a, protein_id_b, source_model, chain_id_a, chain_id_b))
+# def store_chain_map(conn, protein_id_a: int, protein_id_b: int, chain_id_a: str, chain_id_b: str, source_model: str) -> None:
+#     return conn.execute("""
+#         INSERT OR REPLACE INTO complex_chain_map
+#             (protein_id_a, protein_id_b, source, chain_id_a, chain_id_b)
+#         VALUES (?, ?, ?, ?, ?)
+#     """, (protein_id_a, protein_id_b, source_model, chain_id_a, chain_id_b))
 
 
-def store_domain_slice(conn, protein_id_1: int, protein_id_2: int, ddi_id: int, pdb_gz: bytes, source_model: str) -> None:
+def store_domain_slice(conn, ddi_id: int, domain_id_1: int, domain_id_2: int, protein_id_1: int, protein_id_2: int, pdb_gz: bytes, source_model: str) -> None:
     return conn.execute("""
         INSERT OR REPLACE INTO domain_structure
-            (ddi_id, protein1, protein2,  source, pdb_gz, z_score)
-        VALUES (?, ?, ?, ?, ?, NULL)
-    """, (ddi_id, protein_id_1, protein_id_2, source_model, pdb_gz))
+            (ddi_id, domain1, domain2, protein1, protein2, source, pdb_gz, z_score)
+        VALUES (?, ?, ?, ?, ?, ?, ?, NULL)
+    """, (ddi_id, domain_id_1, domain_id_2, protein_id_1, protein_id_2, source_model, pdb_gz))
 
 
 def check_ddi_exists(conn, domain_id_a: int, domain_id_b: int):
@@ -205,12 +251,12 @@ def check_ddi_exists(conn, domain_id_a: int, domain_id_b: int):
     row = conn.execute("""
         SELECT id
         FROM domain_domain_interaction ddi
-        WHERE ddi.domain1 = ? AND ddi.domain2 = ?
+        WHERE ddi.domain_id_a = ? AND ddi.domain_id_b = ?
     """, (domain_id_a, domain_id_b)).fetchone()
     row_rev = conn.execute("""
         SELECT id
         FROM domain_domain_interaction ddi
-        WHERE ddi.domain1 = ? AND ddi.domain2 = ?
+        WHERE ddi.domain_id_a = ? AND ddi.domain_id_b = ?
     """, (domain_id_b, domain_id_a)).fetchone()
 
     id = row[0] if row else (row_rev[0] if row_rev else None)
@@ -219,16 +265,16 @@ def check_ddi_exists(conn, domain_id_a: int, domain_id_b: int):
 
 
 
-def get_predicted_complexes(conn, source: str):
-    return conn.execute("""
-        SELECT
-            p1.id AS protein_id_a, p1.uniprot_id AS uniprot_id_a, ccm.chain_id_a,
-            p2.id AS protein_id_b, p2.uniprot_id AS uniprot_id_b, ccm.chain_id_b
-        FROM complex_chain_map ccm
-        JOIN protein p1 ON ccm.protein_id_a = p1.id
-        JOIN protein p2 ON ccm.protein_id_b = p2.id
-        WHERE ccm.source = ?
-    """, (source,)).fetchall()
+# def get_predicted_complexes(conn, source: str):
+#     return conn.execute("""
+#         SELECT
+#             p1.id AS protein_id_a, p1.uniprot_id AS uniprot_id_a, ccm.chain_id_a,
+#             p2.id AS protein_id_b, p2.uniprot_id AS uniprot_id_b, ccm.chain_id_b
+#         FROM complex_chain_map ccm
+#         JOIN protein p1 ON ccm.protein_id_a = p1.id
+#         JOIN protein p2 ON ccm.protein_id_b = p2.id
+#         WHERE ccm.source = ?
+#     """, (source,)).fetchall()
 
 
 
@@ -287,7 +333,7 @@ def residues_contact(resA, resB):
 def get_domain_structures(db_path):
     """
     Get domain structure information from the SQLite database for all DDIs from 3DID.
-    Returns a list of tuples: (ddi_id, protein_id_a, protein_id_b, chain_id_a, chain_id_b, pdb_gz)
+    Returns a list of tuples: (ddi_id, protein_id_a, protein_id_b, pdb_gz, source)
     """
 
     conn = sqlite3.connect(db_path)
@@ -299,26 +345,26 @@ def get_domain_structures(db_path):
     ddis_from_3did = conn.execute("""
         SELECT id, domain_id_a, domain_id_b
         FROM domain_domain_interaction
-        WHERE source = '3DID'
+        WHERE negative = 0
     """).fetchall()
 
     # Add chain information from complex_chain_map and pdb_gz from domain_structure
     domain_structures = []
     for ddi_id, domain_id_a, domain_id_b in ddis_from_3did:
         row = conn.execute("""
-            SELECT d2.id, ds.protein1, ds.protein2, ccm.chain_id_a, ccm.chain_id_b, ds.pdb_gz
+            SELECT ds.id, ds.pdb_gz, ds.source
             FROM domain_structure ds
-            JOIN complex_chain_map ccm ON ccm.protein_id_a = ds.protein1 AND ccm.protein_id_b = ds.protein2 AND ccm.source = ds.source
             WHERE ds.ddi_id = ?
         """, (ddi_id,)).fetchone()
         
         if row:
-            ds_id, protein_id_a, protein_id_b, chain_id_a, chain_id_b, pdb_gz = row
-            domain_structures.append((ds_id, ddi_id, chain_id_a, chain_id_b, pdb_gz))
+            ds_id, pdb_gz, source = row
+            domain_structures.append((ds_id, ddi_id, pdb_gz, source))
 
 
     conn.close()
     return domain_structures
+
 
 
 
@@ -407,3 +453,31 @@ def mock_predict_complex(sequence_a: str, sequence_b: str, out_cif_dir: str,
 
 
 
+def mock_predict_complex_rf(sequence_a: str, sequence_b: str, out_cif_dir: str) -> str:
+    """
+    Generate a synthetic 'model_0' PDB structure for two sequences placed
+    on chains A and B, mimicking the file an AF3 run would eventually
+    produce (minus the CIF step -- this writes PDB directly).
+ 
+    This is NOT a real structure prediction. Coordinates are a randomised
+    backbone-only trace with no physical relevance -- it exists purely so
+    downstream code (domain slicing, contact geometry, scoring) can be
+    exercised before AF3 is wired up.
+ 
+    Returns the path to the written PDB file:
+        {out_cif_dir}/{basename}_model_0.pdb
+    """
+    pdb_path = os.path.join(out_cif_dir, f"model_0.pdb")
+ 
+    lines = ["HEADER    MOCK AF3 PREDICTION (SYNTHETIC, FOR TESTING ONLY)\n"]
+    atom_serial = [0]
+    _write_mock_chain_atoms(lines, "A", sequence_a, atom_serial, x_offset=0.0)
+    lines.append("TER\n")
+    _write_mock_chain_atoms(lines, "B", sequence_b, atom_serial, x_offset=20.0)
+    lines.append("TER\n")
+    lines.append("END\n")
+ 
+    with open(pdb_path, "w") as fh:
+        fh.writelines(lines)
+ 
+    return pdb_path

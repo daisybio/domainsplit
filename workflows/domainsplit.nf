@@ -11,8 +11,9 @@ include { COLLECT_DDI_DATA            } from '../subworkflows/local/collect_ddi_
 include { CURATE_DOMAINS              } from '../subworkflows/local/curate_domains/main.nf'
 include { generate_esm_embeddings     } from '../modules/local/esm_embeddings/main.nf'
 include { ENRICH_DDI_DATABASE         } from '../subworkflows/local/enrich_ddi_database/main.nf'
-//include { ENRICH_STRUCTURAL           } from '../subworkflows/local/enrich_structural/main.nf'
+include { ENRICH_STRUCTURAL           } from '../subworkflows/local/enrich_structural/main.nf'
 include { SPLIT_DOMAINSPLIT_DATABASE  } from '../subworkflows/local/split_domainsplit_database/main.nf'
+include { ANNOTATE_DDI                   } from '../subworkflows/local/annotate_ddi/main.nf'
 include { ANALYZE_DDI_BIAS            } from '../modules/local/analyze_ddi_bias/main.nf'
 
 /*
@@ -73,24 +74,24 @@ main:
         generate_esm_embeddings.out.domain_embeddings,
     )
 
-    // if (params.structural) {
-    //     ENRICH_STRUCTURAL(
-    //         ENRICH_DDI_DATABASE.out.domainsplit_db,
-    //         input_3did
-    //     )
-    //     final_db = ENRICH_STRUCTURAL.out.domainsplit_db
-    // } else {
-    //     final_db = ENRICH_DDI_DATABASE.out.domainsplit_db
-    // }
 
+    ENRICH_STRUCTURAL(
+        ENRICH_DDI_DATABASE.out.domainsplit_db
+    )
 
+    // TODO: update to enrich_structural.out.struct_db
     ANALYZE_DDI_BIAS(
         ENRICH_DDI_DATABASE.out.domainsplit_db
     )
 
     SPLIT_DOMAINSPLIT_DATABASE(
-        ENRICH_DDI_DATABASE.out.domainsplit_db
+        ENRICH_STRUCTURAL.out.domainsplit_db
     )
+
+    ANNOTATE_DDI(
+        SPLIT_DOMAINSPLIT_DATABASE.out.split_db
+    )
+
 
     //
     // Collate and save software versions
@@ -103,6 +104,7 @@ main:
         ENRICH_DDI_DATABASE.out.versions,
         ANALYZE_DDI_BIAS.out.versions,
         SPLIT_DOMAINSPLIT_DATABASE.out.versions,
+        ANNOTATE_DDI.out.versions
     )
 
     softwareVersionsToYAML(ch_versions)
@@ -116,6 +118,7 @@ main:
 emit:
     domainsplit_db  = ENRICH_DDI_DATABASE.out.domainsplit_db
     split_db        = SPLIT_DOMAINSPLIT_DATABASE.out.split_db
+    scored_db       = ANNOTATE_DDI.out.scores
     bias_report     = ANALYZE_DDI_BIAS.out.report_dir
 }
 

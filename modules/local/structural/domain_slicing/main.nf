@@ -6,19 +6,21 @@ process DOMAIN_SLICE {
     container "docker://konstantinpelz/domainsplit-general:1.0.0"
 
     input:
-    path domainsplit_db_in, stageAs: 'input.domainsplit.sqlite3'
-    path pdb_dir_in, stageAs: 'input/pdb_files/'
+    path dbstruct, stageAs: 'input.dbstruct.sqlite3'
+    path pdb_dir_af, stageAs: 'input/pdb_files_af/'
+    path pdb_dir_rf, stageAs: 'input/pdb_files_rf/'
 
     output:
-    path "domainsplit.sqlite3", emit: domainsplit_db
+    path "dbstruct.sqlite3", emit: dbstruct
     path "versions.yml",        emit: versions
 
     script:
     """
     slice_domains.py \\
-        --db_in  ${domainsplit_db_in} \\
-        --db_out domainsplit.sqlite3 \\
-        --pdb_dir ${pdb_dir_in}\\
+        --db_in  ${dbstruct} \\
+        --db_out dbstruct.sqlite3 \\
+        --pdb_dir_af ${pdb_dir_af}\\
+        --pdb_dir_rf ${pdb_dir_rf}\\
         --versions versions.yml \\
         --process_name "${task.process}"
     """

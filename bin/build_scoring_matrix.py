@@ -28,7 +28,6 @@ Methodology (from Sprinzak & Margalit 2001, PNAS):
 
 import argparse
 import csv
-import sqlite3
 import sys
 from collections import defaultdict
 from pathlib import Path
@@ -39,6 +38,8 @@ from Bio.PDB.PDBParser import PDBParser
 from utils_struct import bytes_to_tempfile, AA_3, extract_domain_residues, residues_contact, get_domain_structures
 
 
+CHAIN_A = "A"
+CHAIN_B = "B"
 
 
 def parse_args():
@@ -60,6 +61,8 @@ def parse_args():
 
 
 
+
+
 def build_matrix(args):
     """Build C_ab contact matrix and calculate surface residue frequencies"""
 
@@ -74,7 +77,7 @@ def build_matrix(args):
     n_no_contact = 0
 
 
-    for (ds_id, ddi_id, chain_id_a, chain_id_b, pdb_gz) in get_domain_structures(args.db_in):
+    for (ds_id, ddi_id, pdb_gz) in get_domain_structures(args.db_in):
         n_instances += 1
         
         path_to_tmp_pdb = bytes_to_tempfile(pdb_gz)
@@ -88,8 +91,8 @@ def build_matrix(args):
             n_skipped += 1
             continue
 
-        res_a = extract_domain_residues(structure, chain_id_a)
-        res_b = extract_domain_residues(structure, chain_id_b)
+        res_a = extract_domain_residues(structure, CHAIN_A)
+        res_b = extract_domain_residues(structure, CHAIN_B)
 
         if not res_a or not res_b:
             n_skipped += 1

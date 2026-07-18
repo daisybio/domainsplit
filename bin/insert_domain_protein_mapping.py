@@ -45,17 +45,21 @@ def main() -> int:
                 key = f"{row.pfam_id}_{row.uniprot_id}_{row.start_pos}_{row.end_pos}"
                 esm3_key = f"{key}/esm3"
                 esmc_key = f"{key}/esmc"
-                esm3_per_domain = esmc_per_domain = None
+                esm3_struct_key = f"{key}/esm3_structure"
+                esm3_per_domain = esmc_per_domain = esm3_struct_per_domain = None
                 if esm3_key in domain_embeddings:
                     esm3_per_domain = np.array(domain_embeddings[esm3_key]).dumps()
                 if esmc_key in domain_embeddings:
                     esmc_per_domain = np.array(domain_embeddings[esmc_key]).dumps()
+                if esm3_struct_key in domain_embeddings:
+                    esm3_struct_per_domain = np.array(domain_embeddings[esm3_struct_key]).dumps()
                 yield (
                     row.sequence,
                     row.start_pos,
                     row.end_pos,
                     esm3_per_domain,
                     esmc_per_domain,
+                    esm3_struct_per_domain,
                     row.pfam_id,
                     row.uniprot_id,
                 )
@@ -65,11 +69,11 @@ def main() -> int:
         INSERT OR IGNORE INTO domain_protein_map(
             domain_id, protein_id, domain_sequence,
             start_pos, end_pos,
-            esm3_per_domain, esmc_per_domain
+            esm3_per_domain, esmc_per_domain, esm3_per_domain_structure
         )
         SELECT domain.id as domain_id, protein.id as protein_id,
             ? as domain_sequence, ? as start_pos, ? as end_pos,
-            ? as esm3_per_domain, ? as esmc_per_domain
+            ? as esm3_per_domain, ? as esmc_per_domain, ? as esm3_per_domain_structure
         FROM domain, protein
         WHERE
             domain.pfam_id = ? AND

@@ -18,9 +18,13 @@ Performance:
   - `--max-len` cap drops the long-tail quadratic-attention sequences entirely.
   - Storage dtype is float16 (downstream domainsplit only does np.array().dumps()).
 
+
+Structure embeddings:
+  - If `--structures-h5` is provided, the ESM3 structure embeddings are also computed
+
 H5 key contract (downstream pipeline expects this layout):
-  per_residue: <seq_id>/esm3 -> (L+2, D), <seq_id>/esmc -> (L+2, D)
-  pooled:      <seq_id>/esm3 -> (D,),     <seq_id>/esmc -> (D,)
+  per_residue: <seq_id>/esm3 -> (L+2, D), <seq_id>/esmc -> (L+2, D), <seq_id>/esm3_structure -> (L+2, D)
+  pooled:      <seq_id>/esm3 -> (D,),     <seq_id>/esmc -> (D,),     <seq_id>/esm3_structure -> (D,)
 """
 
 import argparse
@@ -79,10 +83,128 @@ def _load_records(fasta_path: str, max_len: int, smoke_limit: int | None):
     return records
 
 
-def _encode_one(client, sequence: str):
+# def _parse_domain_id(seq_id: str):
+#     """'{pfam_id}_{uniprot_id}_{start}_{end}' -> (uniprot_id, start, end) or None.
+
+#     Splits from the right so pfam_id may itself contain underscores.
+#     start/end are 1-based inclusive UniProt residue positions.
+#     """
+#     parts = seq_id.rsplit("_", 3)
+#     if len(parts) != 4:
+#         return None
+#     _pfam_id, uniprot_id, start_s, end_s = parts
+#     try:
+#         return uniprot_id, int(start_s), int(end_s)
+#     except ValueError:
+#         return None
+
+
+# def _get_coords_for_record(seq_id: str, seq_len: int, mode: str, structures_h5):
+#     """Look up (and validate) structure coordinates for one record.
+
+#     Returns an (seq_len, 37, 3) float32 array, or None if unavailable /
+#     invalid — callers fall back to sequence-only in that case.
+#     """
+#     import numpy as np
+
+#     if mode == "pooled":
+#         parsed = _parse_domain_id(seq_id)
+#         if parsed is None:
+#             return None
+#         uniprot_id, start_pos, end_pos = parsed
+#         if uniprot_id not in structures_h5:
+#             return None
+#         full = structures_h5[uniprot_id]
+#         if start_pos < 1 or end_pos > full.shape[0] or start_pos > end_pos:
+#             return None
+#         coords = full[start_pos - 1: end_pos]
+#     else:  # per_residue: seq_id is the uniprot_id itself
+#         if seq_id not in structures_h5:
+#             return None
+#         coords = structures_h5[seq_id][:]
+
+#     if coords.shape[0] != seq_len:
+#         print(
+#             f"warn: structure length mismatch for {seq_id} "
+#             f"({coords.shape[0]} vs seq len {seq_len}); skipping entry",
+#             flush=True,
+#         )
+#         return None
+#     if np.isnan(coords).all():
+#         return None
+#     return coords.astype(np.float32)
+
+
+def _fetch_structure(pdb_id: str):
+    from esm.sdk.api import ESMProtein
+    from esm.utils.structure.protein_chain import ProteinChain
+    # Create a protein using a pdb format file from RCSB
+    # Note: instead of the next two lines, we could use
+    # protein_chain = ProteinChain.from_rcsb(pdb_id, chain_id)
+    # but in future implementations, this function may use the mmcif file
+    # which would throw off some indices later on in this notebook
+    protein_chain = ProteinChain.from_rcsb(pdb_id.lower(), chain_id="detect")
+    protein = ESMProtein.from_protein_chain(protein_chain)
+
+    start = int(protein_chain.residue_index.min())
+    end = int(protein_chain.residue_index.max())
+    return protein.coordinates, start, end
+
+
+
+def _attach_structures(records, mode: str, structure_mapping):
+    """[(id, seq), ...] -> [(id, seq, coords_or_None), ...]."""
+    if structure_mapping is None:
+        return [(sid, seq, None, None) for sid, seq in records]
+    out = []
+    for sid, seq in records:
+        # Extract uniprot_id from sid. For domain sequences, sid is of the form
+        # "{pfam_id}_{uniprot_id}_{start}_{end}", so split from the right to allow underscores in pfam_id. For protein sequences, sid is the uniprot_id itself.
+        if sid.count("_") >= 3:
+            uniprot_id = sid.rsplit("_", 3)[1]
+        else:
+            uniprot_id = sid
+            
+        struct_seq = None
+        coords = None
+
+        if uniprot_id in structure_mapping:
+            pdb_id = structure_mapping[uniprot_id]
+            if not pdb_id or pdb_id == "":
+                print(f"warn: no PDB ID for {sid} (uniprot {uniprot_id}); skipping entry", flush=True)
+            else:
+                try:
+                    coords, start, end = _fetch_structure(pdb_id)
+                    struct_seq = seq[start - 1 : end]
+                    if coords.shape[0] != len(struct_seq):
+                        print(
+                            f"warn: structure length mismatch for {sid} "
+                            f"(pdb {pdb_id} resolved range {start}-{end}: "
+                            f"coords {coords.shape[0]} vs cropped seq {len(struct_seq)} "
+                            f"[full seq len {len(seq)}]); skipping entry",
+                            flush=True,
+
+                        )
+                        coords = None
+                        struct_seq = None
+                except Exception as exc:
+                    print(f"warn: could not fetch structure for {sid} (pdb {pdb_id}): {exc}; skipping entry", flush=True)
+        out.append((sid, seq, coords, struct_seq))
+    return out
+
+
+
+def _encode_one(client, sequence: str, coords = None):
     """Tokenize a single sequence -> ESMProteinTensor (CPU-cheap)."""
     from esm.sdk.api import ESMProtein
-    return client.encode(ESMProtein(sequence=sequence))
+
+    # If seq = None, it was an empty structure sequence -> we want to skip it, so return an empty ESMProteinTensor
+    if sequence is None:
+        return client.encode(ESMProtein(sequence="")) # This should not make any problems downstream
+    kwargs = {"sequence": sequence}
+    if coords is not None:
+        kwargs["coordinates"] = coords
+    return client.encode(ESMProtein(**kwargs))
 
 
 def _move_batch_to_device(bt, device):
@@ -126,15 +248,43 @@ def _stack_batch(tensors, device):
         return _move_batch_to_device(bt, device)
     max_len = max(t.sequence.shape[0] for t in tensors)
     pad_id = 0
-    padded = torch.full(
-        (len(tensors), max_len), pad_id,
-        dtype=tensors[0].sequence.dtype, device=device,
-    )
-    for i, t in enumerate(tensors):
-        src = t.sequence.to(device, non_blocking=True)
-        padded[i, : src.shape[0]] = src
+    # padded = torch.full(
+    #     (len(tensors), max_len), pad_id,
+    #     dtype=tensors[0].sequence.dtype, device=device,
+    # )
+    # for i, t in enumerate(tensors):
+    #     src = t.sequence.to(device, non_blocking=True)
+    #     padded[i, : src.shape[0]] = src
+    # bt = _BatchedESMProteinTensor.from_protein_tensor(tensors[0])
+    # bt.sequence = padded
+
     bt = _BatchedESMProteinTensor.from_protein_tensor(tensors[0])
-    bt.sequence = padded
+
+    track_names = (
+        "sequence", "structure", "secondary_structure", "sasa",
+        "function", "residue_annotations", "coordinates",
+    )
+
+
+    for name in track_names:
+        first = getattr(tensors[0], name, None)
+        if not isinstance(first, torch.Tensor):
+            continue  # track not populated for this batch (e.g. no coords given)
+        padded = torch.full(
+            (len(tensors), max_len) + tuple(first.shape[1:]),
+            pad_id,
+            dtype=first.dtype, device=device,
+        )
+        for i, t in enumerate(tensors):
+            v = getattr(t, name, None)
+            if not isinstance(v, torch.Tensor):
+                # Shouldn't happen within one _run_model call (all records in
+                # a call either all have coords or none do), but guard anyway.
+                continue
+            src = v.to(device, non_blocking=True)
+            padded[i, : src.shape[0]] = src
+        setattr(bt, name, padded)
+
     return _move_batch_to_device(bt, device)
 
 
@@ -146,13 +296,13 @@ def _seq_lengths(batched, tensors):
 _DEVICE_DIAG_DONE = False
 
 
-def _process_batch(client, seqs, ids, mode: str, out_h5, model_key: str, device):
+def _process_batch(client, seqs, ids, coords, mode: str, out_h5, model_key: str, device):
     """Encode + forward a batch, write outputs. Returns True if batch succeeded."""
     import numpy as np
     import torch
     from esm.sdk.api import LogitsConfig
 
-    tensors = [_encode_one(client, s) for s in seqs]
+    tensors = [_encode_one(client, s, c) for s,c in zip(seqs, coords)]
     batched = _stack_batch(tensors, device)
     lengths = _seq_lengths(batched, tensors)
 
@@ -225,8 +375,9 @@ def _run_model(records, client, mode: str, batch_size: int, out_h5, model_key: s
             end = min(i + attempted, n)
             ids = [r[0] for r in records[i:end]]
             seqs = [r[1] for r in records[i:end]]
+            coords = [r[2] for r in records[i:end]] if len(records[i]) > 2 else None
             try:
-                _process_batch(client, seqs, ids, mode, out_h5, model_key, device)
+                _process_batch(client, seqs, ids, coords, mode, out_h5, model_key, device)
                 i = end
                 break
             except torch.OutOfMemoryError:
@@ -239,7 +390,7 @@ def _run_model(records, client, mode: str, batch_size: int, out_h5, model_key: s
                 )
                 attempted //= 2
         if attempted < 1:
-            sid, seq = records[i]
+            sid, seq, _c = records[i]
             print(f"skip {sid}: cannot fit at batch_size=1 (len={len(seq)})", flush=True)
             i += 1
 
@@ -266,6 +417,10 @@ def main() -> int:
     parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--max-len", type=int, default=0, help="0 = no cap")
     parser.add_argument("--smoke-limit", type=int, default=0, help="0 = no limit")
+    parser.add_argument(
+        "--structures-mapping", default=None,
+        help="Optional. Contains a CSV mapping of UniProt IDs to PDB structures. If provided, ESM3 structure embeddings will also be computed.",
+    )
     args = parser.parse_args()
 
     _setup_hf_cache()
@@ -290,10 +445,38 @@ def main() -> int:
         _write_versions(args.versions, args.process_name)
         return 0
 
+    structure_mapping = {}
+    if args.structures_mapping:
+        import csv
+        with open(args.structures_mapping, "r") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                uniprot_id = row["uniprot_id"]
+                pdb_id = row["pdb_id"]
+                structure_mapping[uniprot_id] = pdb_id
+
+    records3 = _attach_structures(records, args.mode, structure_mapping)
+
+    records_seq_only = [(sid, seq, None) for sid, seq, _c, _s in records3]
+    records_with_struct = [(sid, struct_seq, coords) for sid, seq, coords, struct_seq in records3 if coords is not None]
+
+    if records_with_struct:
+        print(
+            f"{len(records_with_struct)}/{len(records3)} records have usable "
+            f"structure coordinates -> will also get an esm3_struct embedding",
+            flush=True,
+        )
+
+
     with h5py.File(args.output_h5, "w") as out_h5:
         print("loading ESM3", flush=True)
         client = ESM3.from_pretrained("esm3-open", device=device).to(device).eval()
-        _run_model(records, client, args.mode, args.batch_size, out_h5, "esm3", device)
+        _run_model(records_seq_only, client, args.mode, args.batch_size, out_h5, "esm3", device)
+
+        if records_with_struct:
+            _run_model(records_with_struct, client, args.mode, args.batch_size, out_h5, "esm3_structure", device)
+
+        
         del client
         gc.collect()
         if torch.cuda.is_available():
@@ -303,11 +486,12 @@ def main() -> int:
         global _DEVICE_DIAG_DONE
         _DEVICE_DIAG_DONE = False
         client = ESMC.from_pretrained("esmc_600m", device=device).to(device).eval()
-        _run_model(records, client, args.mode, args.batch_size, out_h5, "esmc", device)
+        _run_model(records_seq_only, client, args.mode, args.batch_size, out_h5, "esmc", device)
         del client
         gc.collect()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
+
 
     _write_versions(args.versions, args.process_name)
     return 0
