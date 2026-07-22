@@ -63,6 +63,19 @@ process INIT_DOMAINSPLIT_DB {
             UNIQUE(domain_id, protein_id)
         );
 
+        CREATE TABLE IF NOT EXISTS domain_structure (
+            id         INTEGER PRIMARY KEY,
+            ddi_id     REFERENCES domain_domain_interaction ON DELETE CASCADE,
+            domain1    REFERENCES domain ON DELETE CASCADE,
+            domain2    REFERENCES domain ON DELETE CASCADE,
+            protein1   REFERENCES protein ON DELETE CASCADE,
+            protein2   REFERENCES protein ON DELETE CASCADE,
+            source     TEXT    NOT NULL,
+            pdb_gz     BLOB    NOT NULL,
+            z_score    REAL,
+            UNIQUE (ddi_id, protein1, protein2, source)
+        );
+
         CREATE INDEX IF NOT EXISTS idx_domain_domain_interaction_domain_id_a
         ON domain_domain_interaction (domain_id_a);
         CREATE INDEX IF NOT EXISTS idx_domain_domain_interaction_domain_id_b

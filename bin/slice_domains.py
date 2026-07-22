@@ -110,11 +110,11 @@ def main():
     args = parse_args()
     
     pdb_dir_af = Path(args.pdb_dir_af) # contains predicted PDBs for AF3
-    pdb_dir_rf = Path(args.pdb_dir_rf) # contains predicted PDBs for RF2
+    pdb_dir_rf = Path(args.pdb_dir_rf) # contains predicted PDBs for RF
 
     shutil.copy(args.db_in, args.db_out)
     conn = utils_struct.connect_db(args.db_out)
-    utils_struct.create_ds_table(conn)
+    # utils_struct.create_ds_table(conn)
 
     # Check if output directories exist, if not skip slicing for that source
     if not pdb_dir_af.exists():
@@ -125,8 +125,8 @@ def main():
         print(f"[slice_domains] WARNING: RF PDB directory {pdb_dir_rf} does not exist, skipping RF slicing", flush=True)
     else:
         enrich_db_with_predictions(conn, pdb_dir_rf, "RF")
-    enrich_db_with_predictions(conn, pdb_dir_af, "AF3")
-    enrich_db_with_predictions(conn, pdb_dir_rf, "RF")
+    # enrich_db_with_predictions(conn, pdb_dir_af, "AF3")
+    # enrich_db_with_predictions(conn, pdb_dir_rf, "RF")
     conn.close()
 
     

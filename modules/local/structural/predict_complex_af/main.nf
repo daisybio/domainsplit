@@ -9,13 +9,13 @@ process PREDICT_COMPLEX_AF {
     path dbstruct, stageAs: 'input.dbstruct.sqlite3'
 
     output:
-    path "pdb_files_af/",          emit: pdb_files
+    path "pdb_files_af/",       emit: pdb_files
     path "versions.yml",        emit: versions
 
     script:
     """
     predict_complex_af.py \\
-        --db_in  ${dbstruct} \\
+        --db_in ${dbstruct} \\
         --outdir pdb_files_af/ \\
         --versions versions.yml \\
         --process_name "${task.process}"

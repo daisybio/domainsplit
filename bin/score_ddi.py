@@ -89,6 +89,8 @@ def parse_args():
                    help="Path to write versions.yml")
     p.add_argument("--process_name",     required=True,
                    help="Nextflow process name for versions.yml")
+    p.add_argument("--source", required=True, choices=["AF3", "RF"],
+                help="Select source of domain structures to use for scoring (AF3 or RF)")
     return p.parse_args()
 
 
@@ -161,9 +163,9 @@ def check_for_interaction(resA, resB):
     return best_itype
 
 
-def check_rsa(domain, threshold=0.1):
+def check_rsa(domain, chain_id, threshold=0.1):
     # For each residue ensure that its RSA is above the threshold (0.1) to be considered surface-exposed.
-    rsa_residue_values = calculate_rsa_residue_level(domain)
+    rsa_residue_values = calculate_rsa_residue_level(domain, chain_id=chain_id)
     checked = []
     for res_id, rsa in rsa_residue_values.items():
         if rsa is not None and rsa > threshold:
@@ -171,7 +173,7 @@ def check_rsa(domain, threshold=0.1):
     return checked
 
 
-def find_interacting_residues(res_a, res_b):
+def find_interacting_residues(res_a, res_b, structure):
     """
     Build the residue-pair interaction matrix for a domain pair.
 
@@ -180,11 +182,14 @@ def find_interacting_residues(res_a, res_b):
         n_interacting = count of non-None entries
     """
     n_a, n_b = len(res_a), len(res_b)
-    matrix = [[] * n_b for _ in range(n_a)]
+    matrix = [[""] * n_b for _ in range(n_a)]
+    # Get matrix shape
+    print(len(matrix), len(matrix[0]) if matrix else 0)
+    
     n_interacting = 0
 
-    res_a_checked = check_rsa(res_a, threshold=0.1)
-    res_b_checked = check_rsa(res_b, threshold=0.1)
+    res_a_checked = check_rsa(structure, chain_id=CHAIN_A)
+    res_b_checked = check_rsa(structure, chain_id=CHAIN_B)
 
     for i, rA in enumerate(res_a):
         if rA.get_id() not in res_a_checked:
@@ -194,7 +199,11 @@ def find_interacting_residues(res_a, res_b):
                 continue
             itype = check_for_interaction(rA, rB)
             if itype is not None:
-                matrix[i][j] = itype
+                try:
+                    matrix[i][j] = itype
+                except IndexError:
+                    print(f"IndexError: i={i}, j={j}, len(matrix)={len(matrix)}, len(matrix[0])={len(matrix[0]) if matrix else 0}")
+                    raise
                 n_interacting += 1
 
     return matrix, n_interacting
@@ -364,7 +373,7 @@ def write_versions(path, process_name):
 def main():
     args = parse_args()
 
-    print(f"[score_ddi] zscore_threshold={ZSCORE_THRESHOLD}, "
+    print(f"[score_ddi] source={args.source}, zscore_threshold={ZSCORE_THRESHOLD}, "
           f"trials={TRIALS}", flush=True)
     
 
@@ -381,69 +390,71 @@ def main():
     
     scores = {}
 
-    sources = ["AF3", "RF"]
+    source = args.source
 
-    domain_structures = get_domain_structures(args.db_in)
+    source_structures = get_domain_structures(args.db_in, source=args.source)
+
+    print(f"[score_ddi] source={source}: {len(source_structures)} predicted "
+          f"complexes to score", flush=True)
+
+
+    # If no predictions exist for a source, there is nothing to do
+    if len(source_structures) == 0:
+        print(f"[score_ddi] WARNING: No domain structures found for source={source}, skipping scoring", flush=True)
+        conn_out.close()
+        write_versions(args.versions, args.process_name)
+        print("[score_ddi] done", flush=True)
+        return
     
 
-    for source in sources:
-        print(f"[score_ddi] Processing source={source}", flush=True)
         
-        source_structures = [ds for ds in domain_structures if ds[3] == source]
+    for (ds_id, ddi_id, pdb_gz, _source) in source_structures:
 
-        print(f"[score_ddi] source={source}: {len(source_structures)} predicted "
-              f"complexes to score", flush=True)
+        path_to_tmp_pdb = bytes_to_tempfile(pdb_gz)
+        structure = None
+        try:
+            structure = PDBParser(QUIET=True).get_structure(f"ddi_{ddi_id}", path_to_tmp_pdb)
+        except Exception as e:
+            print(f"WARNING: Failed to parse PDB for DDI {ddi_id}: {e}", file=sys.stderr)
 
-        if len(source_structures) == 0:
-            print(f"[score_ddi] WARNING: No domain structures found for source={source}, skipping scoring", flush=True)
+        res_a = extract_domain_residues(structure, CHAIN_A)
+        res_b = extract_domain_residues(structure, CHAIN_B)
+
+        # Check rsa giving it a domain_structure object
+
+
+        if not res_a or not res_b:
+            print(f"  WARNING: no residues extracted for ddi {ddi_id}", file=sys.stderr)
             continue
-        
-        for (ds_id, ddi_id, pdb_gz) in source_structures:
 
-            path_to_tmp_pdb = bytes_to_tempfile(pdb_gz)
-            structure = None
-            try:
-                structure = PDBParser(QUIET=True).get_structure(f"ddi_{ddi_id}", path_to_tmp_pdb)
-            except Exception as e:
-                print(f"WARNING: Failed to parse PDB for DDI {ddi_id}: {e}", file=sys.stderr)
+        # Step 1: find interacting residue pairs and require >= 5 (3did rule)
+        matrix, n_interacting = find_interacting_residues(res_a, res_b, structure)
+        if n_interacting < MIN_INTERACTING_PAIRS:
+            print(f"  Row {ddi_id} in {pdb_gz}: only {n_interacting} interacting pairs "
+                    f"(< {MIN_INTERACTING_PAIRS}) -- not interacting, "
+                    f"z_score=0, confirmed=0", flush=True)
+            # update_score(args.db_out, ds_id, 0.0)
+            continue
 
-            res_a = extract_domain_residues(structure, CHAIN_A)
-            res_b = extract_domain_residues(structure, CHAIN_B)
+        # Step 2: score the real complex
+        real_score = compute_empirical_potential(res_a, res_b, matrix)
 
+        # Step 3: score random trials (same geometry, DB-wide AA sampling)
+        random_scores = run_random_trials(len(res_a), len(res_b), matrix, TRIALS)
 
+        # Step 4: z-score and significance
+        z_score = compute_z_score(real_score, random_scores)
+        confirmed = int(z_score >= ZSCORE_THRESHOLD)
 
-            if not res_a or not res_b:
-                print(f"  WARNING: no residues extracted for ddi {ddi_id}", file=sys.stderr)
-                continue
-
-            # Step 1: find interacting residue pairs and require >= 5 (3did rule)
-            matrix, n_interacting = find_interacting_residues(res_a, res_b)
-            if n_interacting < MIN_INTERACTING_PAIRS:
-                print(f"  Row {ddi_id} in {pdb_gz}: only {n_interacting} interacting pairs "
-                        f"(< {MIN_INTERACTING_PAIRS}) -- not interacting, "
-                        f"z_score=0, confirmed=0", flush=True)
-                # update_score(args.db_out, ds_id, 0.0)
-                continue
-
-            # Step 2: score the real complex
-            real_score = compute_empirical_potential(res_a, res_b, matrix)
-
-            # Step 3: score random trials (same geometry, DB-wide AA sampling)
-            random_scores = run_random_trials(len(res_a), len(res_b), matrix, TRIALS)
-
-            # Step 4: z-score and significance
-            z_score = compute_z_score(real_score, random_scores)
-            confirmed = int(z_score >= ZSCORE_THRESHOLD)
-
-            print(f"  Row {ddi_id} {ds_id}: n_interacting={n_interacting}, "
-                    f"score={real_score:.3f}, z={z_score:.3f}, "
-                    f"confirmed={confirmed}", flush=True)
-            # update_score(conn_out, ds_id, z_score)
-            if ddi_id not in scores:
-                scores[ddi_id] = []
-            scores[ddi_id].append((z_score, confirmed))
-        updated_scores = aggregate_scores(scores)
-        update_scores_in_db(conn_out, updated_scores, source)
+        print(f"  Row {ddi_id} {ds_id}: n_interacting={n_interacting}, "
+                f"score={real_score:.3f}, z={z_score:.3f}, "
+                f"confirmed={confirmed}", flush=True)
+        # update_score(conn_out, ds_id, z_score)
+        if ddi_id not in scores:
+            scores[ddi_id] = []
+        scores[ddi_id].append((z_score, confirmed))
+    updated_scores = aggregate_scores(scores)
+    update_scores_in_db(conn_out, updated_scores, source)
     conn_out.close()
 
 

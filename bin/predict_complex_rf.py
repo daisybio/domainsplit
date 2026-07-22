@@ -68,11 +68,11 @@ def run_rf2_for_pair(protein_id_a: str, protein_id_b: str, sequence_a: str, sequ
         rf_fold.py --fasta <fasta_file> --outdir <outdir>
     sequence_a must be passed as the first chain so it lands on chain A.
     """
-    fasta_file = create_fasta(protein_id_a, protein_id_b, sequence_a, sequence_b, outdir)
-    utils_struct.mock_predict_complex_rf(sequence_a, sequence_b, outdir)
+    # fasta_file = create_fasta(protein_id_a, protein_id_b, sequence_a, sequence_b, outdir)
+    # utils_struct.mock_predict_complex_rf(sequence_a, sequence_b, outdir)
     
     
-    # pass   # ← implement RF2 invocation here
+    pass   # ← implement RF2 invocation here
 
 
 def _write_versions(versions_path: str, process_name: str) -> None:
@@ -86,12 +86,12 @@ def _write_versions(versions_path: str, process_name: str) -> None:
 
 def subset_ppis(conn, ppis, limit: int):
     # Limit PPIs, such that for each DDI in the dataset, only the first N PPIs are kept.
-    # This is useful for testing, to avoid running AF3 on all PPIs.
+    # This is useful for testing, to avoid running RF on all PPIs.
     if limit is None:
         return ppis
 
-    print(f"[predict_complex_af] Limiting PPIs to {limit} per DDI", flush=True)
-
+    print(f"[predict_complex_rf] Limiting PPIs to {limit} per DDI", flush=True)
+    
     query_ddi = "SELECT domain_id_a, domain_id_b FROM domain_domain_interaction"
     query_pd = "SELECT protein_id, domain_id FROM domain_protein_map"
 
@@ -130,7 +130,7 @@ def main():
     conn = utils_struct.connect_db(args.db_in)
 
     ppis = utils_struct.get_ppis(conn)
-    limited_ppis = subset_ppis(conn, ppis, limit=5)  # Limit to 5 PPIs per DDI for testing
+    limited_ppis = subset_ppis(conn, ppis, limit=2)  # Limit to 2 PPIs per DDI for testing
     ppis = limited_ppis
     conn.close()
 

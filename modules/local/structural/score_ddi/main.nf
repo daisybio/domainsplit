@@ -1,5 +1,5 @@
 process SCORE_DDI {
-    tag "$meta.id"
+    tag "${meta.id}:${meta.source}"
     label 'process_medium'
 
     conda "${moduleDir}/environment.yml"
@@ -20,6 +20,7 @@ process SCORE_DDI {
         --c_ab_matrix ${c_ab_matrix} \\
         --db_freq ${db_freq} \\
         --t_db ${t_db} \\
+        --source ${meta.source} \\
         --versions versions.yml \\
         --process_name "${task.process}"
     """

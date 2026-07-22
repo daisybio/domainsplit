@@ -73,12 +73,14 @@ def select_af_models(model_dir: str, file_ending: str):
 
 
 def convert_cif_to_pdb(cif_path: str, pdb_path: str) -> None:
-    parser = MMCIFParser(QUIET=True)
-    structure = parser.get_structure("model", cif_path)
-    io_obj = PDBIO()
-    io_obj.set_structure(structure)
-    io_obj.save(pdb_path)
-
+    try:
+        parser = MMCIFParser(QUIET=True)
+        structure = parser.get_structure("model", cif_path)
+        io_obj = PDBIO()
+        io_obj.set_structure(structure)
+        io_obj.save(pdb_path)
+    except Exception as e:
+        print(f"Error converting {cif_path} to {pdb_path}: {e}", flush=True)
 
 
 def prep_af_input(ppi_data, dir) -> None:
@@ -99,22 +101,6 @@ def prep_af_input(ppi_data, dir) -> None:
     
     pd.DataFrame(pairs, columns=["protein_1", "protein_2"]).to_csv(pairs_path, sep="\t", index=False)
     pd.DataFrame(protein_sequences.items(), columns=["protein_id", "sequence"]).to_csv(proteins_path, sep="\t", index=False)
-
-
-# def run_af3_for_pair(protein_id_a: str, protein_id_b: str, sequence_a: str, sequence_b: str, outdir: str) -> None:
-#     """
-#     Invoke AlphaFold 3 for the two sequences.
-
-#     TODO: replace stub with real AF3 CLI call, e.g.:
-#         af3 --seq1 <sequence_a> --seq2 <sequence_b> --outdir <outdir>
-#     sequence_a must be passed as the first chain so it lands on chain A.
-#     """
-#     # utils_struct.mock_predict_complex(sequence_a, sequence_b, outdir, f"{protein_id_a}_{protein_id_b}")
-
-
-
-    
-#     # pass   # ← implement AF3 invocation here
 
 
 
@@ -172,14 +158,14 @@ def main():
     conn = utils_struct.connect_db(args.db_in)
 
     ppis = utils_struct.get_ppis(conn)
-    limited_ppis = subset_ppis(conn, ppis, limit=4)  # Limit to 4 PPIs per DDI for testing
+    limited_ppis = subset_ppis(conn, ppis, limit=2)  # Limit to 2 PPIs per DDI for testing
     ppis = limited_ppis
     conn.close()
 
     print(f"[predict_complex_af] {len(ppis)} PPIs to process", flush=True)
 
-    prediction_dir = os.path.join(args.outdir, "af_predictions")
-    os.makedirs(prediction_dir, exist_ok=True)
+    # prediction_dir = os.path.join(args.outdir, "af_predictions")
+    # os.makedirs(prediction_dir, exist_ok=True)
 
     dataset_dir = os.path.join(path_to_input_data, dataset_name)
     os.makedirs(dataset_dir, exist_ok=True)
@@ -190,16 +176,6 @@ def main():
     # Create input files for AF3
     prep_af_input(ppis, dataset_dir)
 
-    # import subprocess
-    # bash scripts/run_monomer_data_pipelines.sh /nfs/data/alphafold3/input/c.thomas/abc_dataset /nfs/data/alphafold3/output/c.thomas/abc_batch
-    # subprocess.run([path_to_af_script_monomer, dataset_dir, dataset_dir_out], check=True, shell=True)
-    # bash scripts/run_pairwise_inferences.sh /nfs/data/alphafold3/input/c.thomas/abc_dataset /nfs/data/alphafold3/output/c.thomas/abc_batch 4
-    # subprocess.run([path_to_af_script_complex, dataset_dir, dataset_dir_out, cpus], check=True, shell=True)
-
-    # In the out_dir, under pair_inferences, each pair has a directory named protein_id_a_protein_id_b, which contains the AF3 output files.
-    # In the directory to get the file, you gow down <id>/protein_id_a_protein_id_b/*.cif
-    # So the complete path to the .cif file is: <dataset_dir_out>/af3_outputs/pair_inferences/protein_id_a_protein_id_b/<process_id>/protein_id_a_protein_id_b/*.cif
-
     pair_inference_dir = os.path.join(dataset_dir_out, "af3_outputs", "pair_inferences")
 
     all_models = select_af_models(pair_inference_dir, "cif")
@@ -208,41 +184,11 @@ def main():
     for name, cif_path in all_models.items():
         if cif_path:
             protein_id_a, protein_id_b = name.split("__")
-            pdb_path = os.path.join(prediction_dir, f"{protein_id_a}_{protein_id_b}.pdb")
+            pdb_path = os.path.join(args.outdir, f"{protein_id_a}_{protein_id_b}.pdb")
             convert_cif_to_pdb(cif_path, pdb_path)
         else:
             print(f"  SKIP {name}: no AF3 model found", flush=True)
     
-
-
-    # for (protein_id_a, uniprot_id_a, seq_a, protein_id_b, uniprot_id_b, seq_b) in ppis:
-    #     if not seq_a or not seq_b:
-    #         print(f"  SKIP {uniprot_id_a}/{uniprot_id_b}: missing sequence", flush=True)
-    #         continue
-
-    #     # 1. Run Alphafold3
-    #     pair_dir = os.path.join(prediction_dir, f"{protein_id_a}_{protein_id_b}")
-    #     os.makedirs(pair_dir, exist_ok=True)
-    #     run_af3_for_pair(protein_id_a, protein_id_b, seq_a, seq_b, pair_dir)
-
-    #     # 2. Select best model
-    #     cif_path = select_af_model(pair_dir, "pdb")  # NOTE: temporarily using .pdb
-    #     if cif_path is None:
-    #         print(f"  SKIP {protein_id_a}/{protein_id_b}: no AF3 model found", flush=True)
-    #         continue
-        
-        
-    #     # 3. Convert cif to pdb and save to outdir
-    #     pdb_path = os.path.join(args.outdir, f"{protein_id_a}_{protein_id_b}.pdb")
-    #     # NOTE: temporarily simply copy the .pdb file instead of converting from .cif
-    #     shutil.copy(cif_path, pdb_path)
-
-        
-    #     # convert_cif_to_pdb(cif_path, pdb_path)
-
-    # # Remove the prediction_dir after processing all PPIs to save space
-    # shutil.rmtree(prediction_dir)
-
     _write_versions(args.versions, args.process_name)
     print("[predict_complex_af] done", flush=True)
 

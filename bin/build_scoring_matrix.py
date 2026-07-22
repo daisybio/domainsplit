@@ -56,6 +56,9 @@ def parse_args():
                    help="Output versions.yml")
     p.add_argument("--process_name", required=True,
                    help="Nextflow process name for versions.yml")
+    p.add_argument("--source", required=True, choices=["AF3", "RF"],
+                help="Select source of domain structures to use for scoring (AF3 or RF)")
+
     return p.parse_args()
 
 
@@ -77,7 +80,7 @@ def build_matrix(args):
     n_no_contact = 0
 
 
-    for (ds_id, ddi_id, pdb_gz) in get_domain_structures(args.db_in):
+    for (ds_id, ddi_id, pdb_gz, source) in get_domain_structures(args.db_in, source=args.source):
         n_instances += 1
         
         path_to_tmp_pdb = bytes_to_tempfile(pdb_gz)
@@ -189,6 +192,7 @@ def write_versions(path, process_name):
 def main():
     args = parse_args()
 
+    print(f"[build_scoring_matrix] Building scoring matrix from source={args.source}", flush=True)
     C_ab, surface_counts = build_matrix(args)
 
     write_c_ab_matrix(C_ab,         args.c_ab_matrix)

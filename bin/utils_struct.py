@@ -12,8 +12,10 @@ from Bio.PDB.PDBIO import PDBIO, Select
 from Bio.PDB.SASA import ShrakeRupley
 
 
-def calculate_sasa_residue_level(domain):
+def calculate_sasa_residue_level(domain, chain_id):
     sr = ShrakeRupley()
+    if chain_id:
+        domain = domain[0][chain_id]  # Get the specific chain from the structure
     sr.compute(domain, level="R")  # Compute SASA at the residue level
     sasa_values = {}
     for residue in domain.get_residues():
@@ -21,8 +23,8 @@ def calculate_sasa_residue_level(domain):
     return sasa_values
 
 
-def calculate_rsa_residue_level(domain):
-    sasa_residue = calculate_sasa_residue_level(domain)
+def calculate_rsa_residue_level(domain, chain_id):
+    sasa_residue = calculate_sasa_residue_level(domain, chain_id)
 
     # MAxSASA values by Tien et al. 2013, "Maximum allowed solvent accessibilities of residues in proteins" (https://doi.org/10.1002/prot.24286)
     max_sasa_values = {
@@ -171,11 +173,11 @@ def create_ds_table(conn):
     conn.executescript("""
         CREATE TABLE IF NOT EXISTS domain_structure (
             id         INTEGER PRIMARY KEY AUTOINCREMENT,
-            ddi_id     INTEGER NOT NULL REFERENCES domain_domain_interaction(id),
-            domain1    INTEGER NOT NULL REFERENCES domain(id),
-            domain2    INTEGER NOT NULL REFERENCES domain(id),
-            protein1   INTEGER NOT NULL REFERENCES protein(id),
-            protein2   INTEGER NOT NULL REFERENCES protein(id),
+            ddi_id     REFERENCES domain_domain_interaction ON DELETE CASCADE,
+            domain1    REFERENCES domain ON DELETE CASCADE,
+            domain2    REFERENCES domain ON DELETE CASCADE,
+            protein1   REFERENCES protein ON DELETE CASCADE,
+            protein2   REFERENCES protein ON DELETE CASCADE,
             source     TEXT    NOT NULL,
             pdb_gz     BLOB    NOT NULL,
             z_score    REAL,
@@ -330,7 +332,7 @@ def residues_contact(resA, resB):
 
 
 
-def get_domain_structures(db_path):
+def get_domain_structures(db_path, source = None):
     """
     Get domain structure information from the SQLite database for all DDIs from 3DID.
     Returns a list of tuples: (ddi_id, protein_id_a, protein_id_b, pdb_gz, source)
@@ -342,7 +344,7 @@ def get_domain_structures(db_path):
     conn.execute("PRAGMA journal_mode = MEMORY")
 
 
-    ddis_from_3did = conn.execute("""
+    ddis_positive = conn.execute("""
         SELECT id, domain_id_a, domain_id_b
         FROM domain_domain_interaction
         WHERE negative = 0
@@ -350,16 +352,28 @@ def get_domain_structures(db_path):
 
     # Add chain information from complex_chain_map and pdb_gz from domain_structure
     domain_structures = []
-    for ddi_id, domain_id_a, domain_id_b in ddis_from_3did:
-        row = conn.execute("""
-            SELECT ds.id, ds.pdb_gz, ds.source
-            FROM domain_structure ds
-            WHERE ds.ddi_id = ?
-        """, (ddi_id,)).fetchone()
+    for ddi_id, domain_id_a, domain_id_b in ddis_positive:
+        if not source:
         
-        if row:
-            ds_id, pdb_gz, source = row
-            domain_structures.append((ds_id, ddi_id, pdb_gz, source))
+            rows = conn.execute("""
+                SELECT ds.id, ds.pdb_gz, ds.source
+                FROM domain_structure ds
+                WHERE ds.ddi_id = ?
+            """, (ddi_id,)).fetchone()
+
+        else:
+            rows = conn.execute("""
+                SELECT ds.id, ds.pdb_gz, ds.source
+                FROM domain_structure ds
+                WHERE ds.ddi_id = ? AND ds.source = ?
+            """, (ddi_id, source)).fetchone()
+
+        if not rows:
+            continue
+
+        
+        ds_id, pdb_gz, source = rows
+        domain_structures.append((ds_id, ddi_id, pdb_gz, source))
 
 
     conn.close()

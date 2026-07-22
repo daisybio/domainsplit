@@ -79,7 +79,6 @@ main:
         ENRICH_DDI_DATABASE.out.domainsplit_db
     )
 
-    // TODO: update to enrich_structural.out.struct_db
     ANALYZE_DDI_BIAS(
         ENRICH_DDI_DATABASE.out.domainsplit_db
     )
