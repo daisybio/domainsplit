@@ -7,6 +7,7 @@ process PREDICT_COMPLEX_RF {
 
     input:
     path domainsplit_db_in, stageAs: 'input.domainsplit.sqlite3'
+    path meta_ppis
 
     output:
     path "pdb_files_rf/",          emit: pdb_files

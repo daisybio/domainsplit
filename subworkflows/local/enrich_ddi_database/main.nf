@@ -48,7 +48,7 @@ workflow ENRICH_DDI_DATABASE {
         input_uniprot_go_terms
     ).domainsplit_db
 
-    db_after_ppi = INSERT_PPI(
+    db_after_ppi =  (
         db_after_protein_go,
         input_string,
         input_uniprot_id_mapping

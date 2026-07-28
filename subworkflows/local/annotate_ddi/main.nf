@@ -32,21 +32,11 @@ workflow ANNOTATE_DDI {
 
     main:
 
-    sources_ch = Channel.of('AF3', 'RF')
+    //NOTE: The scoring sources are hardcoded here for now, but can be made configurable in the future.
+    sources_ch  = Channel.fromList(['AF3'])  // Channel.fromList(params.scoring_sources ?: ['AF3', 'RF'])
     ch_versions = Channel.empty()
 
-    // Step1: Cross join the split database with the sources to create a channel of tuples (meta, db, source)
-    // split_db_src_ch = split_db
-    //     .combine(sources_ch)
-    //     .map { meta, db, source -> [ meta + [source: source], db ] }
-
-    // // Step 1: Build scoring matrix based on 3DID empirical potential
-    // // only need training set here
-    // train_ch = split_db_src_ch
-    //     .filter { meta, db -> meta.split == 'train' }
-    //     .map { meta, db -> [ [id: meta.method, source: meta.source], db ] }
-
-    // Prepare channel to build scoring matrix based on training set
+    // Step1: Extract training set of each splot for calculating the empirical potential and the scoring matrix
     train_ch = split_db
         .filter { meta, db -> meta.split == 'train' }
         .combine(sources_ch)
@@ -54,13 +44,16 @@ workflow ANNOTATE_DDI {
             [ [ id: "${meta.method}_${source}", method: meta.method, source: source ], db ]
         }
 
+    // Step2: Build scoring matrix, i.e. the background distribution of domain-domain interactions based on the training set
     BUILD_SCORING_MATRIX(train_ch)
 
+    // Combine outputs
     matrix_ch = BUILD_SCORING_MATRIX.out.c_ab_matrix
         .join(BUILD_SCORING_MATRIX.out.db_freq)
         .join(BUILD_SCORING_MATRIX.out.t_db)
 
 
+    // Step3: Prepare input for scoring the DDIs in the split databases
     score_input_ch = split_db
         .combine(sources_ch)
         .map { meta, db, source ->
@@ -73,22 +66,30 @@ workflow ANNOTATE_DDI {
             [ score_meta, db, c_ab_matrix, db_freq, t_db ]
         }
 
-    // Step 2: Assign z-scores to all ddi complexes in the database based on the empirical potential
+    // Step4: Assign z-scores to all ddi complexes in the database based on the empirical potential
     SCORE_DDI(
         score_input_ch
     )
 
+    // Step5: Merge the scored databases from different sources into a single database
     per_split_ch = SCORE_DDI.out.dbscored
         .map { meta, db ->
             [ meta.subMap(['id', 'split', 'method']), meta.source, db ] 
             }
-        .groupTuple(by: 0)                       // -> [ split_meta, [source1, source2], [db1, db2] ]
-        .map { split_meta, sources, dbs ->
-            def by_source = [sources, dbs].transpose().collectEntries { s, d -> [(s): d] }
-            [ split_meta, by_source['AF3'], by_source['RF'] ]
-        }
+        .groupTuple(by: 0)
 
-    MERGE_SOURCES(per_split_ch)
+    // MERGE_SOURCES(per_split_ch)
+
+    single_ch = per_split_ch.filter { split_meta, sources, dbs -> sources.size() == 1 }
+    multi_ch  = per_split_ch.filter { split_meta, sources, dbs -> sources.size() > 1 }
+
+    MERGE_SOURCES(multi_ch)
+
+    scored_db_ch = single_ch
+        .map { split_meta, sources, dbs -> [ split_meta, dbs[0] ] }
+        .mix(MERGE_SOURCES.out.dbscored)
+
+    
 
     ch_versions = ch_versions.mix(
         BUILD_SCORING_MATRIX.out.versions,
@@ -99,6 +100,6 @@ workflow ANNOTATE_DDI {
 
     emit:
 
-    scores   = MERGE_SOURCES.out.dbscored  // [ meta, scored dbscored ]
+    scored_db = scored_db_ch//MERGE_SOURCES.out.dbscored  // [ meta (id, split, method), scored db ]
     versions = ch_versions
 }

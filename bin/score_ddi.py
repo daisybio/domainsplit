@@ -41,7 +41,7 @@ from pathlib import Path
 
 import numpy as np
 from Bio.PDB.PDBParser import PDBParser
-from utils_struct import bytes_to_tempfile, BACKBONE_ATOMS, CC_VDW, NO_SB, calculate_rsa_residue_level, extract_domain_residues, residues_contact, get_domain_structures
+from utils_struct import bytes_to_tempfile, BACKBONE_ATOMS, CC_VDW, NO_SB, calculate_rsa_residue_level, extract_domain_residues, update_score, get_domain_structures
 
 # Constants
 TRIALS = 1000
@@ -310,7 +310,7 @@ def aggregate_scores(scores):
     aggregated = {}
     for ddi_id, score_list in scores.items():
         confirmed_votes = sum(confirmed for _, confirmed in score_list)
-        mean_z_score = np.mean([z for z, _ in score_list])
+        mean_z_score = np.mean([z for z, _ in score_list if z is not None])
         # Majority vote
         majority_confirmed = int(confirmed_votes > len(score_list) / 2)
         # Mean z-score
@@ -345,17 +345,6 @@ def update_scores_in_db(conn, aggregated_scores, source):
         WHERE id = ?
     """, [(scores['majority_confirmed'], scores['mean_confirmed'], ddi_id) for ddi_id, scores in aggregated_scores.items()])
     conn.commit()
-
-
-
-# def update_score(conn, ds_id, z_score):
-#     # Update domain_structure table with the computed z_score
-#     conn.execute("""
-#         UPDATE domain_structure
-#         SET z_score = ?
-#         WHERE id = ?
-#     """, (z_score, ds_id))
-#     conn.commit()
 
 
 
@@ -430,7 +419,7 @@ def main():
         # Step 1: find interacting residue pairs and require >= 5 (3did rule)
         matrix, n_interacting = find_interacting_residues(res_a, res_b, structure)
         if n_interacting < MIN_INTERACTING_PAIRS:
-            print(f"  Row {ddi_id} in {pdb_gz}: only {n_interacting} interacting pairs "
+            print(f"  Row {ds_id}: only {n_interacting} interacting pairs "
                     f"(< {MIN_INTERACTING_PAIRS}) -- not interacting, "
                     f"z_score=0, confirmed=0", flush=True)
             # update_score(args.db_out, ds_id, 0.0)
@@ -446,10 +435,11 @@ def main():
         z_score = compute_z_score(real_score, random_scores)
         confirmed = int(z_score >= ZSCORE_THRESHOLD)
 
-        print(f"  Row {ddi_id} {ds_id}: n_interacting={n_interacting}, "
+        print(f"  Row {ds_id}: n_interacting={n_interacting}, "
                 f"score={real_score:.3f}, z={z_score:.3f}, "
                 f"confirmed={confirmed}", flush=True)
-        # update_score(conn_out, ds_id, z_score)
+        # Update z-score column in domain_structure table, just to keep a record of the actual z-score for each complex
+        update_score(conn_out, ds_id, z_score)
         if ddi_id not in scores:
             scores[ddi_id] = []
         scores[ddi_id].append((z_score, confirmed))

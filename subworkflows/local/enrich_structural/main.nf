@@ -30,6 +30,7 @@ workflow ENRICH_STRUCTURAL {
 
     take:
     domainsplit_db_in   // channel: path to SQLite DB (with ddi_complex_coords populated)
+    meta_ppis
 
     main:
 
@@ -37,10 +38,10 @@ workflow ENRICH_STRUCTURAL {
     af_ppi_db = Channel.empty()
     rf_ppi_db = Channel.empty()
 
-    PREDICT_COMPLEX_AF(domainsplit_db_in)
+    PREDICT_COMPLEX_AF(domainsplit_db_in, meta_ppis)
     af_ppi_db = PREDICT_COMPLEX_AF.out.pdb_files
 
-    PREDICT_COMPLEX_RF(domainsplit_db_in)
+    PREDICT_COMPLEX_RF(domainsplit_db_in, meta_ppis)
     rf_ppi_db = PREDICT_COMPLEX_RF.out.pdb_files
 
     // Step 2: Slice domains and store them

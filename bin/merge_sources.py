@@ -2,15 +2,17 @@
 """
 merge_source_scores.py
 -----------------------
-Phase 3 of DDI scoring: recombine the per-source scored DBs for one
-domain-splitting method back into a single DB.
+Phase 3 of DDI scoring: recombine the per-source scored DBs for one split
+back into a single DB. Handles any number of configured sources (1..N).
 
-score_ddi.py now runs once per (split x source) and only ever writes its
-own source's 2 columns (interaction_confirmed_majority_<source>,
-interaction_confirmed_mean_<source>). This script takes the AF3-scored DB
-and the RF-scored DB for the SAME split and copies RF's 2 columns onto a
-copy of the AF3 DB, matched by domain_domain_interaction.id, so downstream
-consumers see all 4 columns on one DB per split.
+score_ddi.py runs once per (split x source) and only ever writes its own
+source's 2 columns (interaction_confirmed_majority_<source>,
+interaction_confirmed_mean_<source>) -- and only if that source had any
+predicted structures at all for this split. This script takes the scored
+DB for each configured source and copies each source's columns onto a
+single base DB, matched by domain_domain_interaction.id. Sources with no
+columns present in their DB (no predictions) are skipped entirely -- no
+empty columns are created for them.
 """
 
 import argparse
@@ -19,76 +21,92 @@ import sqlite3
 import sys
 
 
-SOURCES = ("AF3", "RF")
-
-
 def parse_args():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--db_af3", required=True, help="dbscored.sqlite3 from the AF3 SCORE_DDI run")
-    p.add_argument("--db_rf", required=True, help="dbscored.sqlite3 from the RF SCORE_DDI run")
+    p.add_argument(
+        "--db", action="append", required=True, metavar="SOURCE=PATH",
+        help="One scored DB per configured source, e.g. --db AF3=af3.sqlite3 "
+             "--db RF=rf.sqlite3. Repeatable; at least one required."
+    )
     p.add_argument("--db_out", required=True, help="Merged output DB path")
     p.add_argument("--versions", required=True)
     p.add_argument("--process_name", required=True)
     return p.parse_args()
 
 
-def get_source_columns(conn, source):
+def parse_source_dbs(raw):
+    parsed = []
+    for entry in raw:
+        if "=" not in entry:
+            raise ValueError(f"--db entries must be SOURCE=PATH, got: {entry}")
+        source, path = entry.split("=", 1)
+        parsed.append((source, path))
+    return parsed
+
+
+def get_source_columns(conn, source, schema_prefix=None):
     cols = [f"interaction_confirmed_majority_{source}", f"interaction_confirmed_mean_{source}"]
-    existing = {row[1] for row in conn.execute("PRAGMA table_info(domain_domain_interaction)")}
-    present = all(c in existing for c in cols)
-    return cols, present
+    table = f"{schema_prefix}.domain_domain_interaction" if schema_prefix else "domain_domain_interaction"
+    existing = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+    return cols, all(c in existing for c in cols)
 
 
-def merge(db_af3, db_rf, db_out):
-    # Base DB = AF3 output (already has the AF3 columns); copy RF's columns in.
-    shutil.copy(db_af3, db_out)
+def merge(source_dbs, db_out):
+    if not source_dbs:
+        raise ValueError("At least one --db SOURCE=PATH is required")
+
+    base_source, base_path = source_dbs[0]
+    shutil.copy(base_path, db_out)
+
+    if len(source_dbs) == 1:
+        print(f"[merge_sources] only one source ({base_source}) -- no merge needed", flush=True)
+        return
+
+    
     conn = sqlite3.connect(db_out)
     conn.execute("PRAGMA foreign_keys = ON")
 
-    af3_cols, af3_present = get_source_columns(conn, "AF3")
-    if af3_present:
-        print(f"[merge_sources] AF3 columns already present in {db_out}, skipping AF3 merge", flush=True)
+    base_cols, base_present = get_source_columns(conn, base_source)
+    if base_present:
+        print(f"[merge_sources] base DB ({base_source}) already has columns: {base_cols}", flush=True)
     else:
-        print(f"[merge_sources] WARNING: AF3 columns not present in {db_out}, no AF3 predictions available", flush=True)
+        print(f"[merge_sources] WARNING: base DB ({base_source}) has no columns -- "
+              f"no {base_source} predictions for this split", flush=True)
 
-    rf_cols = [f"interaction_confirmed_majority_RF", f"interaction_confirmed_mean_RF"]
-    for col in rf_cols:
-        conn.execute(f"ALTER TABLE domain_domain_interaction ADD COLUMN {col} INTEGER DEFAULT 0;")
+    for i, (source, path) in enumerate(source_dbs[1:], start=1):
+        schema = f"src_{i}"
+        conn.execute("ATTACH DATABASE ? AS ?", (path, schema))
+        cols, present = get_source_columns(conn, source, schema_prefix=schema)
 
-    conn.execute("ATTACH DATABASE ? AS rf_db", (db_rf,))
-    rf_cols = ["interaction_confirmed_majority_RF", "interaction_confirmed_mean_RF"]
-    rf_check_cols = {row[1] for row in conn.execute("PRAGMA rf_db.table_info(domain_domain_interaction)")}
-    rf_present = all(c in rf_check_cols for c in rf_cols)
+        if not present:
+            print(f"[merge_sources] {source} columns absent from {path} "
+                  f"(no {source} predictions for this split) -- leaving them out entirely", flush=True)
+            conn.execute(f"DETACH DATABASE {schema}")
+            continue
 
-    n_updated = 0
-    if rf_present:
-        for col in rf_cols:
+        for col in cols:
             conn.execute(f"ALTER TABLE domain_domain_interaction ADD COLUMN {col} INTEGER;")
+
         conn.execute(f"""
             UPDATE domain_domain_interaction
-            SET interaction_confirmed_majority_RF = (
-                    SELECT rf.interaction_confirmed_majority_RF
-                    FROM rf_db.domain_domain_interaction rf
-                    WHERE rf.id = domain_domain_interaction.id
+            SET {cols[0]} = (
+                    SELECT src.{cols[0]}
+                    FROM {schema}.domain_domain_interaction src
+                    WHERE src.id = domain_domain_interaction.id
                 ),
-                interaction_confirmed_mean_RF = (
-                    SELECT rf.interaction_confirmed_mean_RF
-                    FROM rf_db.domain_domain_interaction rf
-                    WHERE rf.id = domain_domain_interaction.id
+                {cols[1]} = (
+                    SELECT src.{cols[1]}
+                    FROM {schema}.domain_domain_interaction src
+                    WHERE src.id = domain_domain_interaction.id
                 )
-            WHERE id IN (SELECT id FROM rf_db.domain_domain_interaction)
+            WHERE id IN (SELECT id FROM {schema}.domain_domain_interaction)
         """)
         n_updated = conn.total_changes
-    else:
-        print(f"[merge_sources] RF columns absent from {db_rf} "
-              f"(no RF predictions for this split) — leaving them out entirely", flush=True)
+        conn.execute(f"DETACH DATABASE {schema}")
+        print(f"[merge_sources] merged {source} columns into {db_out} ({n_updated} rows touched)", flush=True)
 
     conn.commit()
-    conn.execute("DETACH DATABASE rf_db")
     conn.close()
-    
-    print(f"[merge_sources] merged RF columns into {db_out} "
-          f"({n_updated} rows touched)", flush=True)
 
 
 def write_versions(path, process_name):
@@ -99,7 +117,8 @@ def write_versions(path, process_name):
 
 def main():
     args = parse_args()
-    merge(args.db_af3, args.db_rf, args.db_out)
+    source_dbs = parse_source_dbs(args.db)
+    merge(source_dbs, args.db_out)
     write_versions(args.versions, args.process_name)
     print("[merge_sources] done", flush=True)
 

@@ -11,9 +11,10 @@ include { COLLECT_DDI_DATA            } from '../subworkflows/local/collect_ddi_
 include { CURATE_DOMAINS              } from '../subworkflows/local/curate_domains/main.nf'
 include { generate_esm_embeddings     } from '../modules/local/esm_embeddings/main.nf'
 include { ENRICH_DDI_DATABASE         } from '../subworkflows/local/enrich_ddi_database/main.nf'
+include { FILTER_DB                   } from '../module/local/filter_db/main.nf'
 include { ENRICH_STRUCTURAL           } from '../subworkflows/local/enrich_structural/main.nf'
 include { SPLIT_DOMAINSPLIT_DATABASE  } from '../subworkflows/local/split_domainsplit_database/main.nf'
-include { ANNOTATE_DDI                   } from '../subworkflows/local/annotate_ddi/main.nf'
+include { ANNOTATE_DDI                } from '../subworkflows/local/annotate_ddi/main.nf'
 include { ANALYZE_DDI_BIAS            } from '../modules/local/analyze_ddi_bias/main.nf'
 
 /*
@@ -45,6 +46,7 @@ main:
         params.hippie_tsv,
         params.ppidm_tsv,
         params.negative_ppi_parquet,
+        params.meta_keep_mapping
     )
 
     domainsplit_db_ddi = COLLECT_DDI_DATA.out.domainsplit_db
@@ -74,13 +76,20 @@ main:
         generate_esm_embeddings.out.domain_embeddings,
     )
 
+    // TODO: Introduce filtering process here
+    FILTER_DB(
+        ENRICH_DDI_DATABASE.out.domainsplit_db,
+        params.meta_keep_ppi,
+        params.meta_keep_mapping
+        )
 
     ENRICH_STRUCTURAL(
-        ENRICH_DDI_DATABASE.out.domainsplit_db
+        FILTER_DB.out.domainsplit_db,
+        params.meta_keep_ppi
     )
 
     ANALYZE_DDI_BIAS(
-        ENRICH_DDI_DATABASE.out.domainsplit_db
+        FILTER_DB.out.domainsplit_db
     )
 
     SPLIT_DOMAINSPLIT_DATABASE(
@@ -117,7 +126,7 @@ main:
 emit:
     domainsplit_db  = ENRICH_DDI_DATABASE.out.domainsplit_db
     split_db        = SPLIT_DOMAINSPLIT_DATABASE.out.split_db
-    scored_db       = ANNOTATE_DDI.out.scores
+    scored_db       = ANNOTATE_DDI.out.scored_db
     bias_report     = ANALYZE_DDI_BIAS.out.report_dir
 }
 

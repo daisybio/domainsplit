@@ -232,13 +232,6 @@ def get_domain_mapping(conn, protein_id: int):
     """, (protein_id,)).fetchall()
 
 
-# def store_chain_map(conn, protein_id_a: int, protein_id_b: int, chain_id_a: str, chain_id_b: str, source_model: str) -> None:
-#     return conn.execute("""
-#         INSERT OR REPLACE INTO complex_chain_map
-#             (protein_id_a, protein_id_b, source, chain_id_a, chain_id_b)
-#         VALUES (?, ?, ?, ?, ?)
-#     """, (protein_id_a, protein_id_b, source_model, chain_id_a, chain_id_b))
-
 
 def store_domain_slice(conn, ddi_id: int, domain_id_1: int, domain_id_2: int, protein_id_1: int, protein_id_2: int, pdb_gz: bytes, source_model: str) -> None:
     return conn.execute("""
@@ -246,6 +239,17 @@ def store_domain_slice(conn, ddi_id: int, domain_id_1: int, domain_id_2: int, pr
             (ddi_id, domain1, domain2, protein1, protein2, source, pdb_gz, z_score)
         VALUES (?, ?, ?, ?, ?, ?, ?, NULL)
     """, (ddi_id, domain_id_1, domain_id_2, protein_id_1, protein_id_2, source_model, pdb_gz))
+
+
+
+def update_score(conn, ds_id: int, z_score: float) -> None:
+    """Update the z_score for a domain_structure entry."""
+    conn.execute("""
+        UPDATE domain_structure
+        SET z_score = ?
+        WHERE id = ?
+    """, (z_score, ds_id))
+
 
 
 def check_ddi_exists(conn, domain_id_a: int, domain_id_b: int):
