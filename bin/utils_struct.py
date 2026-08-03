@@ -5,7 +5,6 @@ import io
 import os
 import tempfile
 import sqlite3
-import random
 
 from Bio.PDB.PDBParser import PDBParser
 from Bio.PDB.PDBIO import PDBIO, Select
@@ -169,41 +168,24 @@ def connect_db(db_path: str):
     return conn
 
 
-def create_ds_table(conn):
-    conn.executescript("""
-        CREATE TABLE IF NOT EXISTS domain_structure (
-            id         INTEGER PRIMARY KEY AUTOINCREMENT,
-            ddi_id     REFERENCES domain_domain_interaction ON DELETE CASCADE,
-            domain1    REFERENCES domain ON DELETE CASCADE,
-            domain2    REFERENCES domain ON DELETE CASCADE,
-            protein1   REFERENCES protein ON DELETE CASCADE,
-            protein2   REFERENCES protein ON DELETE CASCADE,
-            source     TEXT    NOT NULL,
-            pdb_gz     BLOB    NOT NULL,
-            z_score    REAL,
-            UNIQUE (ddi_id, protein1, protein2, source)
-        );
-    """)
-    conn.commit()
 
-
-def add_pdb_to_mapping(conn, domain_id, protein_id, pdb_gz, source):
-    # Add single-domain psb to domain_protein_map table (for single-domain structures, not DDIs)
-    # If source is 'AF3', add to column pdb_gz_af, if source is 'RF2', add to column pdb_gz_rf, otherwise skip
-    if source == 'AF3':
-        conn.execute("""
-            UPDATE domain_protein_map
-            SET pdb_gz_af = ?
-            WHERE domain_id = ? AND protein_id = ?
-        """, (pdb_gz, domain_id, protein_id))
-    elif source == 'RF2':
-        conn.execute("""
-            UPDATE domain_protein_map
-            SET pdb_gz_rf = ?
-            WHERE domain_id = ? AND protein_id = ?
-        """, (pdb_gz, domain_id, protein_id))
-    else:
-        print(f"Warning: unknown source '{source}' for domain {domain_id}, protein {protein_id}. Skipping PDB addition.")
+# def add_pdb_to_mapping(conn, domain_id, protein_id, pdb_gz, source):
+#     # Add single-domain psb to domain_protein_map table (for single-domain structures, not DDIs)
+#     # If source is 'AF3', add to column pdb_gz_af, if source is 'RF2', add to column pdb_gz_rf, otherwise skip
+#     if source == 'AF3':
+#         conn.execute("""
+#             UPDATE domain_protein_map
+#             SET pdb_gz_af = ?
+#             WHERE domain_id = ? AND protein_id = ?
+#         """, (pdb_gz, domain_id, protein_id))
+#     elif source == 'RF2':
+#         conn.execute("""
+#             UPDATE domain_protein_map
+#             SET pdb_gz_rf = ?
+#             WHERE domain_id = ? AND protein_id = ?
+#         """, (pdb_gz, domain_id, protein_id))
+#     else:
+#         print(f"Warning: unknown source '{source}' for domain {domain_id}, protein {protein_id}. Skipping PDB addition.")
 
 
 def get_ppis(conn):
@@ -249,6 +231,7 @@ def update_score(conn, ds_id: int, z_score: float) -> None:
         SET z_score = ?
         WHERE id = ?
     """, (z_score, ds_id))
+    conn.commit()
 
 
 
@@ -268,19 +251,6 @@ def check_ddi_exists(conn, domain_id_a: int, domain_id_b: int):
     id = row[0] if row else (row_rev[0] if row_rev else None)
     
     return id
-
-
-
-# def get_predicted_complexes(conn, source: str):
-#     return conn.execute("""
-#         SELECT
-#             p1.id AS protein_id_a, p1.uniprot_id AS uniprot_id_a, ccm.chain_id_a,
-#             p2.id AS protein_id_b, p2.uniprot_id AS uniprot_id_b, ccm.chain_id_b
-#         FROM complex_chain_map ccm
-#         JOIN protein p1 ON ccm.protein_id_a = p1.id
-#         JOIN protein p2 ON ccm.protein_id_b = p2.id
-#         WHERE ccm.source = ?
-#     """, (source,)).fetchall()
 
 
 
@@ -339,7 +309,7 @@ def residues_contact(resA, resB):
 def get_domain_structures(db_path, source = None):
     """
     Get domain structure information from the SQLite database for all DDIs from 3DID.
-    Returns a list of tuples: (ddi_id, protein_id_a, protein_id_b, pdb_gz, source)
+    Returns a list of tuples: (ds_id, ddi_id, pdb_gz, source)
     """
 
     conn = sqlite3.connect(db_path)
@@ -349,35 +319,36 @@ def get_domain_structures(db_path, source = None):
 
 
     ddis_positive = conn.execute("""
-        SELECT id, domain_id_a, domain_id_b
+        SELECT id
         FROM domain_domain_interaction
         WHERE negative = 0
     """).fetchall()
 
     # Add chain information from complex_chain_map and pdb_gz from domain_structure
     domain_structures = []
-    for ddi_id, domain_id_a, domain_id_b in ddis_positive:
+    for ddi_id in ddis_positive:
         if not source:
         
             rows = conn.execute("""
                 SELECT ds.id, ds.pdb_gz, ds.source
                 FROM domain_structure ds
                 WHERE ds.ddi_id = ?
-            """, (ddi_id,)).fetchone()
+            """, (ddi_id,)).fetchall()
 
         else:
             rows = conn.execute("""
                 SELECT ds.id, ds.pdb_gz, ds.source
                 FROM domain_structure ds
                 WHERE ds.ddi_id = ? AND ds.source = ?
-            """, (ddi_id, source)).fetchone()
+            """, (ddi_id[0], source)).fetchall()
 
         if not rows:
             continue
 
-        
-        ds_id, pdb_gz, source = rows
-        domain_structures.append((ds_id, ddi_id, pdb_gz, source))
+
+        for row in rows:
+            ds_id, pdb_gz, source = row
+            domain_structures.append((ds_id, ddi_id, pdb_gz, source))
 
 
     conn.close()
@@ -385,117 +356,139 @@ def get_domain_structures(db_path, source = None):
 
 
 
+def get_domain_structures_for_scoring(db_path, source = None):
+    """
+    Get domain structure information from the SQLite database for all DDIs from 3DID.
+    Returns a list of tuples: (ds_id, ddi_id, pdb_gz, source)
+    """
+
+    conn = sqlite3.connect(db_path)
+    conn.execute("PRAGMA foreign_keys = ON")
+    conn.execute("PRAGMA synchronous  = OFF")
+
+
+    domain_structures = conn.execute("""
+        SELECT ds.id, ds.ddi_id, ds.pdb_gz, ds.source
+        FROM domain_structure ds
+        WHERE ds.source = ?
+    """, (source,)).fetchall()
+
+
+    conn.close()
+    return domain_structures
+
+
 
 #----------------------------------------------------------------------------
 # Random PDB generation for AlphaFold
 #----------------------------------------------------------------------------
 
-_BACKBONE_ATOMS = ["N", "CA", "C", "O"]
-_BACKBONE_OFFSETS = {  # offsets (A) from the residue's CA, idealised geometry
-    "N":  (-0.5, 1.4, 0.0),
-    "CA": (0.0, 0.0, 0.0),
-    "C":  (1.4, -0.5, 0.0),
-    "O":  (2.0, -1.5, 0.0),
-}
+# _BACKBONE_ATOMS = ["N", "CA", "C", "O"]
+# _BACKBONE_OFFSETS = {  # offsets (A) from the residue's CA, idealised geometry
+#     "N":  (-0.5, 1.4, 0.0),
+#     "CA": (0.0, 0.0, 0.0),
+#     "C":  (1.4, -0.5, 0.0),
+#     "O":  (2.0, -1.5, 0.0),
+# }
  
-_THREE_LETTER = {
-    'A': 'ALA', 'R': 'ARG', 'N': 'ASN', 'D': 'ASP', 'C': 'CYS',
-    'Q': 'GLN', 'E': 'GLU', 'G': 'GLY', 'H': 'HIS', 'I': 'ILE',
-    'L': 'LEU', 'K': 'LYS', 'M': 'MET', 'F': 'PHE', 'P': 'PRO',
-    'S': 'SER', 'T': 'THR', 'W': 'TRP', 'Y': 'TYR', 'V': 'VAL',
-}
+# _THREE_LETTER = {
+#     'A': 'ALA', 'R': 'ARG', 'N': 'ASN', 'D': 'ASP', 'C': 'CYS',
+#     'Q': 'GLN', 'E': 'GLU', 'G': 'GLY', 'H': 'HIS', 'I': 'ILE',
+#     'L': 'LEU', 'K': 'LYS', 'M': 'MET', 'F': 'PHE', 'P': 'PRO',
+#     'S': 'SER', 'T': 'THR', 'W': 'TRP', 'Y': 'TYR', 'V': 'VAL',
+# }
  
 
-def _write_mock_chain_atoms(lines: list, chain_id: str, sequence: str,
-                             atom_serial: list, x_offset: float) -> None:
-    """Append PDB ATOM lines for one chain with a simple backbone-only
-    random-walk trace, starting at x_offset along the X axis."""
-    rng = random.Random(f"{chain_id}-{sequence[:8]}-{len(sequence)}")
-    x, y, z = x_offset, 0.0, 0.0
-    rise = 3.8  # approx CA-CA spacing along the synthetic chain
+# def _write_mock_chain_atoms(lines: list, chain_id: str, sequence: str,
+#                              atom_serial: list, x_offset: float) -> None:
+#     """Append PDB ATOM lines for one chain with a simple backbone-only
+#     random-walk trace, starting at x_offset along the X axis."""
+#     rng = random.Random(f"{chain_id}-{sequence[:8]}-{len(sequence)}")
+#     x, y, z = x_offset, 0.0, 0.0
+#     rise = 3.8  # approx CA-CA spacing along the synthetic chain
  
-    for res_idx, aa in enumerate(sequence, start=1):
-        resname = _THREE_LETTER.get(aa.upper(), "GLY")
+#     for res_idx, aa in enumerate(sequence, start=1):
+#         resname = _THREE_LETTER.get(aa.upper(), "GLY")
  
-        # small random perpendicular jitter so the structure isn't a
-        # perfectly straight (degenerate) line
-        jitter_y = rng.uniform(-1.0, 1.0)
-        jitter_z = rng.uniform(-1.0, 1.0)
-        cx, cy, cz = x, y + jitter_y, z + jitter_z
+#         # small random perpendicular jitter so the structure isn't a
+#         # perfectly straight (degenerate) line
+#         jitter_y = rng.uniform(-1.0, 1.0)
+#         jitter_z = rng.uniform(-1.0, 1.0)
+#         cx, cy, cz = x, y + jitter_y, z + jitter_z
  
-        for atom_name in _BACKBONE_ATOMS:
-            dx, dy, dz = _BACKBONE_OFFSETS[atom_name]
-            ax, ay, az = cx + dx, cy + dy, cz + dz
-            element = atom_name[0]
-            atom_serial[0] += 1
-            lines.append(
-                f"ATOM  {atom_serial[0]:5d}  {atom_name:<3s}{resname:>3s} "
-                f"{chain_id}{res_idx:4d}    "
-                f"{ax:8.3f}{ay:8.3f}{az:8.3f}{1.00:6.2f}{0.00:6.2f}"
-                f"          {element:>2s}\n"
-            )
+#         for atom_name in _BACKBONE_ATOMS:
+#             dx, dy, dz = _BACKBONE_OFFSETS[atom_name]
+#             ax, ay, az = cx + dx, cy + dy, cz + dz
+#             element = atom_name[0]
+#             atom_serial[0] += 1
+#             lines.append(
+#                 f"ATOM  {atom_serial[0]:5d}  {atom_name:<3s}{resname:>3s} "
+#                 f"{chain_id}{res_idx:4d}    "
+#                 f"{ax:8.3f}{ay:8.3f}{az:8.3f}{1.00:6.2f}{0.00:6.2f}"
+#                 f"          {element:>2s}\n"
+#             )
  
-        x += rise
-
-
-
-def mock_predict_complex(sequence_a: str, sequence_b: str, out_cif_dir: str,
-                          basename: str) -> str:
-    """
-    Generate a synthetic 'model_0' PDB structure for two sequences placed
-    on chains A and B, mimicking the file an AF3 run would eventually
-    produce (minus the CIF step -- this writes PDB directly).
- 
-    This is NOT a real structure prediction. Coordinates are a randomised
-    backbone-only trace with no physical relevance -- it exists purely so
-    downstream code (domain slicing, contact geometry, scoring) can be
-    exercised before AF3 is wired up.
- 
-    Returns the path to the written PDB file:
-        {out_cif_dir}/{basename}_model_0.pdb
-    """
-    pdb_path = os.path.join(out_cif_dir, f"{basename}_model_0.pdb")
- 
-    lines = ["HEADER    MOCK AF3 PREDICTION (SYNTHETIC, FOR TESTING ONLY)\n"]
-    atom_serial = [0]
-    _write_mock_chain_atoms(lines, "A", sequence_a, atom_serial, x_offset=0.0)
-    lines.append("TER\n")
-    _write_mock_chain_atoms(lines, "B", sequence_b, atom_serial, x_offset=20.0)
-    lines.append("TER\n")
-    lines.append("END\n")
- 
-    with open(pdb_path, "w") as fh:
-        fh.writelines(lines)
- 
-    return pdb_path
+#         x += rise
 
 
 
-def mock_predict_complex_rf(sequence_a: str, sequence_b: str, out_cif_dir: str) -> str:
-    """
-    Generate a synthetic 'model_0' PDB structure for two sequences placed
-    on chains A and B, mimicking the file an AF3 run would eventually
-    produce (minus the CIF step -- this writes PDB directly).
+# def mock_predict_complex(sequence_a: str, sequence_b: str, out_cif_dir: str,
+#                           basename: str) -> str:
+#     """
+#     Generate a synthetic 'model_0' PDB structure for two sequences placed
+#     on chains A and B, mimicking the file an AF3 run would eventually
+#     produce (minus the CIF step -- this writes PDB directly).
  
-    This is NOT a real structure prediction. Coordinates are a randomised
-    backbone-only trace with no physical relevance -- it exists purely so
-    downstream code (domain slicing, contact geometry, scoring) can be
-    exercised before AF3 is wired up.
+#     This is NOT a real structure prediction. Coordinates are a randomised
+#     backbone-only trace with no physical relevance -- it exists purely so
+#     downstream code (domain slicing, contact geometry, scoring) can be
+#     exercised before AF3 is wired up.
  
-    Returns the path to the written PDB file:
-        {out_cif_dir}/{basename}_model_0.pdb
-    """
-    pdb_path = os.path.join(out_cif_dir, f"model_0.pdb")
+#     Returns the path to the written PDB file:
+#         {out_cif_dir}/{basename}_model_0.pdb
+#     """
+#     pdb_path = os.path.join(out_cif_dir, f"{basename}_model_0.pdb")
  
-    lines = ["HEADER    MOCK AF3 PREDICTION (SYNTHETIC, FOR TESTING ONLY)\n"]
-    atom_serial = [0]
-    _write_mock_chain_atoms(lines, "A", sequence_a, atom_serial, x_offset=0.0)
-    lines.append("TER\n")
-    _write_mock_chain_atoms(lines, "B", sequence_b, atom_serial, x_offset=20.0)
-    lines.append("TER\n")
-    lines.append("END\n")
+#     lines = ["HEADER    MOCK AF3 PREDICTION (SYNTHETIC, FOR TESTING ONLY)\n"]
+#     atom_serial = [0]
+#     _write_mock_chain_atoms(lines, "A", sequence_a, atom_serial, x_offset=0.0)
+#     lines.append("TER\n")
+#     _write_mock_chain_atoms(lines, "B", sequence_b, atom_serial, x_offset=20.0)
+#     lines.append("TER\n")
+#     lines.append("END\n")
  
-    with open(pdb_path, "w") as fh:
-        fh.writelines(lines)
+#     with open(pdb_path, "w") as fh:
+#         fh.writelines(lines)
  
-    return pdb_path
+#     return pdb_path
+
+
+
+# def mock_predict_complex_rf(sequence_a: str, sequence_b: str, out_cif_dir: str) -> str:
+#     """
+#     Generate a synthetic 'model_0' PDB structure for two sequences placed
+#     on chains A and B, mimicking the file an AF3 run would eventually
+#     produce (minus the CIF step -- this writes PDB directly).
+ 
+#     This is NOT a real structure prediction. Coordinates are a randomised
+#     backbone-only trace with no physical relevance -- it exists purely so
+#     downstream code (domain slicing, contact geometry, scoring) can be
+#     exercised before AF3 is wired up.
+ 
+#     Returns the path to the written PDB file:
+#         {out_cif_dir}/{basename}_model_0.pdb
+#     """
+#     pdb_path = os.path.join(out_cif_dir, f"model_0.pdb")
+ 
+#     lines = ["HEADER    MOCK AF3 PREDICTION (SYNTHETIC, FOR TESTING ONLY)\n"]
+#     atom_serial = [0]
+#     _write_mock_chain_atoms(lines, "A", sequence_a, atom_serial, x_offset=0.0)
+#     lines.append("TER\n")
+#     _write_mock_chain_atoms(lines, "B", sequence_b, atom_serial, x_offset=20.0)
+#     lines.append("TER\n")
+#     lines.append("END\n")
+ 
+#     with open(pdb_path, "w") as fh:
+#         fh.writelines(lines)
+ 
+#     return pdb_path

@@ -43,20 +43,39 @@ process PREDICT_COMPLEX_AF {
         with open(src_path, "rb") as fh_in, open(dst_path, "wb") as fh_out:
             dctx.copy_stream(fh_in, fh_out)
 
-    # --- Load metadata and index it for both orientations ---
+    # Load metadata
     meta = pd.read_csv("${meta_ppis}")
     meta_index = {}
     for _, row in meta.iterrows():
-        key_fwd = (int(row["protein_id_a"]), int(row["protein_id_b"]))
-        key_rev = (int(row["protein_id_b"]), int(row["protein_id_a"]))
-        meta_index[key_fwd] = row
-        meta_index[key_rev] = row
+        key_fwd = (row["uniprot_id_a"], row["uniprot_id_b"])
+        key_rev = (row["uniprot_id_b"], row["uniprot_id_a"])
+        path_to_file = row["path"]
+        has_af_model = bool(row["has_af_model"])
+        order = bool(row["ordering"])
+        # need to preserve ordering information to know which protein is A and which is B
+        # If the order is true and we have forward key, we set true
+        # if the order is true and we have reverse key, we set false
+        # if the order is false and we have forward key, we set false
+        # if the order is false and we have reverse key, we set true
+        if order:
+            meta_index[key_fwd] = (path_to_file, has_af_model, True)
+            meta_index[key_rev] = (path_to_file, has_af_model, False)
+        else:
+            meta_index[key_fwd] = (path_to_file, has_af_model, False)
+            meta_index[key_rev] = (path_to_file, has_af_model, True)
 
-    # --- Read PPIs from the database (read-only, no need to copy) ---
+        # meta_index[key_fwd] = (path_to_file, has_af_model, )
+        # meta_index[key_rev] = (path_to_file, has_af_model, )
+
+    # Get PPIs in database, join to get uniprot ids
     con = sqlite3.connect(f"file:input.dbstruct.sqlite3?mode=ro", uri=True)
     ppi_rows = con.execute(
-        "SELECT protein_id_a, protein_id_b FROM protein_protein_interaction"
+        "SELECT p1.uniprot_id, p2.uniprot_id, ppi.protein_id_a, ppi.protein_id_b FROM protein_protein_interaction ppi "
+        "JOIN protein p1 ON ppi.protein_id_a = p1.id "
+        "JOIN protein p2 ON ppi.protein_id_b = p2.id "
+        "WHERE p1.uniprot_id IS NOT NULL AND p2.uniprot_id IS NOT NULL"
     ).fetchall()
+
     con.close()
 
     print(f"predict_complex_af: {len(ppi_rows)} PPIs to resolve", flush=True)
@@ -66,38 +85,43 @@ process PREDICT_COMPLEX_AF {
     n_missing_file = 0
     n_ambiguous = 0
 
-    for protein_id_a, protein_id_b in ppi_rows:
-        row = meta_index.get((protein_id_a, protein_id_b))
-        if row is None:
-            print(f"WARNING: no metadata for pair ({protein_id_a}, {protein_id_b})", flush=True)
+    for uniprot_id_a, uniprot_id_b, protein_id_a, protein_id_b in ppi_rows:
+        path, has_af_model, order = meta_index.get((uniprot_id_a, uniprot_id_b), (None, None, None))
+        if path is None:
+            print(f"WARNING: no metadata for pair ({uniprot_id_a}, {uniprot_id_b})", flush=True)
             n_missing_meta += 1
             continue
 
+        # Path to output PDB file
+        # Use protein ids for easier downstream mapping, avoids joining step
+        if not order:
+            # Ensure first protein is chain A
+            protein_id_a, protein_id_b = protein_id_b, protein_id_a
         pdb_path = os.path.join(OUTDIR, f"{protein_id_a}_{protein_id_b}.pdb")
 
-        if bool(row["has_af_model"]):
-            candidates = glob.glob(os.path.join(row["path"], "*.pdb.zst"))
+        if bool(has_af_model):
+            candidates = glob.glob(os.path.join(path, "*.pdb.zst"))
         else:
-            candidates = glob.glob(os.path.join(row["path"], "*.cif"))
+            candidates = glob.glob(os.path.join(path, "*.cif"))
 
         if len(candidates) == 0:
             print(
-                f"WARNING: no source file found in {row['path']} "
-                f"for ({protein_id_a}, {protein_id_b})", flush=True,
+                f"WARNING: no source file found in {path} "
+                f"for ({uniprot_id_a}, {uniprot_id_b})", flush=True,
             )
             n_missing_file += 1
             continue
         if len(candidates) > 1:
             print(
-                f"WARNING: {len(candidates)} candidate files in {row['path']} "
-                f"for ({protein_id_a}, {protein_id_b}), using first: {candidates[0]}",
+                f"WARNING: {len(candidates)} candidate files in {path} "
+                f"for ({uniprot_id_a}, {uniprot_id_b}), using first: {candidates[0]}",
                 flush=True,
             )
             n_ambiguous += 1
 
         src_path = candidates[0]
 
-        if bool(row["has_af_model"]):
+        if bool(has_af_model):
             decompress_zst(src_path, pdb_path)
         else:
             convert_cif_to_pdb(src_path, pdb_path)

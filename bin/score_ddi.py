@@ -41,7 +41,7 @@ from pathlib import Path
 
 import numpy as np
 from Bio.PDB.PDBParser import PDBParser
-from utils_struct import bytes_to_tempfile, BACKBONE_ATOMS, CC_VDW, NO_SB, calculate_rsa_residue_level, extract_domain_residues, update_score, get_domain_structures
+from utils_struct import bytes_to_tempfile, BACKBONE_ATOMS, CC_VDW, NO_SB, calculate_rsa_residue_level, extract_domain_residues, update_score, get_domain_structures_for_scoring
 
 # Constants
 TRIALS = 1000
@@ -183,9 +183,7 @@ def find_interacting_residues(res_a, res_b, structure):
     """
     n_a, n_b = len(res_a), len(res_b)
     matrix = [[""] * n_b for _ in range(n_a)]
-    # Get matrix shape
-    print(len(matrix), len(matrix[0]) if matrix else 0)
-    
+    # Get matrix shape    
     n_interacting = 0
 
     res_a_checked = check_rsa(structure, chain_id=CHAIN_A)
@@ -381,7 +379,7 @@ def main():
 
     source = args.source
 
-    source_structures = get_domain_structures(args.db_in, source=args.source)
+    source_structures = get_domain_structures_for_scoring(args.db_in, source=args.source)
 
     print(f"[score_ddi] source={source}: {len(source_structures)} predicted "
           f"complexes to score", flush=True)
@@ -435,7 +433,7 @@ def main():
         z_score = compute_z_score(real_score, random_scores)
         confirmed = int(z_score >= ZSCORE_THRESHOLD)
 
-        print(f"  Row {ds_id}: n_interacting={n_interacting}, "
+        print(f"  Row {ds_id}, DDI {ddi_id}: n_interacting={n_interacting}, "
                 f"score={real_score:.3f}, z={z_score:.3f}, "
                 f"confirmed={confirmed}", flush=True)
         # Update z-score column in domain_structure table, just to keep a record of the actual z-score for each complex
@@ -444,6 +442,10 @@ def main():
             scores[ddi_id] = []
         scores[ddi_id].append((z_score, confirmed))
     updated_scores = aggregate_scores(scores)
+    # Print first 5 updated scores for verification
+    print(f"Updated scores for source={source}:")
+    for ddi_id, score_info in list(updated_scores.items())[:5]:
+        print(f"  DDI {ddi_id}: {score_info}")
     update_scores_in_db(conn_out, updated_scores, source)
     conn_out.close()
 

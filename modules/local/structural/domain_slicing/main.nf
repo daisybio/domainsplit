@@ -17,7 +17,7 @@ process DOMAIN_SLICE {
     script:
     """
     slice_domains.py \\
-        --db_in  ${dbstruct} \\
+        --db_in ${dbstruct} \\
         --db_out dbstruct.sqlite3 \\
         --pdb_dir_af ${pdb_dir_af}\\
         --pdb_dir_rf ${pdb_dir_rf}\\

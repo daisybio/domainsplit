@@ -1,6 +1,6 @@
 process FILTER_DB {
     tag "filter_db"
-    label 'process_medium'
+    label 'process_high'
     conda "${moduleDir}/environment.yml"
     container "docker.io/konstantinpelz/domainsplit-general:1.0.0"
 
@@ -20,12 +20,16 @@ process FILTER_DB {
     import sqlite3
     import sys
     import pandas as pd
+    import time
 
     shutil.copy("${domainsplit_db}", "domainsplit.filter.sqlite3")
     con = sqlite3.connect("domainsplit.filter.sqlite3")
     con.execute("PRAGMA foreign_keys=ON")
+    con.execute("PRAGMA synchronous=OFF")
+    con.execute("PRAGMA journal_mode=MEMORY")
+    con.execute("PRAGMA temp_store=MEMORY")
 
-    // Logging
+    # Logging
     ppi_before = con.execute("SELECT COUNT(*) FROM protein_protein_interaction").fetchone()[0]
     map_before = con.execute("SELECT COUNT(*) FROM domain_protein_map").fetchone()[0]
     dom_before = con.execute("SELECT COUNT(*) FROM domain").fetchone()[0]
@@ -39,103 +43,68 @@ process FILTER_DB {
     # Load ppi metadata containing uniprot_id_a,uniprot_id_b,model_entity_id,local_tar_name,has_af_model,protein_id_a,protein_id_b,path
     ppi_data = pd.read_csv("${meta_ppi}")
     ppi_pairs = sorted(set(
-        map(tuple, ppi_data[["protein_id_a", "protein_id_b"]].values.tolist())
+        map(tuple, ppi_data[["uniprot_id_a", "uniprot_id_b"]].values.tolist())
     ))
 
+    # uniprot_id,pfam_id -> Strings, saver as keys can change ordering
     mapping_data = pd.read_csv("${meta_mapping}")
     mappings = sorted(set(
-        map(tuple, mapping_data[["domain_id", "protein_id"]].values.tolist())
+        map(tuple, mapping_data[["pfam_id", "uniprot_id"]].values.tolist())
     ))
 
-    # Filter ppi table for these specific interactions
-    # Need to check ordering in both directions
 
-    # Temporary file 
-    con.execute("CREATE TEMP TABLE keep_mapping(dom INTEGER, prot INTEGER)")
+    # Temporary table to filter mapping -> only keep domains and proteins relevant
+    con.execute("CREATE TEMP TABLE keep_mapping(pfam TEXT, prot TEXT)")
     con.executemany(
         "INSERT OR IGNORE INTO keep_mapping VALUES (?, ?)",
-        [(int(d), int(p)) for d, p in mappings],
+        [(d, p) for d, p in mappings],
     )
+    con.execute("CREATE INDEX idx_keep_mapping ON keep_mapping(pfam, prot)")
 
-
-    con.execute("CREATE TEMP TABLE keep_ppi(proteina INTEGER, proteinb INTEGER)")
+    # Temporary table to filter ppi -> only keep ppis we need
+    con.execute("CREATE TEMP TABLE keep_ppi(pua TEXT, pub TEXT)")
     con.executemany(
         "INSERT OR IGNORE INTO keep_ppi VALUES (?, ?)",
-        [(int(pa), int(pb)) for pa, pb in ppi_pairs],
+        [(pa, pb) for pa, pb in ppi_pairs] + [(pb, pa) for pa, pb in ppi_pairs],
     )
-
-    con.execute("CREATE TEMP TABLE keep_ppi(proteina INTEGER, proteinb INTEGER)")
-    con.executemany(
-        "INSERT OR IGNORE INTO keep_ppi VALUES (?, ?)",
-        [(int(pb), int(pa)) for pa, pb in ppi_pairs],
-    )
-
+    con.execute("CREATE INDEX idx_keep_ppi ON keep_ppi(pua, pub)")
     con.commit()
 
-    # Also automatically deletes self-interactions
-    con.execute(
-        "DELETE FROM protein_protein_interaction "
-        "WHERE (protein_id_a, protein_id_b) NOT IN (SELECT proteina, proteinb FROM keep_ppi)"
-    )
+    t0 = time.time()
 
-    con.execute(
-        "DELETE FROM domain_protein_map "
-        "WHERE (protein_id, domain_id) NOT IN (SELECT prot, dom FROM keep_mapping)"
-    )
+    # Filtering procedure
+    con.execute('''
+        DELETE FROM protein_protein_interaction
+        WHERE NOT EXISTS (
+            SELECT 1 FROM keep_ppi k
+            JOIN protein pa ON pa.uniprot_id = k.pua
+            JOIN protein pb ON pb.uniprot_id = k.pub
+            WHERE pa.id = protein_protein_interaction.protein_id_a
+            AND pb.id = protein_protein_interaction.protein_id_b
+        )
+    ''')
 
+    con.execute('''
+        DELETE FROM domain_protein_map
+        WHERE NOT EXISTS (
+            SELECT 1 FROM keep_mapping k
+            JOIN domain d ON d.pfam_id = k.pfam
+            JOIN protein p ON p.uniprot_id = k.prot
+            WHERE d.id = domain_protein_map.domain_id
+            AND p.id = domain_protein_map.protein_id
+        )
+    ''')
+
+    con.execute("DROP TABLE keep_mapping")
+    con.execute("DROP TABLE keep_ppi")
     con.commit()
 
-    # --- Deduplicate reversed-direction rows ---
-    # Ensure no interaction is stored multiple times
-    # For domain_domain_interaction: unique key is (domain_id_a, domain_id_b, source),
-    # so a "reverse duplicate" is (a,b,source) and (b,a,source) both present.
-    dupe_ddi = con.execute('''
-        SELECT t1.id AS id_keep, t2.id AS id_drop,
-            t1.domain_id_a, t1.domain_id_b, t1.source,
-            t1.negative AS neg_keep, t2.negative AS neg_drop
-        FROM domain_domain_interaction t1
-        JOIN domain_domain_interaction t2
-        ON t1.domain_id_a = t2.domain_id_b
-        AND t1.domain_id_b = t2.domain_id_a
-        AND t1.source = t2.source
-        WHERE t1.id < t2.id
-    ''').fetchall()
+    t1 = time.time()
+    print(f"Time for PPI and mapping DELETE + cleanup: {t1 - t0:.1f}s", flush=True)
 
-    n_conflict = sum(1 for r in dupe_ddi if r[5] != r[6])
-    if n_conflict:
-        print(f"WARNING: {n_conflict} reversed DDI pairs disagree on 'negative' label", flush=True)
-        for r in dupe_ddi:
-            if r[5] != r[6]:
-                print(f"  conflict: domains {r[2]}/{r[3]} source={r[4]} "
-                    f"neg_keep={r[5]} neg_drop={r[6]}", flush=True)
-
-    drop_ids = [r[1] for r in dupe_ddi]
-    con.executemany("DELETE FROM domain_domain_interaction WHERE id = ?", [(i,) for i in drop_ids])
-    print(f"dedup ddi: removed {len(drop_ids)} reversed-direction duplicates", flush=True)
-
-    # For protein_protein_interaction: unique key is (protein_id_a, protein_id_b), no source column.
-    dupe_ppi = con.execute('''
-        SELECT t1.protein_id_a, t1.protein_id_b, t2.protein_id_a, t2.protein_id_b,
-            t1.score AS score_keep, t2.score AS score_drop
-        FROM protein_protein_interaction t1
-        JOIN protein_protein_interaction t2
-        ON t1.protein_id_a = t2.protein_id_b
-        AND t1.protein_id_b = t2.protein_id_a
-        WHERE t1.protein_id_a < t1.protein_id_b
-    ''').fetchall()
-
-    n_score_conflict = sum(1 for r in dupe_ppi if r[4] != r[5])
-    if n_score_conflict:
-        print(f"WARNING: {n_score_conflict} reversed PPI pairs disagree on 'score'", flush=True)
-
-    con.executemany(
-        "DELETE FROM protein_protein_interaction WHERE protein_id_a = ? AND protein_id_b = ?",
-        [(r[2], r[3]) for r in dupe_ppi],  # drop the (b,a) orientation, keep (a,b) where a<b
-    )
-    con.commit()
-    print(f"dedup ppi: removed {len(dupe_ppi)} reversed-direction duplicates", flush=True)
 
     # Clean up, check domain 
+    t2 = time.time()
     con.execute('''
        DELETE FROM domain
         WHERE id NOT IN (
@@ -158,6 +127,8 @@ process FILTER_DB {
         )
     ''')
     con.commit()
+    t3 = time.time()
+    print(f"Time for domain and protein DELETE: {t3 - t2:.1f}s", flush=True)
 
     ppi_after = con.execute("SELECT COUNT(*) FROM protein_protein_interaction").fetchone()[0]
     map_after = con.execute("SELECT COUNT(*) FROM domain_protein_map").fetchone()[0]
@@ -170,9 +141,12 @@ process FILTER_DB {
     )
     con.close()
 
+    t4 = time.time()
     con = sqlite3.connect("domainsplit.filter.sqlite3")
     con.execute("VACUUM")
     con.close()
+    t5 = time.time()
+    print(f"Time for VACUUM: {t5 - t4:.1f}s", flush=True)
 
     with open("versions.yml", "w") as f:
         f.write('"${task.process}":\\n')

@@ -31,7 +31,7 @@ include { BUILD_PPI_NEGATIVE_POOL                            } from '../../../mo
 include { SELECT_PPI_NEGATIVE_DANS as SELECT_DELETION        } from '../../../modules/local/select_ppi_negative_dans/main.nf'
 include { SELECT_PPI_NEGATIVE_DANS as SELECT_RANDOM_ADDITION } from '../../../modules/local/select_ppi_negative_dans/main.nf'
 include { INSERT_PPI_NEGATIVE_SELECTION                      } from '../../../modules/local/insert_ppi_negative_selection/main.nf'
-include { FILTER_DDI                } from '../../../modules/local/filter_ddi/main.nf'
+//include { FILTER_DDI                } from '../../../modules/local/filter_ddi/main.nf'
 include { SMOKE_FILTER              } from '../../../modules/local/smoke_filter/main.nf'
 
 workflow COLLECT_DDI_DATA {
@@ -113,12 +113,11 @@ workflow COLLECT_DDI_DATA {
         del.score,
         rand.score,
     )
-    // domainsplit_db = inserted.domainsplit_db
+    domainsplit_db = inserted.domainsplit_db
     pfam_mapping   = pool.pfam_mapping
 
-    FILTER_DDI(inserted.domainsplit_db, keep_mapping_metafile)
-
-    domainsplit_db = FILTER_DDI.domainsplit_db
+    // FILTER_DDI(inserted.domainsplit_db, keep_mapping_metafile)
+    // domainsplit_db = inserted.out.domainsplit_db
 
     if (params.smoke_test_n_ddis != null) {
         domainsplit_db = SMOKE_FILTER(domainsplit_db, params.smoke_test_n_ddis).domainsplit_db

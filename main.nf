@@ -80,18 +80,18 @@ workflow {
 
     publish:
     domainsplit_db = DAISYBIO_DOMAINSPLIT.out.domainsplit_db
-    //split_db   = DAISYBIO_DOMAINSPLIT.out.split_db
+    split_db   = DAISYBIO_DOMAINSPLIT.out.split_db
     scored_db  = DAISYBIO_DOMAINSPLIT.out.scored_db
 }
 
 output {
     domainsplit_db {
     }
-    // split_db {
-    //     path {
-    //         it[1] >> "databases/${it[0].method}/${it[0].split}.sqlite3"
-    //     }
-    // }
+    split_db {
+        path {
+            it[1] >> "databases/${it[0].method}/${it[0].split}.sqlite3"
+        }
+    }
     scored_db {
         path {
             it[1] >> "databases_scored/${it[0].method}/${it[0].split}.sqlite3"

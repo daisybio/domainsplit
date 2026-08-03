@@ -33,7 +33,7 @@ workflow ANNOTATE_DDI {
     main:
 
     //NOTE: The scoring sources are hardcoded here for now, but can be made configurable in the future.
-    sources_ch  = Channel.fromList(['AF3'])  // Channel.fromList(params.scoring_sources ?: ['AF3', 'RF'])
+    sources_ch  = Channel.fromList(params.predictions ?: ['AF3', 'RF'])  // 
     ch_versions = Channel.empty()
 
     // Step1: Extract training set of each splot for calculating the empirical potential and the scoring matrix
@@ -78,8 +78,6 @@ workflow ANNOTATE_DDI {
             }
         .groupTuple(by: 0)
 
-    // MERGE_SOURCES(per_split_ch)
-
     single_ch = per_split_ch.filter { split_meta, sources, dbs -> sources.size() == 1 }
     multi_ch  = per_split_ch.filter { split_meta, sources, dbs -> sources.size() > 1 }
 
@@ -100,6 +98,6 @@ workflow ANNOTATE_DDI {
 
     emit:
 
-    scored_db = scored_db_ch//MERGE_SOURCES.out.dbscored  // [ meta (id, split, method), scored db ]
+    scored_db = scored_db_ch
     versions = ch_versions
 }

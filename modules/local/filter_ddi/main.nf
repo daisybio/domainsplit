@@ -32,12 +32,12 @@ process FILTER_DDI {
     ).fetchone()[0]
     dom_before = con.execute("SELECT COUNT(*) FROM domain").fetchone()[0]
     print(
-        f"filter ddis: before -> pos={pos_before} neg={neg_before} domain={dom_before}; "
-        flush=True,
+        f"filter ddis: before -> pos={pos_before} neg={neg_before} domain={dom_before};",
+        flush=True
     )
 
     # Load mapping, containing protein_id,domain_id
-    mapping_data = pd.read_csv("${mapping_data}")
+    mapping_df = pd.read_csv("${mapping_data}")
     domain_ids = sorted(set(mapping_df["domain_id"].tolist()))
 
     # Temporary file 

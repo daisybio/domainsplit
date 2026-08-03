@@ -17,6 +17,7 @@ include { INSERT_PPI                      } from '../../../modules/local/enrich/
 include { INSERT_DOMAIN_PROTEIN_MAPPING   } from '../../../modules/local/enrich/insert_domain_protein_mapping/main.nf'
 
 workflow ENRICH_DDI_DATABASE {
+
     take:
     domainsplit_db_in
     input_pfam2go
@@ -48,7 +49,7 @@ workflow ENRICH_DDI_DATABASE {
         input_uniprot_go_terms
     ).domainsplit_db
 
-    db_after_ppi =  (
+    db_after_ppi =  INSERT_PPI(
         db_after_protein_go,
         input_string,
         input_uniprot_id_mapping

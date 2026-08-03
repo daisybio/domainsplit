@@ -64,34 +64,11 @@ def slice_complex(conn, pdb_file: Path, source: str):
             utils_struct.store_domain_slice(conn, ddi_id, int(domain_id_a), int(domain_id_b), int(protein_id_a), int(protein_id_b), pdb_gz, source)
 
 
-
-
-    # for (domain_id_a, start_a, end_a) in domains_a:
-    #     # Subset to single domains and store them as well in the protein_domain_map using utils_struct.add_pdb_to_mapping(conn, domain_id, protein_id, pdb_gz, source)
-    #     try:
-    #         pdb_gz_a = utils_struct.domain_to_bytes(str(pdb_file), chain_id_a, start_a, end_a)
-    #         utils_struct.add_pdb_to_mapping(conn, domain_id_a, int(protein_id_a), pdb_gz_a, source)
-    #     except Exception as exc:
-    #         print(f"  WARNING: could not slice domain "
-    #               f"{domain_id_a} from {pdb_file}: {exc}", flush=True)
-    # for (domain_id_b, start_b, end_b) in domains_b:
-    #     try:
-    #         pdb_gz_b = utils_struct.domain_to_bytes(str(pdb_file), chain_id_b, start_b, end_b)
-    #         utils_struct.add_pdb_to_mapping(conn, domain_id_b, int(protein_id_b), pdb_gz_b, source)
-    #     except Exception as exc:
-    #         print(f"  WARNING: could not slice domain "
-    #               f"{domain_id_b} from {pdb_file}: {exc}", flush=True)
-            
-
-
-
 def _write_versions(versions_path: str, process_name: str) -> None:
     with open(versions_path, "w") as fh:
         fh.write(f'"{process_name}":\n')
         fh.write(f"    python: {sys.version.split()[0]}\n")
         fh.write(f"    biopython: {Bio.__version__}\n")
-
-
 
 
 def enrich_db_with_predictions(conn, pdb_dir: Path, source: str):
@@ -114,7 +91,6 @@ def main():
 
     shutil.copy(args.db_in, args.db_out)
     conn = utils_struct.connect_db(args.db_out)
-    # utils_struct.create_ds_table(conn)
 
     # Check if output directories exist, if not skip slicing for that source
     if not pdb_dir_af.exists():
@@ -125,27 +101,8 @@ def main():
         print(f"[slice_domains] WARNING: RF PDB directory {pdb_dir_rf} does not exist, skipping RF slicing", flush=True)
     else:
         enrich_db_with_predictions(conn, pdb_dir_rf, "RF")
-    # enrich_db_with_predictions(conn, pdb_dir_af, "AF3")
-    # enrich_db_with_predictions(conn, pdb_dir_rf, "RF")
     conn.close()
 
-    
-    
-
-    # for source in SOURCES:
-    #     # Access pdb files for this source and slice out domains and DDI pairs
-    #     print(f"[slice_domains] source={source}: {len(complexes)} predicted "
-    #           f"complexes to slice", flush=True)
-
-    #     for (protein_id_a, uniprot_id_a, chain_a, protein_id_b, uniprot_id_b, chain_b) in complexes:
-    #         slice_complex(
-    #             conn, pdb_dir, source,
-    #             protein_id_a, uniprot_id_a, chain_a,
-    #             protein_id_b, uniprot_id_b, chain_b,
-    #         )
-    #         conn.commit()
-
-    # conn.close()
     _write_versions(args.versions, args.process_name)
 
 

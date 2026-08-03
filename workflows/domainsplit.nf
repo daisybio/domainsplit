@@ -11,7 +11,7 @@ include { COLLECT_DDI_DATA            } from '../subworkflows/local/collect_ddi_
 include { CURATE_DOMAINS              } from '../subworkflows/local/curate_domains/main.nf'
 include { generate_esm_embeddings     } from '../modules/local/esm_embeddings/main.nf'
 include { ENRICH_DDI_DATABASE         } from '../subworkflows/local/enrich_ddi_database/main.nf'
-include { FILTER_DB                   } from '../module/local/filter_db/main.nf'
+include { FILTER_DB                   } from '../modules/local/filter_db/main.nf'
 include { ENRICH_STRUCTURAL           } from '../subworkflows/local/enrich_structural/main.nf'
 include { SPLIT_DOMAINSPLIT_DATABASE  } from '../subworkflows/local/split_domainsplit_database/main.nf'
 include { ANNOTATE_DDI                } from '../subworkflows/local/annotate_ddi/main.nf'

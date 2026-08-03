@@ -1,5 +1,5 @@
 process BUILD_SCORING_MATRIX {
-    tag "${meta.id}:${meta.source}"
+    tag "${meta.id}"
     label 'process_medium'
 
     conda "${moduleDir}/environment.yml"
