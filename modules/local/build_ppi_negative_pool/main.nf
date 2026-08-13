@@ -8,7 +8,7 @@ process BUILD_PPI_NEGATIVE_POOL {
     path domainsplit_db_in, stageAs: 'input.domainsplit.sqlite3'
     path negative_ppi_parquet
     val  min_n_tested
-    val  self_interaction
+    val  remove_self_interactions
 
     output:
     path "domainsplit.sqlite3",        emit: domainsplit_db
@@ -17,7 +17,7 @@ process BUILD_PPI_NEGATIVE_POOL {
     path "versions.yml",               emit: versions
 
     script:
-    def no_self = self_interaction ? "" : "--no-self"
+    def no_self = remove_self_interactions ? "--no-self" : ""
     """
     cp "${domainsplit_db_in}" domainsplit.sqlite3
 

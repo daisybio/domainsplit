@@ -44,6 +44,8 @@ RUN micromamba create -y -n ${ENV_NAME} \
     cuda-version=12.8 \
     cudnn=9 \
     pip=25.0 \
+    zstandard=0.25.0 \
+    zstd=1.5.7 \
  && micromamba clean --all --yes
 
 # Torch from PyTorch cu128 wheel; esm + huggingface_hub from PyPI.

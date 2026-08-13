@@ -209,9 +209,9 @@
                     "default": "Bronze,Silver,Gold",
                     "fa_icon": "fas fa-tags"
                 },
-                "self_interaction": {
+                "remove_self_interactions": {
                     "type": "boolean",
-                    "description": "When false, all self-interactions (a domain interacting with itself) are removed after the positive/negatome sources are inserted, and the high-confidence non-PPI negative builder skips self-pairs.",
+                    "description": "When true, all self-interactions (a domain interacting with itself) are removed after the positive/negatome sources are inserted, and the high-confidence non-PPI negative builder skips self-pairs.",
                     "default": true,
                     "fa_icon": "fas fa-redo"
                 }

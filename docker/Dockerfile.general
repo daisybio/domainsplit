@@ -50,6 +50,8 @@ RUN micromamba create -y -n ${ENV_NAME} \
     wget=1.21.4 \
     gawk=5.3.0 \
     gzip=1.13 \
+    zstandard=0.25.0 \
+    zstd=1.5.7 \
  && micromamba clean --all --yes
 
 ENTRYPOINT ["micromamba", "run", "-n", "general"]

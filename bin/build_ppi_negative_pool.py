@@ -61,7 +61,7 @@ def parse_args():
         "--no-self",
         action="store_true",
         help="Skip self-pairs (domain interacting with itself) "
-             "when self_interaction is disabled.",
+             "if remove_self_interactions is enabled.",
     )
     return p.parse_args()
 

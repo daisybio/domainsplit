@@ -77,7 +77,7 @@ workflow COLLECT_DDI_DATA {
     domainsplit_db = INSERT_NEGATOME(domainsplit_db, negatome_file).domainsplit_db
 
     // 6. optional removal of all self-interactions
-    if (!params.self_interaction) {
+    if (params.remove_self_interactions) {
         domainsplit_db = REMOVE_SELF_INTERACTIONS(domainsplit_db).domainsplit_db
         ch_versions = ch_versions.mix(REMOVE_SELF_INTERACTIONS.out.versions)
     }
@@ -97,7 +97,7 @@ workflow COLLECT_DDI_DATA {
         domainsplit_db,
         file(negative_ppi_parquet),
         params.negative_ppi_min_n_tested,
-        params.self_interaction,
+        params.remove_self_interactions,
     )
 
     del  = SELECT_DELETION('deletion', params.negative_ppi_seed, pool.neg_pool)
