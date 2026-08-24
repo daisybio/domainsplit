@@ -39,13 +39,6 @@ process SHARD_FASTA {
     print(f"    biopython: {Bio.__version__}")
     PY
     """
-
-    stub:
-    """
-    touch ${meta.id}_shard_0.fasta.gz
-    echo '"${task.process}":' > versions.yml
-    echo '    stub: "true"' >> versions.yml
-    """
 }
 
 // Merge a collection of HDF5 chunks (plain or gzipped) into one HDF5 file.
@@ -95,12 +88,5 @@ process JOIN_HDF_FILES {
         f.write('"${task.process}":\\n')
         f.write(f"    python: {sys.version.split()[0]}\\n")
         f.write(f"    h5py: {h5py.__version__}\\n")
-    """
-
-    stub:
-    """
-    touch ${output_name}.h5
-    echo '"${task.process}":' > versions.yml
-    echo '    stub: "true"' >> versions.yml
     """
 }

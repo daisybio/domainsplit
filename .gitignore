@@ -220,3 +220,8 @@ test-eval-env/*
 # nf-test fixtures (override the broad ignores above)
 !tests/data/
 !tests/data/**
+
+# ppi-splitting writes its sampled-instance cache next to the committed test fixtures
+tests/data/pfam/interpro_cache/*/instances-*.tsv
+tests/data/pfam/interpro_cache/*/sequences-*.fasta
+tests/data/pfam/interpro_cache/*/Pfam-A.fasta.gz

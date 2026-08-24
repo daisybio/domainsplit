@@ -1,0 +1,13 @@
+!date: synthetic fixture
+Pfam:PF00084 PF00084_name > GO:protein binding ; GO:0005515
+Pfam:PF07679 PF07679_name > GO:protein binding ; GO:0005515
+Pfam:PF00149 PF00149_name > GO:protein binding ; GO:0005515
+Pfam:PF00514 PF00514_name > GO:protein binding ; GO:0005515
+Pfam:PF00041 PF00041_name > GO:protein binding ; GO:0005515
+Pfam:PF13927 PF13927_name > GO:protein binding ; GO:0005515
+Pfam:PF00400 PF00400_name > GO:protein binding ; GO:0005515
+Pfam:PF00856 PF00856_name > GO:protein binding ; GO:0005515
+Pfam:PF00270 PF00270_name > GO:protein binding ; GO:0005515
+Pfam:PF00254 PF00254_name > GO:protein binding ; GO:0005515
+Pfam:PF07714 PF07714_name > GO:protein binding ; GO:0005515
+Pfam:PF00004 PF00004_name > GO:protein binding ; GO:0005515

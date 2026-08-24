@@ -53,11 +53,4 @@ process DOWNLOAD_NEGATOME {
         f.write('"${task.process}":\\n')
         f.write(f"    python: {sys.version.split()[0]}\\n")
     """
-
-    stub:
-    """
-    touch combined_pfam.txt
-    echo '"${task.process}":' > versions.yml
-    echo '    stub: "true"' >> versions.yml
-    """
 }

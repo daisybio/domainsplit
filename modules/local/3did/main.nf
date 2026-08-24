@@ -27,11 +27,4 @@ process DOWNLOAD_3DID_SQLITE {
         sqlite3: \$(python3 -c 'import sqlite3; print(sqlite3.sqlite_version)')
     END_VERSIONS
     """
-
-    stub:
-    """
-    touch 3did.sqlite3
-    echo '"${task.process}":' > versions.yml
-    echo '    stub: "true"' >> versions.yml
-    """
 }

@@ -93,12 +93,21 @@ def main() -> int:
         )
         uniprot_records = tqdm(uniprot_records)
 
+        # An upsert, not a plain insert: INGEST_INSTANCES has already created a
+        # bare `protein` row for every parent protein of a domain instance, so a
+        # plain INSERT would hit UNIQUE(uniprot_id) on the first record. This step
+        # owns the sequence and the per-residue embeddings and fills them in.
         conn.executemany(
             """INSERT INTO protein (
                 uniprot_id, sequence,
                 prott5_per_residue, esm3_per_residue, esmc_per_residue
             )
-            VALUES (?, ?, ?, ?, ?);""",
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(uniprot_id) DO UPDATE SET
+                sequence           = excluded.sequence,
+                prott5_per_residue = excluded.prott5_per_residue,
+                esm3_per_residue   = excluded.esm3_per_residue,
+                esmc_per_residue   = excluded.esmc_per_residue;""",
             uniprot_records,
         )
     conn.commit()

@@ -4,9 +4,18 @@ nextflow_pipeline {
     script "../main.nf"
     tag "pipeline"
 
+    // A real run over the ~12-family fixture set in tests/data/ -- every process
+    // executes. It is NOT a laptop test: `generate_esm_embeddings` needs a GPU and
+    // an HF_TOKEN for the gated ESM3/ESMC weights, so run it as
+    //
+    //     nf-test test tests/default.nf.test --profile test,docker,gpu
+    //
+    // There is no `-stub` variant any more: Nextflow silently runs the real
+    // `script:` block for a process without a `stub:` block, and the imported
+    // ppi-splitting processes have none -- so a stub run would quietly stream
+    // 6.3 GB of Pfam and run BLAST. `nextflow run . -profile test -preview` is the
+    // cheap wiring check.
     test("-profile test") {
-
-        options "-stub"
 
         when {
             params {
@@ -15,23 +24,26 @@ nextflow_pipeline {
         }
 
         then {
-            // This is a `-stub` wiring test: every process runs its stub block and
-            // emits empty placeholder files, so file *content* is meaningless (and
-            // empty .gz/.h5 stubs break content hashing). We therefore snapshot only
-            // the set of produced output paths -- this verifies the whole DAG wires
-            // together (channel topology, the split fan-out, publish paths) end to
-            // end without any downloads, GPU, or containers. Everything under
-            // pipeline_info/ is ignored because those filenames embed a run
-            // timestamp (e.g. params_<timestamp>.json), which is non-deterministic.
-            def stable_path = getAllFilesFromDir(params.outdir, relative: true, includeDir: true, ignore: ['pipeline_info/*'])
+            // Contents, not paths: the point of the integration is which DDIs end
+            // up in which split database and with which source labels, and a file
+            // listing cannot see any of that. tests/bin/check_test_run.py holds the
+            // assertions; it exits non-zero and prints what failed.
+            def stdout = new StringBuilder()
+            def stderr = new StringBuilder()
+            def check = ["python3", "${projectDir}/tests/bin/check_test_run.py",
+                         "--outdir", "$outputDir"].execute()
+            check.waitForProcessOutput(stdout, stderr)
+
             // Snapshot the collated software versions with the Nextflow version line
             // stripped (so the assertion survives Nextflow upgrades). This also
             // satisfies the nf-core `nf_test_content` lint rule, which requires a
             // `versions.yml` to be snapshotted by every `*.nf.test`.
             def versions_yml = removeNextflowVersion("$outputDir/pipeline_info/nf_core_pipeline_software_mqc_versions.yml")
+
             assertAll(
                 { assert workflow.success },
-                { assert snapshot(stable_path, versions_yml).match() }
+                { assert check.exitValue() == 0 : "${stdout}\n${stderr}" },
+                { assert snapshot(versions_yml).match() }
             )
         }
     }

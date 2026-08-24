@@ -66,15 +66,6 @@ process FILTER_SEQUENCES {
         f.write(f"    python: {sys.version.split()[0]}\\n")
         f.write(f"    biopython: {Bio.__version__}\\n")
     """
-
-    stub:
-    protein_meta = [id: "protein_sequences"]
-    domain_meta = [id: "domain_sequences"]
-    """
-    touch uniprot_filtered.fasta.gz domain_sequences.fasta.gz
-    echo '"${task.process}":' > versions.yml
-    echo '    stub: "true"' >> versions.yml
-    """
 }
 
 // Per-residue protein embeddings. One task per FASTA shard.
@@ -117,13 +108,6 @@ process GENERATE_PROTEIN_ESM_EMBEDDINGS_CHUNK {
         --max-len ${params.esm_max_len} \\
         --smoke-limit ${smoke}
     """
-
-    stub:
-    """
-    touch ${input_fasta.simpleName}.esm.h5
-    echo '"${task.process}":' > versions.yml
-    echo '    stub: "true"' >> versions.yml
-    """
 }
 
 // GPU-pooled domain embeddings. One task per FASTA shard.
@@ -165,13 +149,6 @@ process GENERATE_DOMAIN_ESM_EMBEDDINGS_CHUNK {
         --batch-size ${params.esm_batch_size_domain} \\
         --max-len ${params.esm_max_len} \\
         --smoke-limit ${smoke}
-    """
-
-    stub:
-    """
-    touch ${input_fasta.simpleName}.esm.h5
-    echo '"${task.process}":' > versions.yml
-    echo '    stub: "true"' >> versions.yml
     """
 }
 

@@ -60,9 +60,14 @@ def main() -> int:
                     row.uniprot_id,
                 )
 
+    # An upsert, not `INSERT OR IGNORE`: INGEST_INSTANCES already created a row
+    # per domain instance, so OR IGNORE would skip every one of them and the ESM
+    # per-domain embeddings would silently never be written. Only the columns
+    # this step owns are touched -- instance_id, clan and taxon_id stay as ingest
+    # recorded them.
     conn.executemany(
         """
-        INSERT OR IGNORE INTO domain_protein_map(
+        INSERT INTO domain_protein_map(
             domain_id, protein_id, domain_sequence,
             start_pos, end_pos,
             esm3_per_domain, esmc_per_domain
@@ -73,7 +78,11 @@ def main() -> int:
         FROM domain, protein
         WHERE
             domain.pfam_id = ? AND
-            protein.uniprot_id = ?;
+            protein.uniprot_id = ?
+        ON CONFLICT(domain_id, protein_id, start_pos, end_pos) DO UPDATE SET
+            domain_sequence = excluded.domain_sequence,
+            esm3_per_domain = excluded.esm3_per_domain,
+            esmc_per_domain = excluded.esmc_per_domain;
         """,
         tqdm(iterate_domain_protein_alignments()),
     )

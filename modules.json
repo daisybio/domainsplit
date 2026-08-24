@@ -3,15 +3,6 @@
     "homePage": "https://github.com/daisybio/domainsplit",
     "repos": {
         "https://github.com/nf-core/modules.git": {
-            "modules": {
-                "nf-core": {
-                    "mmseqs/easycluster": {
-                        "branch": "master",
-                        "git_sha": "6d46786420b4d7bc88eba026eb389c0c5535d120",
-                        "installed_by": ["modules"]
-                    }
-                }
-            },
             "subworkflows": {
                 "nf-core": {
                     "utils_nextflow_pipeline": {

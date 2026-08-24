@@ -91,12 +91,6 @@
                     "default": "https://current.geneontology.org/ontology/external2go/pfam2go",
                     "fa_icon": "fas fa-link"
                 },
-                "url_pfam_template": {
-                    "type": "string",
-                    "description": "Template URL for downloading per-Pfam alignment archives; `{pfam_id}` is substituted per family.",
-                    "default": "https://www.ebi.ac.uk/interpro/wwwapi//entry/pfam/{pfam_id}/?annotation=alignment:full&download",
-                    "fa_icon": "fas fa-link"
-                },
                 "esm_protein_shards": {
                     "type": "integer",
                     "description": "Number of FASTA shards for parallel per-residue ESM embedding generation over the protein sequences. Each shard runs as one GPU task; cluster QoS caps concurrency (see slurm.config).",
@@ -144,38 +138,89 @@
                     "default": null,
                     "fa_icon": "fas fa-folder-open"
                 },
-                "smoke_test_n_ddis": {
-                    "type": ["integer", "null"],
-                    "description": "If set, after DDI collection the domainsplit DB is reduced to this many total interactions — floor(N/2) random positive DDIs and floor(N/2) random negative DDIs. All downstream steps then run on a tiny data set. Leave null (default) to disable the smoke filter.",
-                    "default": null,
-                    "minimum": 2,
-                    "fa_icon": "fas fa-hashtag"
-                },
                 "negative_ppi_parquet": {
                     "type": ["string"],
                     "format": "file-path",
-                    "description": "Required path to a Y2H/MS PPI parquet (columns: gene_name_bait, gene_name_prey, n_tested, ...). COLLECT_DDI_DATA derives negative DDIs by mapping bait/prey genes to UniProt then Pfam (via UniProt REST API) and inserting Pfam-pair candidates (degree-matched or by frequency) restricted to domains already in positive DDIs.",
+                    "description": "Required path to a Y2H/MS PPI parquet (columns: gene_name_bait, gene_name_prey, n_tested, ...). BUILD_CANDIDATE_NETWORK maps bait/prey genes to UniProt then Pfam (via UniProt REST API) and emits every tested-but-non-interacting Pfam pair, restricted to families appearing in a 3did DDI, as the pool ppi-splitting's `ilp_candidates` sampler draws from.",
                     "fa_icon": "fas fa-file-import"
                 },
                 "negative_ppi_min_n_tested": {
                     "type": "integer",
-                    "description": "Minimum value of the `n_tested` column required to keep a PPI row when building negative DDIs from negative_ppi_parquet.",
+                    "description": "Minimum value of the `n_tested` column required to keep a PPI row when building the candidate network from negative_ppi_parquet.",
                     "default": 5,
                     "minimum": 1,
                     "fa_icon": "fas fa-filter"
                 },
-                "negative_ppi_seed": {
+                "negative_ppi_gene_mapping": {
+                    "type": "string",
+                    "format": "file-path",
+                    "description": "Optional `gene_pfam_mapping.json` from an earlier BUILD_CANDIDATE_NETWORK run. Supplied, the gene → UniProt → Pfam lookup is read from it instead of the UniProt REST API — the only way the pipeline runs fully offline. Genes the file does not cover count as unmapped.",
+                    "default": null,
+                    "fa_icon": "fas fa-file-import"
+                },
+                "seed": {
                     "type": "integer",
-                    "description": "Random seed for the single-run, uncapped DANS negative-DDI selection (used by both the deletion and random_addition methods).",
+                    "description": "Master random seed. Passed to ppi-splitting and used by every sampling step on this side, so a run is reproducible from this one number.",
                     "default": 42,
                     "fa_icon": "fas fa-dice"
                 },
-                "pfam_download_batch_size": {
+                "ddi_examples_target": {
                     "type": "integer",
-                    "description": "Number of Pfam IDs grouped into a single download job to reduce scheduler overhead.",
-                    "default": 100,
+                    "description": "Concrete instance pairs representing one DDI. Passed through to ppi-splitting and used by BUILD_EXTERNAL_TEST, so the external test set is sized like the splits.",
+                    "default": 5,
+                    "minimum": 1,
+                    "fa_icon": "fas fa-clone"
+                },
+                "ddi_examples_pool_factor": {
+                    "type": "integer",
+                    "description": "Instances drawn per Pfam family before instance pairs are formed, as a multiple of ddi_examples_target. Bounds the work, not the result.",
+                    "default": 5,
                     "minimum": 1,
                     "fa_icon": "fas fa-layer-group"
+                },
+                "instance_tier": {
+                    "type": "string",
+                    "enum": ["human_only", "any"],
+                    "description": "Which Pfam domain instances may represent a family. `human_only` (default) restricts them to taxon 9606, which everything downstream of ingest assumes — ProtT5 embeddings, the STRING network and the UniProt idmapping stream are all human-only, and INGEST_INSTANCES fails the run on a non-human instance. Families left with no instance have their DDIs pruned.",
+                    "default": "human_only",
+                    "fa_icon": "fas fa-user"
+                },
+                "ddi_mode": {
+                    "type": "boolean",
+                    "description": "Route the imported ppi-splitting pipeline through DATA_PREP_DDI, so interaction files hold Pfam family accessions and domain instances are split instead of whole protein chains. Always true for this pipeline.",
+                    "default": true,
+                    "hidden": true,
+                    "fa_icon": "fas fa-code-branch"
+                },
+                "split_train_fraction": {
+                    "type": "number",
+                    "description": "Fraction of positive DDIs in the train split, for the `random` and `minimal_leakage` strategies. The `external_test` strategy has no internal test set and uses 1 - split_val_fraction instead.",
+                    "default": 0.7,
+                    "minimum": 0,
+                    "maximum": 1,
+                    "fa_icon": "fas fa-percent"
+                },
+                "split_val_fraction": {
+                    "type": "number",
+                    "description": "Fraction of positive DDIs in the validation split, for every splitting strategy.",
+                    "default": 0.1,
+                    "minimum": 0,
+                    "maximum": 1,
+                    "fa_icon": "fas fa-percent"
+                },
+                "split_test_fraction": {
+                    "type": "number",
+                    "description": "Fraction of positive DDIs in the test splits, for the `random` and `minimal_leakage` strategies. The `external_test` strategy runs with 0 and takes its test set from BUILD_EXTERNAL_TEST.",
+                    "default": 0.2,
+                    "minimum": 0,
+                    "maximum": 1,
+                    "fa_icon": "fas fa-percent"
+                },
+                "ppi_splitting_multi_negset": {
+                    "type": "boolean",
+                    "description": "Ask ppi-splitting for both ILP negative sets per split — plain `ilp` plus `ilp_candidates`, the same sampler restricted to the candidate network — which turns 3 method directories into 5. Requires the comma-separated negative_sampling_method fan-out on the ppi-splitting side; until that lands, leave false and only the first negative set of each row is produced.",
+                    "default": false,
+                    "fa_icon": "fas fa-clone"
                 },
                 "url_uniprot_swissprot_pfam": {
                     "type": "string",
@@ -200,7 +245,7 @@
                 "ppidm_tsv": {
                     "type": ["string"],
                     "format": "file-path",
-                    "description": "Required path to a PPIDM predictions TSV (columns: domain_1, domain_2, class). COLLECT_DDI_DATA adds positive DDIs tagged with source 'PPIDM_<Class>'.",
+                    "description": "Required path to a PPIDM predictions TSV (columns: domain_1, domain_2, class). PARSE_PPIDM emits each DDI twice, under the umbrella source 'PPIDM' and under 'PPIDM_<Class>'; both merge onto one database row.",
                     "fa_icon": "fas fa-file-import"
                 },
                 "ppidm_classes": {
@@ -208,12 +253,6 @@
                     "description": "Comma-separated PPIDM confidence classes to include.",
                     "default": "Bronze,Silver,Gold",
                     "fa_icon": "fas fa-tags"
-                },
-                "remove_self_interactions": {
-                    "type": "boolean",
-                    "description": "When true, all self-interactions (a domain interacting with itself) are removed after the positive/negatome sources are inserted, and the high-confidence non-PPI negative builder skips self-pairs.",
-                    "default": true,
-                    "fa_icon": "fas fa-redo"
                 }
             }
         },

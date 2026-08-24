@@ -19,11 +19,4 @@ process BUILD_SWISSPROT_PFAM_MAP {
         --versions versions.yml \\
         --process-name "${task.process}"
     """
-
-    stub:
-    """
-    touch swissprot_pfam_map.json
-    echo '"${task.process}":' > versions.yml
-    echo '    stub: "true"' >> versions.yml
-    """
 }
