@@ -30,18 +30,34 @@ import os
 import sys
 
 
-def _setup_hf_cache() -> None:
-    # HF cache must be writable. If HF_HOME points at a shared NFS dir
-    # (e.g. /nfs/scratch/hf_cache), use it; otherwise fall back to CWD.
-    hf_home = os.environ.get("HF_HOME")
-    if not hf_home:
-        hf_home = os.path.join(os.getcwd(), ".hf_cache")
-        os.environ["HF_HOME"] = hf_home
-    os.environ.setdefault("HUGGINGFACE_HUB_CACHE", hf_home)
+def _writable_dir(path: str) -> bool:
+    """True if `path` exists (or can be created) and this user can write in it."""
     try:
+        os.makedirs(path, exist_ok=True)
+        probe = os.path.join(path, f".write_probe.{os.getpid()}")
+        with open(probe, "w"):
+            pass
+        os.unlink(probe)
+        return True
+    except OSError:
+        return False
+
+
+def _setup_hf_cache() -> None:
+    # HF cache must be writable. A shared NFS dir (e.g. /nfs/scratch/hf_cache)
+    # is preferred so parallel shards share one download, but it is often owned
+    # by another user -- fall back to a task-local cache instead of dying.
+    hf_home = os.environ.get("HF_HOME") or os.path.join(os.getcwd(), ".hf_cache")
+    if not _writable_dir(hf_home):
+        fallback = os.path.join(os.getcwd(), ".hf_cache")
+        print(
+            f"warning: HF_HOME={hf_home} is not writable; falling back to {fallback}",
+            file=sys.stderr,
+        )
+        hf_home = fallback
         os.makedirs(hf_home, exist_ok=True)
-    except OSError as exc:
-        print(f"warning: could not create HF_HOME={hf_home}: {exc}", file=sys.stderr)
+    os.environ["HF_HOME"] = hf_home
+    os.environ["HUGGINGFACE_HUB_CACHE"] = hf_home
 
     token = os.environ.get("HF_TOKEN")
     if not token:
@@ -50,8 +66,10 @@ def _setup_hf_cache() -> None:
             "Set via `nextflow secrets set HF_TOKEN <token>` and request "
             "access at https://huggingface.co/EvolutionaryScale/esm3-sm-open-v1"
         )
-    from huggingface_hub import login as _hf_login
-    _hf_login(token=token, add_to_git_credential=False)
+    # No huggingface_hub.login(): it persists the token to
+    # $HF_HOME/stored_tokens, which fails on a shared cache dir and would leak
+    # the token to everyone who can read it. huggingface_hub picks the token up
+    # from the HF_TOKEN env var on its own for every authenticated request.
 
 
 def _open_fasta(path: str):
