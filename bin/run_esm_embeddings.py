@@ -284,6 +284,8 @@ def main() -> int:
     parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--max-len", type=int, default=0, help="0 = no cap")
     parser.add_argument("--smoke-limit", type=int, default=0, help="0 = no limit")
+    parser.add_argument("--require-gpu", action="store_true",
+                        help="abort instead of falling back to CPU when no GPU is visible")
     args = parser.parse_args()
 
     _setup_hf_cache()
@@ -294,8 +296,27 @@ def main() -> int:
     from esm.models.esmc import ESMC
 
     os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
-    device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
-    if not torch.cuda.is_available():
+    if torch.cuda.is_available():
+        device = torch.device("cuda")
+    elif args.require_gpu:
+        # Fail here, not later. ESM3 on CPU is not a slower route to the same
+        # answer, it is a route to none: loading a 1.4B model per task on a
+        # shared node OOM-killed five concurrent tasks (exit 137) ~90 s in, and
+        # the retry did it again. The usual cause is the container not seeing the
+        # GPU -- `--nv` missing for the *engine actually in use* (an apptainer
+        # run picks up `apptainer.runOptions`, not `singularity.runOptions`), or
+        # a SLURM request that binds the GPU to a job step rather than the batch
+        # script. Both look identical from in here, so print what we can see.
+        print("ERROR: --require-gpu was given but torch.cuda.is_available() is False.", file=sys.stderr)
+        print(f"  CUDA_VISIBLE_DEVICES = {os.environ.get('CUDA_VISIBLE_DEVICES', '<unset>')!r}", file=sys.stderr)
+        print(f"  SLURM_JOB_GPUS       = {os.environ.get('SLURM_JOB_GPUS', '<unset>')!r}", file=sys.stderr)
+        print(f"  SLURM_STEP_GPUS      = {os.environ.get('SLURM_STEP_GPUS', '<unset>')!r}", file=sys.stderr)
+        print(f"  torch {torch.__version__}, built for CUDA {torch.version.cuda}", file=sys.stderr)
+        print(f"  /dev/nvidiactl present: {os.path.exists('/dev/nvidiactl')}", file=sys.stderr)
+        print("  If /dev/nvidiactl is absent the container was started without --nv.", file=sys.stderr)
+        return 1
+    else:
+        device = torch.device("cpu")
         print("warning: CUDA not available, falling back to CPU (very slow)", file=sys.stderr)
 
     smoke_limit = args.smoke_limit if args.smoke_limit > 0 else None

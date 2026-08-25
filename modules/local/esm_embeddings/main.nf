@@ -71,6 +71,12 @@ process FILTER_SEQUENCES {
 // Per-residue protein embeddings. One task per FASTA shard.
 process GENERATE_PROTEIN_ESM_EMBEDDINGS_CHUNK {
     tag { input_fasta.simpleName }
+    // Both labels on purpose. `process_gpu` is what institutional configs key
+    // their GPU queue and --gpus request on (nf-core/configs daisybio, for one);
+    // `process_gpu_large` only carries our own cpu/memory/time sizing. Dropping
+    // the first sent these tasks to the default CPU queue, where torch found no
+    // GPU and a CPU ESM3 load got the task OOM-killed.
+    label 'process_gpu'
     label 'process_gpu_large'
     secret 'HF_TOKEN'
     conda "${moduleDir}/environment.yml"
@@ -94,6 +100,9 @@ process GENERATE_PROTEIN_ESM_EMBEDDINGS_CHUNK {
 
     script:
     def smoke = params.esm_smoke_test ? 100 : 0
+    // Abort rather than fall back to CPU: a 1.4B model per task on CPU is not a
+    // slow success, it is an OOM kill (exit 137) that the retry repeats.
+    def require_gpu = params.esm_require_gpu ? '--require-gpu' : ''
     def hf_cache = params.esm_hf_cache_dir ?: ''
     """
     if [ -n "${hf_cache}" ]; then
@@ -110,13 +119,20 @@ process GENERATE_PROTEIN_ESM_EMBEDDINGS_CHUNK {
         --mode per_residue \\
         --batch-size ${params.esm_batch_size_protein} \\
         --max-len ${params.esm_max_len} \\
-        --smoke-limit ${smoke}
+        --smoke-limit ${smoke} \\
+        ${require_gpu}
     """
 }
 
 // GPU-pooled domain embeddings. One task per FASTA shard.
 process GENERATE_DOMAIN_ESM_EMBEDDINGS_CHUNK {
     tag { input_fasta.simpleName }
+    // Both labels on purpose. `process_gpu` is what institutional configs key
+    // their GPU queue and --gpus request on (nf-core/configs daisybio, for one);
+    // `process_gpu_large` only carries our own cpu/memory/time sizing. Dropping
+    // the first sent these tasks to the default CPU queue, where torch found no
+    // GPU and a CPU ESM3 load got the task OOM-killed.
+    label 'process_gpu'
     label 'process_gpu_large'
     secret 'HF_TOKEN'
     conda "${moduleDir}/environment.yml"
@@ -140,6 +156,9 @@ process GENERATE_DOMAIN_ESM_EMBEDDINGS_CHUNK {
 
     script:
     def smoke = params.esm_smoke_test ? 100 : 0
+    // Abort rather than fall back to CPU: a 1.4B model per task on CPU is not a
+    // slow success, it is an OOM kill (exit 137) that the retry repeats.
+    def require_gpu = params.esm_require_gpu ? '--require-gpu' : ''
     def hf_cache = params.esm_hf_cache_dir ?: ''
     """
     if [ -n "${hf_cache}" ]; then
@@ -156,7 +175,8 @@ process GENERATE_DOMAIN_ESM_EMBEDDINGS_CHUNK {
         --mode pooled \\
         --batch-size ${params.esm_batch_size_domain} \\
         --max-len ${params.esm_max_len} \\
-        --smoke-limit ${smoke}
+        --smoke-limit ${smoke} \\
+        ${require_gpu}
     """
 }
 

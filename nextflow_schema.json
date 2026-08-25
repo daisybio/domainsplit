@@ -93,7 +93,7 @@
                 },
                 "esm_protein_shards": {
                     "type": "integer",
-                    "description": "Number of FASTA shards for parallel per-residue ESM embedding generation over the protein sequences. Each shard runs as one GPU task; cluster QoS caps concurrency (see slurm.config).",
+                    "description": "Number of FASTA shards for parallel per-residue ESM embedding generation over the protein sequences. Each shard runs as one GPU task; concurrency is capped by maxForks in conf/modules.config.",
                     "default": 4,
                     "minimum": 1,
                     "fa_icon": "fas fa-puzzle-piece"
@@ -125,6 +125,12 @@
                     "default": 4096,
                     "minimum": 0,
                     "fa_icon": "fas fa-ruler-horizontal"
+                },
+                "esm_require_gpu": {
+                    "type": "boolean",
+                    "description": "Abort an ESM chunk task when no GPU is visible instead of falling back to CPU. CPU inference loads a 1.4B model per task and OOM-kills concurrent tasks rather than finishing slowly, so the failure is worth surfacing immediately. Set false only to deliberately accept CPU inference on a tiny input.",
+                    "default": true,
+                    "fa_icon": "fas fa-microchip"
                 },
                 "esm_smoke_test": {
                     "type": "boolean",
