@@ -75,10 +75,14 @@ process GENERATE_PROTEIN_ESM_EMBEDDINGS_CHUNK {
     secret 'HF_TOKEN'
     conda "${moduleDir}/environment.yml"
     container "docker.io/konstantinpelz/domainsplit-gpu:1.0.0"
+    // Apptainer/Singularity `--env` requires KEY=VALUE (a bare name is rejected),
+    // unlike Docker's `-e KEY` pass-through. HF_HOME / HUGGINGFACE_HUB_CACHE are
+    // exported inside the task script from `params.esm_hf_cache_dir`, so only the
+    // HF_TOKEN secret has to cross the container boundary here.
     containerOptions {
         workflow.containerEngine == 'singularity' || workflow.containerEngine == 'apptainer'
-            ? '--env HF_TOKEN --env HF_HOME --env HUGGINGFACE_HUB_CACHE'
-            : '-e HF_TOKEN -e HF_HOME -e HUGGINGFACE_HUB_CACHE'
+            ? '--env HF_TOKEN=$HF_TOKEN'
+            : '-e HF_TOKEN'
     }
 
     input:
@@ -117,10 +121,14 @@ process GENERATE_DOMAIN_ESM_EMBEDDINGS_CHUNK {
     secret 'HF_TOKEN'
     conda "${moduleDir}/environment.yml"
     container "docker.io/konstantinpelz/domainsplit-gpu:1.0.0"
+    // Apptainer/Singularity `--env` requires KEY=VALUE (a bare name is rejected),
+    // unlike Docker's `-e KEY` pass-through. HF_HOME / HUGGINGFACE_HUB_CACHE are
+    // exported inside the task script from `params.esm_hf_cache_dir`, so only the
+    // HF_TOKEN secret has to cross the container boundary here.
     containerOptions {
         workflow.containerEngine == 'singularity' || workflow.containerEngine == 'apptainer'
-            ? '--env HF_TOKEN --env HF_HOME --env HUGGINGFACE_HUB_CACHE'
-            : '-e HF_TOKEN -e HF_HOME -e HUGGINGFACE_HUB_CACHE'
+            ? '--env HF_TOKEN=$HF_TOKEN'
+            : '-e HF_TOKEN'
     }
 
     input:
