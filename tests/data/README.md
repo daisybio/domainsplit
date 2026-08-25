@@ -7,9 +7,12 @@ after refreshing a source file:
 tests/bin/make_test_fixtures.py --sources ~/Downloads/pipeline_files
 ```
 
-The fixture covers about a dozen Pfam families. Which families is not a free
-choice: the pipeline runs `instance_tier = human_only`, so a family without human
-domain instances is dropped by `PRUNE_UNREPRESENTED_DDIS`, and a pair whose two
+The fixture covers about 40 Pfam families (raised from a dozen: at 12, the
+`external_test` row's val split had too few distinct families for
+`SAMPLE_NEGATIVES_ILP`'s neg_ratio=1.0 candidate sampling — see
+`PLAN_ppi_splitting_integration.md`). Which families is not a free choice: the
+pipeline runs `instance_tier = human_only`, so a family without human domain
+instances is dropped by `PRUNE_UNREPRESENTED_DDIS`, and a pair whose two
 families are not *both* in the fixture cannot reach the external test set. The
 generator therefore takes one pass over the real `Pfam-A.fasta.gz`, keeps the
 families with enough human records, and picks from those — Negatome and PPIDM

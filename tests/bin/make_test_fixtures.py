@@ -71,8 +71,8 @@ def parse_args():
     p = argparse.ArgumentParser()
     p.add_argument("--sources", required=True, help="directory holding the real source files")
     p.add_argument("--out", default=None, help="fixture directory (default: <repo>/tests/data)")
-    p.add_argument("--families", type=int, default=12, help="number of Pfam families to keep")
-    p.add_argument("--shortlist", type=int, default=80,
+    p.add_argument("--families", type=int, default=40, help="number of Pfam families to keep")
+    p.add_argument("--shortlist", type=int, default=150,
                    help="families carried into the Pfam-A.fasta pass, before the human filter")
     p.add_argument("--min-human-instances", type=int, default=3,
                    help="human records a family needs to be kept; 2 is the minimum for a "
