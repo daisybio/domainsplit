@@ -20,8 +20,10 @@ process INGEST_SAMPLED_NEGATIVES {
     path "versions.yml",        emit: versions
 
     script:
-    def split_args = [split_keys, split_csvs].transpose().withIndex().collect { pair, i ->
-        "--split ${pair[0]}:${i + 1}/${pair[1].name}"
+    // `.name` on a staged input already carries the `?/*` subdirectory
+    // (e.g. `1/train.csv`), so it must not be prefixed with the index again.
+    def split_args = [split_keys, split_csvs].transpose().collect { key, csv ->
+        "--split ${key}:${csv.name}"
     }.join(' \\\n        ')
     """
     cp "${domainsplit_db_in}" domainsplit.sqlite3
