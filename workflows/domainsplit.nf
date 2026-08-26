@@ -312,6 +312,42 @@ main:
     domainsplit_db = pruned.domainsplit_db
 
     //
+    // The external test set: DDIs from PPIDM / single_domain_ppi / negatome,
+    // none of which can have appeared in any split of any set. Written as the
+    // `test` split of every external_test method directory.
+    //
+    // Deliberately *before* enrichment, and it is not an optimisation of
+    // convenience: BUILD_EXTERNAL_TEST clones the master, and after enrichment
+    // ~99% of that file is per-residue ProtT5/ESM blobs (590 MB of 594 MB at
+    // `-profile test` scale, tens of GB in production) that this step never
+    // reads. Running it here clones a few MB instead.
+    //
+    // Safe because the two write disjoint tables and the read sets do not move:
+    // this step reads `domain_domain_interaction`, `domain` and
+    // `domain_protein_map` WHERE instance_id IS NOT NULL, and writes only
+    // `ddi_split_membership`. Enrichment never touches the first two or the
+    // last; its one overlap is INSERT_DOMAIN_PROTEIN_MAPPING's upsert, which
+    // leaves `instance_id` NULL on the rows it adds and updates only
+    // domain_sequence / esm*_per_domain on the rows it hits -- so the set of
+    // rows with a non-NULL instance_id, and their (domain_id, instance_id,
+    // protein_id) triples, are identical either side of it. Sampling is seeded
+    // per DDI, so the membership rows come out the same.
+    //
+    // It must stay *after* PRUNE_UNREPRESENTED_DDIS: ddi_split_membership.ddi_id
+    // is ON DELETE CASCADE, so writing membership before the prune would lose
+    // rows to it.
+    //
+    def external_methods = splitRows()
+        .findAll { row -> !row.internal_test }
+        .collectMany { row -> activeNegsets(row).collect { negset -> row.negsets[negset] } }
+
+    external = BUILD_EXTERNAL_TEST(
+        domainsplit_db,
+        external_methods,
+        'test',
+    )
+
+    //
     // Enrichment, on the master database, before any subsetting.
     //
     protein_domain_map = ingested.protein_domain_map
@@ -322,7 +358,7 @@ main:
     )
 
     ENRICH_DDI_DATABASE(
-        domainsplit_db,
+        external.domainsplit_db,
         input_pfam2go,
         input_uniprot_sequences,
         protein_domain_map,
@@ -334,24 +370,12 @@ main:
         generate_esm_embeddings.out.domain_embeddings,
     )
 
-    //
-    // The external test set: DDIs from PPIDM / single_domain_ppi / negatome,
-    // none of which can have appeared in any split of any set. Written as the
-    // `test` split of every external_test method directory.
-    //
-    def external_methods = splitRows()
-        .findAll { row -> !row.internal_test }
-        .collectMany { row -> activeNegsets(row).collect { negset -> row.negsets[negset] } }
-
-    external = BUILD_EXTERNAL_TEST(
-        ENRICH_DDI_DATABASE.out.domainsplit_db,
-        external_methods,
-        'test',
-    )
+    enriched_db = ENRICH_DDI_DATABASE.out.domainsplit_db
 
     //
-    // One database per (method, split), carved out of the enriched master by a
-    // pure SQL filter over ddi_split_membership.
+    // One database per (method, split). SUBSET_SPLIT_DB creates each output and
+    // pulls the surviving rows out of the master read-only -- it does not clone
+    // and delete, so a split's file costs only the rows it keeps.
     //
     def subset_targets = splitRows().collectMany { row ->
         activeNegsets(row).collectMany { negset ->
@@ -362,7 +386,7 @@ main:
     }
 
     split_dbs = SUBSET_SPLIT_DB(
-        channel.fromList(subset_targets).combine(external.domainsplit_db)
+        channel.fromList(subset_targets).combine(enriched_db)
     )
 
     //
@@ -395,7 +419,9 @@ main:
         )
 
 emit:
-    domainsplit_db    = external.domainsplit_db
+    // The master: enriched *and* carrying every split's membership rows,
+    // including the external test set BUILD_EXTERNAL_TEST wrote upstream.
+    domainsplit_db    = enriched_db
     split_db          = split_dbs.split_db
     candidate_network = candidate_network
     source_conflicts  = inserted.conflicts

@@ -26,7 +26,13 @@ process INGEST_SAMPLED_NEGATIVES {
         "--split ${key}:${csv.name}"
     }.join(' \\\n        ')
     """
-    cp --reflink=auto "${domainsplit_db_in}" domainsplit.sqlite3
+    # NOT cp: on this cluster's NFS, coreutils uses copy_file_range(), which the
+    # server satisfies as a server-side copy -- 567 MB "copied" in 0.8 s and then
+    # the syscall never returns (BUILD_EXTERNAL_TEST hung 3 h with every byte
+    # already on the server; --reflink=never does not opt out, coreutils still
+    # takes that path). dd is a plain read()/write() loop, so the bytes actually
+    # cross the wire and the call terminates.
+    dd if="${domainsplit_db_in}" of=domainsplit.sqlite3 bs=4M status=none
 
     ingest_sampled_negatives.py \\
         --db domainsplit.sqlite3 \\

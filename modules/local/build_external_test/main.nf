@@ -17,13 +17,19 @@ process BUILD_EXTERNAL_TEST {
     script:
     def method_args = methods.collect { method -> "--method ${method}" }.join(' ')
     """
-    # The copy is the one step build_external_test.py cannot report on, and this
-    # task's first real run stalled for three hours with no output at all -- so
-    # bracket it. The DB carries every ProtT5/ESM embedding by this point, and
-    # the work dir is on shared storage.
-    echo "[external_test] cp start  \$(date -u +%FT%TZ) input=\$(stat -Lc %s "${domainsplit_db_in}") bytes"
-    cp --reflink=auto "${domainsplit_db_in}" domainsplit.sqlite3
-    echo "[external_test] cp done   \$(date -u +%FT%TZ)"
+    # The copy is the one step build_external_test.py cannot report on, and it is
+    # where this task's first two runs stalled -- so bracket it. Those runs cloned
+    # the *enriched* master; the workflow now schedules this before enrichment, so
+    # the input is a few MB rather than ~590 MB of per-residue blobs.
+    echo "[external_test] copy start \$(date -u +%FT%TZ) input=\$(stat -Lc %s "${domainsplit_db_in}") bytes"
+    # NOT cp: on this cluster's NFS, coreutils uses copy_file_range(), which the
+    # server satisfies as a server-side copy -- 567 MB "copied" in 0.8 s and then
+    # the syscall never returns (BUILD_EXTERNAL_TEST hung 3 h with every byte
+    # already on the server; --reflink=never does not opt out, coreutils still
+    # takes that path). dd is a plain read()/write() loop, so the bytes actually
+    # cross the wire and the call terminates.
+    dd if="${domainsplit_db_in}" of=domainsplit.sqlite3 bs=4M status=none
+    echo "[external_test] copy done  \$(date -u +%FT%TZ)"
 
     build_external_test.py \\
         --db domainsplit.sqlite3 \\

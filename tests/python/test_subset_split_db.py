@@ -8,9 +8,12 @@ proteins, GO terms or PPI edges behind would publish a database that leaks the
 rest of the run.
 
 Asserted here: only this split's DDIs survive; the domains, instances and
-proteins reachable only from other splits are gone along with their GO and PPI
-rows; and the membership table is narrowed to the one ``(method, split)`` so each
-published DB describes only itself.
+proteins reachable only from other splits are absent along with their GO and PPI
+rows; and the membership table holds the one ``(method, split)`` so each
+published DB describes only itself. Also that the master is left untouched --
+Nextflow stages it as a symlink into the task dir, so a write would reach into
+another task's published output -- and that the split DB carries the master's
+schema, which is replayed from it rather than restated in the script.
 
 Run directly (`python3 tests/python/test_subset_split_db.py`) or via pytest.
 """
@@ -82,16 +85,34 @@ def build_db(path):
     conn.close()
 
 
+def schema_of(path):
+    conn = sqlite3.connect(path)
+    objects = sorted(conn.execute(
+        "SELECT type, name, sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'"
+    ).fetchall())
+    conn.close()
+    return objects
+
+
 def test_subset_to_one_split():
     with tempfile.TemporaryDirectory() as tmp:
+        master = os.path.join(tmp, "master.sqlite3")
         db = os.path.join(tmp, "minimal_leakage_train.sqlite3")
-        build_db(db)
+        build_db(master)
+        master_before = (os.path.getsize(master), os.path.getmtime(master), schema_of(master))
 
         subprocess.run(
-            [sys.executable, SUBSET, "--db", db, "--method", "minimal_leakage", "--split", "train",
+            [sys.executable, SUBSET, "--source", master, "--out", db,
+             "--method", "minimal_leakage", "--split", "train",
              "--versions", os.path.join(tmp, "versions.yml"), "--process-name", "TEST"],
             check=True, env=ENV, capture_output=True, text=True,
         )
+
+        # The master is an input, not scratch space.
+        assert (os.path.getsize(master), os.path.getmtime(master), schema_of(master)) \
+            == master_before
+        # Schema replayed from the master, not restated in the script.
+        assert schema_of(db) == master_before[2]
 
         conn = sqlite3.connect(db)
         rows = ddi_rows(conn)
@@ -116,6 +137,33 @@ def test_subset_to_one_split():
         assert membership == [("minimal_leakage", "train")], membership
 
 
+def test_unknown_table_is_refused():
+    """A table with no reachability rule must fail, not be copied whole.
+
+    The delete-based version kept every row of a table it did not know about,
+    which would publish the rest of the run in each split DB.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        master = os.path.join(tmp, "master.sqlite3")
+        build_db(master)
+        conn = sqlite3.connect(master)
+        conn.execute("CREATE TABLE surprise(id INTEGER PRIMARY KEY, secret)")
+        conn.execute("INSERT INTO surprise(secret) VALUES ('other split')")
+        conn.commit()
+        conn.close()
+
+        done = subprocess.run(
+            [sys.executable, SUBSET, "--source", master,
+             "--out", os.path.join(tmp, "out.sqlite3"),
+             "--method", "minimal_leakage", "--split", "train",
+             "--versions", os.path.join(tmp, "versions.yml"), "--process-name", "TEST"],
+            env=ENV, capture_output=True, text=True,
+        )
+        assert done.returncode != 0, done.stdout
+        assert "surprise" in done.stderr, done.stderr
+
+
 if __name__ == "__main__":
     test_subset_to_one_split()
-    print("OK: subsetting keeps one split and cascades away everything else")
+    test_unknown_table_is_refused()
+    print("OK: subsetting keeps one split and omits everything else")
