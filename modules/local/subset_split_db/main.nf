@@ -14,7 +14,7 @@ process SUBSET_SPLIT_DB {
     script:
     def out_db = "${meta.method}_${meta.split}.sqlite3"
     """
-    cp "${domainsplit_db_in}" ${out_db}
+    cp --reflink=auto "${domainsplit_db_in}" ${out_db}
 
     subset_split_db.py \\
         --db ${out_db} \\

@@ -191,6 +191,36 @@ main:
         channel.value(cache_dir),
     )
 
+    // The families Pfam had nothing usable for, one row per family with a
+    // `reason` column. Taken from the channel, never read back from the
+    // published path. Three reasons and they are not interchangeable:
+    // `no_eligible_instances` is a consequence of `instance_tier`, which this
+    // pipeline pins to `human_only`, so it fires in bulk and would bury the
+    // other two -- `dead` and `not_in_pfam` are facts about Pfam, and a
+    // mistyped accession arrives as `not_in_pfam`. So they are counted apart
+    // and only the Pfam-fact reasons warn.
+    //
+    // Note this is *our* fetch's report, not PPI_SPLITTING.out.dropped_families:
+    // that one carries the synthetic [id: '_shared'] meta (which matches no
+    // dataset, so join()ing it against a per-dataset channel silently drops the
+    // branch) and is empty here anyway, because every dataset row supplies
+    // precomputed `domain_instances` and DATA_PREP_DDI never fetches. Nothing
+    // may block on either of them: a run that drops nothing still emits the
+    // header-only file.
+    dropped_families = fetched.dropped_families.map { _meta, f -> f }
+    dropped_families
+        .map { f -> f.readLines().drop(1).findAll { line -> line.trim() }.countBy { line -> line.tokenize('\t')[-1] } }
+        .subscribe { counts ->
+            def total = counts.values().sum() ?: 0
+            if (total) {
+                log.info "FETCH_DOMAIN_META dropped ${total} families: ${counts.sort().collect { r, n -> "${r}=${n}" }.join(', ')} (see dropped_families.tsv; their DDIs leave the database in PRUNE_UNREPRESENTED_DDIS)"
+            }
+            def pfam_facts = counts.findAll { reason, _n -> reason in ['dead', 'not_in_pfam'] }
+            if (pfam_facts) {
+                log.warn "${pfam_facts.collect { r, n -> "${n} families ${r}" }.join(', ')} -- these are not an instance_tier effect. Check for mistyped or retired accessions in the requested family set."
+            }
+        }
+
     union_sequences = fetched.sequences.map      { _meta, f -> f }
     union_species   = fetched.species.map        { _meta, f -> f }
     union_instances = fetched.instances.map      { _meta, f -> f }
@@ -370,6 +400,7 @@ emit:
     candidate_network = candidate_network
     source_conflicts  = inserted.conflicts
     bias_analysis     = ppi.multiqc_report
+    dropped_families  = dropped_families
 }
 
 /*

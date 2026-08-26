@@ -417,14 +417,33 @@ def write_swissprot_tsv(out, tsv_rows):
 
 
 def write_parquet_and_mapping(out, parquet_path, families, n_rows, min_n_tested, rng):
-    """A real slice of the screen, plus a mapping that resolves its genes offline.
+    """A real slice of the screen, made *dense*, plus a mapping that resolves its
+    genes offline.
 
     BUILD_CANDIDATE_NETWORK's only network call is gene -> UniProt -> Pfam; given
     `--mapping-in` it makes none. Writing the mapping here from the genes the
     slice actually contains is what makes the fixture self-sufficient, and
     assigning our families to those genes is what makes the candidate network
     non-empty (both families of a pair must appear in a 3did DDI to survive).
+
+    Non-empty is not enough, and this is the trap the density rows below exist
+    for. `SAMPLE_NEGATIVES_ILP` draws a split's `ilp_candidates` negatives from
+    the candidate pairs whose **both** endpoints landed in that split, and
+    ppi-splitting's partitions are family-exclusive -- so survival is
+    *quadratic* in the split's share, and the sampler hard-errors ("need N
+    negatives but only M candidate pairs are available") rather than degrading.
+    A real slice pairs whatever genes the screen happened to test, which after
+    the round-robin family assignment collapsed to 34 pairs over 35 families:
+    the 0.1 val split kept a median of **zero** usable pairs for ~4 positives.
+
+    So the real rows are kept for provenance and every unordered family pair
+    (self-pairs included -- they are legitimate DDIs) is appended on top, using
+    one representative gene per family. BUILD_CANDIDATE_NETWORK subtracts the
+    3did positives itself, so the generator does not need to know them: the
+    emitted network is exactly the complete non-positive pair set over the
+    fixture families, which is what the smallest split has to be sized against.
     """
+    import pyarrow as pa
     import pyarrow.parquet as pq
 
     pf = pq.ParquetFile(parquet_path)
@@ -440,21 +459,48 @@ def write_parquet_and_mapping(out, parquet_path, families, n_rows, min_n_tested,
     if table is None:
         raise SystemExit(f"no parquet row has n_tested >= {min_n_tested}")
 
-    import pyarrow as pa
-
-    path = os.path.join(out, "negative_ppi.parquet")
-    pq.write_table(pa.Table.from_batches([table]), path)
-    log(f"wrote {path} ({table.num_rows} rows)")
-
+    real = pa.Table.from_batches([table])
     genes = sorted(
-        {g for g in table.column("gene_name_bait").to_pylist() if g}
-        | {g for g in table.column("gene_name_prey").to_pylist() if g}
+        {g for g in real.column("gene_name_bait").to_pylist() if g}
+        | {g for g in real.column("gene_name_prey").to_pylist() if g}
     )
+    if len(genes) < len(families):
+        raise SystemExit(
+            f"parquet slice has {len(genes)} genes but {len(families)} families to cover; "
+            "raise --parquet-rows"
+        )
     gene_to_uniprot, uniprot_to_pfams = {}, {}
     for i, gene in enumerate(genes):
         acc = f"C{i:05d}"
         gene_to_uniprot[gene] = acc
         uniprot_to_pfams[acc] = [families[i % len(families)]]
+
+    # One representative gene per family: the first in `genes` order that the
+    # round-robin above assigned to it, so the pair rows and the mapping cannot
+    # disagree.
+    rep = {}
+    for i, gene in enumerate(genes):
+        rep.setdefault(families[i % len(families)], gene)
+
+    baits, preys = [], []
+    for i, fam_a in enumerate(families):
+        for fam_b in families[i:]:
+            baits.append(rep[fam_a])
+            preys.append(rep[fam_b])
+    dense = pa.table(
+        {
+            "gene_name_bait": pa.array(baits, type=real.schema.field("gene_name_bait").type),
+            "gene_name_prey": pa.array(preys, type=real.schema.field("gene_name_prey").type),
+            # Every density row must clear params.negative_ppi_min_n_tested.
+            "n_tested": pa.array([min_n_tested] * len(baits), type=real.schema.field("n_tested").type),
+        }
+    )
+
+    path = os.path.join(out, "negative_ppi.parquet")
+    pq.write_table(pa.concat_tables([real, dense]), path)
+    log(f"wrote {path} ({real.num_rows} real rows + {dense.num_rows} density rows "
+        f"covering all {len(families)} x {len(families)} family pairs)")
+
     mapping = os.path.join(out, "gene_pfam_mapping.json")
     with open(mapping, "w") as fh:
         json.dump({"gene_to_uniprot": gene_to_uniprot, "uniprot_to_pfams": uniprot_to_pfams}, fh, indent=1)

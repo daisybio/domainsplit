@@ -14,7 +14,7 @@ process PRUNE_UNREPRESENTED_DDIS {
 
     script:
     """
-    cp "${domainsplit_db_in}" domainsplit.sqlite3
+    cp --reflink=auto "${domainsplit_db_in}" domainsplit.sqlite3
 
     prune_unrepresented_ddis.py \\
         --db domainsplit.sqlite3 \\

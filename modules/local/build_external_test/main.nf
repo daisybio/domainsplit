@@ -17,7 +17,13 @@ process BUILD_EXTERNAL_TEST {
     script:
     def method_args = methods.collect { method -> "--method ${method}" }.join(' ')
     """
-    cp "${domainsplit_db_in}" domainsplit.sqlite3
+    # The copy is the one step build_external_test.py cannot report on, and this
+    # task's first real run stalled for three hours with no output at all -- so
+    # bracket it. The DB carries every ProtT5/ESM embedding by this point, and
+    # the work dir is on shared storage.
+    echo "[external_test] cp start  \$(date -u +%FT%TZ) input=\$(stat -Lc %s "${domainsplit_db_in}") bytes"
+    cp --reflink=auto "${domainsplit_db_in}" domainsplit.sqlite3
+    echo "[external_test] cp done   \$(date -u +%FT%TZ)"
 
     build_external_test.py \\
         --db domainsplit.sqlite3 \\

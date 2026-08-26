@@ -78,7 +78,7 @@ def _open_fasta(path: str):
     return open(path, "r")
 
 
-def _load_records(fasta_path: str, max_len: int, smoke_limit: int | None):
+def _load_records(fasta_path: str, max_len: int):
     from Bio import SeqIO
 
     with _open_fasta(fasta_path) as fh:
@@ -91,8 +91,6 @@ def _load_records(fasta_path: str, max_len: int, smoke_limit: int | None):
                 print(f"skip {rec.id}: len={len(seq)} > max_len={max_len}", flush=True)
                 continue
             records.append((rec.id, seq))
-            if smoke_limit and len(records) >= smoke_limit:
-                break
     records.sort(key=lambda r: len(r[1]))
     return records
 
@@ -283,7 +281,6 @@ def main() -> int:
     parser.add_argument("--mode", choices=["per_residue", "pooled"], required=True)
     parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--max-len", type=int, default=0, help="0 = no cap")
-    parser.add_argument("--smoke-limit", type=int, default=0, help="0 = no limit")
     parser.add_argument("--require-gpu", action="store_true",
                         help="abort instead of falling back to CPU when no GPU is visible")
     args = parser.parse_args()
@@ -319,8 +316,7 @@ def main() -> int:
         device = torch.device("cpu")
         print("warning: CUDA not available, falling back to CPU (very slow)", file=sys.stderr)
 
-    smoke_limit = args.smoke_limit if args.smoke_limit > 0 else None
-    records = _load_records(args.input_fasta, args.max_len, smoke_limit)
+    records = _load_records(args.input_fasta, args.max_len)
     print(f"loaded {len(records)} records from {args.input_fasta}", flush=True)
     if not records:
         # Still write an empty H5 + versions so downstream join doesn't crash.

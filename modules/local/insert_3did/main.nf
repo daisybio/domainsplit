@@ -14,7 +14,7 @@ process INSERT_3DID {
 
     script:
     """
-    cp "${domainsplit_db_in}" domainsplit.sqlite3
+    cp --reflink=auto "${domainsplit_db_in}" domainsplit.sqlite3
 
     insert_3did.py \\
         --db domainsplit.sqlite3 \\

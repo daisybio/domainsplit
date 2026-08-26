@@ -31,11 +31,25 @@ import csv
 import random
 import sqlite3
 import sys
+import time
 from collections import Counter, defaultdict
 
 from ddi_db_utils import is_protected
 
 DROPPED_COLUMNS = ["pfam_a", "pfam_b", "negative", "source", "reason"]
+
+_T0 = time.monotonic()
+
+
+def log(msg):
+    """Progress line with elapsed seconds.
+
+    This process printed nothing at all until its last line, so its first real
+    run -- which sat RUNNING for three hours on the cluster and had to be
+    cancelled -- left no way to tell the DB copy from the connect from the scan.
+    Every stage now announces itself, unbuffered.
+    """
+    print(f"[external_test] +{time.monotonic() - _T0:7.1f}s {msg}", flush=True)
 
 
 def parse_args():
@@ -54,8 +68,14 @@ def parse_args():
 
 
 def external_ddis(conn):
-    """``[(ddi_id, pfam_a, pfam_b, domain_id_a, domain_id_b, negative, source)]`` for non-protected DDIs."""
-    rows = []
+    """Yield ``(ddi_id, pfam_a, pfam_b, domain_id_a, domain_id_b, negative, source)``
+    for non-protected DDIs, in ``ddi.id`` order.
+
+    A generator, not a list: at production scale the DDI table is dominated by
+    PPIDM (millions of rows), and materialising it only to walk it once cost a
+    gigabyte for nothing.  ``is_protected`` has to stay in Python -- ``source``
+    can hold a comma-joined list (``"PPIDM,PPIDM_Gold"``) that SQL cannot split.
+    """
     for ddi_id, id_a, id_b, pfam_a, pfam_b, negative, source in conn.execute(
         "SELECT ddi.id, ddi.domain_id_a, ddi.domain_id_b, da.pfam_id, db.pfam_id, ddi.negative, ddi.source "
         "FROM domain_domain_interaction AS ddi "
@@ -64,12 +84,17 @@ def external_ddis(conn):
         "ORDER BY ddi.id"
     ):
         if not is_protected(source):
-            rows.append((ddi_id, pfam_a, pfam_b, id_a, id_b, negative, source))
-    return rows
+            yield (ddi_id, pfam_a, pfam_b, id_a, id_b, negative, source)
 
 
 def instances_by_domain(conn):
-    """``{domain_id: [(instance_id, protein_id), ...]}``, sorted for determinism."""
+    """``{domain_id: [(instance_id, protein_id), ...]}``, sorted for determinism.
+
+    Bounded by design rather than by the protein universe: ``FETCH_DOMAIN_META``
+    samples at most ``ddi_examples_target * ddi_examples_pool_factor`` instances
+    per family, so this is families x that factor, not one row per domain
+    occurrence in the proteome.
+    """
     by_domain = defaultdict(list)
     for domain_id, instance_id, protein_id in conn.execute(
         "SELECT domain_id, instance_id, protein_id FROM domain_protein_map "
@@ -108,18 +133,38 @@ def sample_pairs(rng, inst_a, inst_b, target, pool_size, same_family):
 def main():
     args = parse_args()
 
+    log(f"connecting to {args.db}")
     conn = sqlite3.connect(args.db)
+    # Fail on a lock rather than block on one: an indefinite wait here is
+    # indistinguishable from slow work, which is exactly what made the
+    # three-hour stall unreadable.
+    conn.execute("PRAGMA busy_timeout=120000")
     conn.execute("PRAGMA foreign_keys=ON")
     conn.execute("PRAGMA journal_mode=OFF")
     conn.execute("PRAGMA synchronous=OFF")
+    log("connected, pragmas set")
 
-    ddis = external_ddis(conn)
     by_domain = instances_by_domain(conn)
+    log(f"loaded instances for {len(by_domain)} domains "
+        f"({sum(len(v) for v in by_domain.values())} instances)")
     pool_size = max(1, args.target * max(1, args.pool_factor))
 
+    # One row per (DDI, method, instance pair): target * len(methods) times the
+    # external DDI count, which is millions once PPIDM is in. Flushed in batches
+    # so peak memory is the batch, not the whole insert -- and on a separate
+    # cursor, because the read cursor above is still streaming the DDI table.
+    writer_cur = conn.cursor()
+    INSERT = ("INSERT OR IGNORE INTO ddi_split_membership"
+              "(ddi_id, method, split, instance_id_a, instance_id_b) VALUES (?, ?, ?, ?, ?)")
+    BATCH = 100_000
+
+    log("scanning DDIs for non-protected sources")
     membership, dropped, stats = [], [], Counter()
-    for ddi_id, pfam_a, pfam_b, id_a, id_b, negative, source in ddis:
+    inserted = 0
+    for ddi_id, pfam_a, pfam_b, id_a, id_b, negative, source in external_ddis(conn):
         stats["ddis"] += 1
+        if stats["ddis"] % 100_000 == 0:
+            log(f"{stats['ddis']} external DDIs seen, {inserted + len(membership)} membership rows")
         inst_a, inst_b = by_domain.get(id_a, []), by_domain.get(id_b, [])
         if not inst_a or not inst_b:
             dropped.append((pfam_a, pfam_b, negative, source, "no_instances"))
@@ -137,13 +182,17 @@ def main():
         for method in args.method:
             for first, second in pairs:
                 membership.append((ddi_id, method, args.split, first, second))
+        if len(membership) >= BATCH:
+            writer_cur.executemany(INSERT, membership)
+            inserted += len(membership)
+            membership.clear()
 
-    conn.executemany(
-        "INSERT OR IGNORE INTO ddi_split_membership"
-        "(ddi_id, method, split, instance_id_a, instance_id_b) VALUES (?, ?, ?, ?, ?)",
-        membership,
-    )
+    writer_cur.executemany(INSERT, membership)
+    inserted += len(membership)
+    membership.clear()
+    log(f"committing {inserted} membership rows")
     conn.commit()
+    log("committed")
 
     with open(args.dropped_out, "w", newline="") as fh:
         writer = csv.writer(fh, delimiter="\t", lineterminator="\n")
@@ -151,8 +200,8 @@ def main():
         writer.writerows(sorted(dropped))
 
     for key in ("ddis", "pairs", "partial", "dropped_no_instances", "dropped_no_distinct_parent"):
-        print(f"[external_test] {key} = {stats[key]}", flush=True)
-    print(f"[external_test] methods = {','.join(args.method)} split = {args.split}", flush=True)
+        log(f"{key} = {stats[key]}")
+    log(f"methods = {','.join(args.method)} split = {args.split}")
     conn.close()
 
     with open(args.versions, "w") as f:

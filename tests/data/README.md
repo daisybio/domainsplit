@@ -67,6 +67,19 @@ to carry exactly one Pfam domain.
 `gene_pfam_mapping.json` covers exactly the gene names in the parquet slice, which
 is what lets `BUILD_CANDIDATE_NETWORK` run without calling the UniProt REST API.
 
+`negative_ppi.parquet` is 400 real screen rows **plus 820 density rows** — one per
+unordered fixture-family pair, self-pairs included, written with a representative
+gene per family. The real rows alone yielded a candidate network of 34 pairs, and
+that is not a scale problem but a shape problem: `SAMPLE_NEGATIVES_ILP` draws each
+split's `ilp_candidates` negatives from the pairs whose _both_ families landed in
+that split, and ppi-splitting's partitions are family-exclusive, so survival is
+quadratic in the split's share. At 34 pairs the 0.1 val split kept a median of
+**zero** usable pairs against ~4 positives. With the density rows the emitted
+`candidate_network.csv` is the complete non-positive pair set (698 pairs = 820
+possible − 122 3did positives, which `BUILD_CANDIDATE_NETWORK` subtracts itself).
+`conf/test.config` carries the resulting per-split survivor table and the
+condition for turning `ilp_candidates` on here.
+
 ## The Pfam download cache
 
 `pfam/interpro_cache/pfam-38.0/` is ppi-splitting's own release-keyed cache,

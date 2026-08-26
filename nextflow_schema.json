@@ -132,12 +132,6 @@
                     "default": true,
                     "fa_icon": "fas fa-microchip"
                 },
-                "esm_smoke_test": {
-                    "type": "boolean",
-                    "description": "If true, each ESM chunk processes only the first 100 records. For quick end-to-end wiring tests on the cluster.",
-                    "default": false,
-                    "fa_icon": "fas fa-vial"
-                },
                 "esm_hf_cache_dir": {
                     "type": "string",
                     "description": "Shared HF_HOME directory for the ESM chunk tasks (e.g. an NFS path). Avoids parallel chunks each re-downloading the gated ESM3 / ESMC weights. Set empty to use the per-task local cache.",
@@ -224,7 +218,7 @@
                 },
                 "ppi_splitting_multi_negset": {
                     "type": "boolean",
-                    "description": "Ask ppi-splitting for both ILP negative sets per split — plain `ilp` plus `ilp_candidates`, the same sampler restricted to the candidate network — which turns 3 method directories into 5. Requires the comma-separated negative_sampling_method fan-out on the ppi-splitting side; until that lands, leave false and only the first negative set of each row is produced.",
+                    "description": "Ask ppi-splitting for both ILP negative sets per split — plain `ilp` plus `ilp_candidates`, the same sampler restricted to the candidate network — which turns 3 method directories into 5. The candidate network must be dense enough that every split can cover itself from it: survival is quadratic in a split's share, because both families of a pair have to land in the same split.",
                     "default": false,
                     "fa_icon": "fas fa-clone"
                 },

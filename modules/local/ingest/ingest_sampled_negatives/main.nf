@@ -26,7 +26,7 @@ process INGEST_SAMPLED_NEGATIVES {
         "--split ${key}:${csv.name}"
     }.join(' \\\n        ')
     """
-    cp "${domainsplit_db_in}" domainsplit.sqlite3
+    cp --reflink=auto "${domainsplit_db_in}" domainsplit.sqlite3
 
     ingest_sampled_negatives.py \\
         --db domainsplit.sqlite3 \\

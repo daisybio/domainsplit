@@ -15,7 +15,7 @@ process INSERT_EXTERNAL_SOURCES {
 
     script:
     """
-    cp "${domainsplit_db_in}" domainsplit.sqlite3
+    cp --reflink=auto "${domainsplit_db_in}" domainsplit.sqlite3
 
     insert_external_sources.py \\
         --db domainsplit.sqlite3 \\

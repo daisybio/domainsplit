@@ -99,7 +99,6 @@ process GENERATE_PROTEIN_ESM_EMBEDDINGS_CHUNK {
     path "versions.yml", emit: versions
 
     script:
-    def smoke = params.esm_smoke_test ? 100 : 0
     // Abort rather than fall back to CPU: a 1.4B model per task on CPU is not a
     // slow success, it is an OOM kill (exit 137) that the retry repeats.
     def require_gpu = params.esm_require_gpu ? '--require-gpu' : ''
@@ -119,7 +118,6 @@ process GENERATE_PROTEIN_ESM_EMBEDDINGS_CHUNK {
         --mode per_residue \\
         --batch-size ${params.esm_batch_size_protein} \\
         --max-len ${params.esm_max_len} \\
-        --smoke-limit ${smoke} \\
         ${require_gpu}
     """
 }
@@ -155,7 +153,6 @@ process GENERATE_DOMAIN_ESM_EMBEDDINGS_CHUNK {
     path "versions.yml", emit: versions
 
     script:
-    def smoke = params.esm_smoke_test ? 100 : 0
     // Abort rather than fall back to CPU: a 1.4B model per task on CPU is not a
     // slow success, it is an OOM kill (exit 137) that the retry repeats.
     def require_gpu = params.esm_require_gpu ? '--require-gpu' : ''
@@ -175,7 +172,6 @@ process GENERATE_DOMAIN_ESM_EMBEDDINGS_CHUNK {
         --mode pooled \\
         --batch-size ${params.esm_batch_size_domain} \\
         --max-len ${params.esm_max_len} \\
-        --smoke-limit ${smoke} \\
         ${require_gpu}
     """
 }

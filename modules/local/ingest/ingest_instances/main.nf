@@ -16,7 +16,7 @@ process INGEST_INSTANCES {
 
     script:
     """
-    cp "${domainsplit_db_in}" domainsplit.sqlite3
+    cp --reflink=auto "${domainsplit_db_in}" domainsplit.sqlite3
 
     ingest_instances.py \\
         --db domainsplit.sqlite3 \\
