@@ -2,21 +2,18 @@ FROM mambaorg/micromamba:1.5.10
 
 # Build/tag as konstantinpelz/domainsplit-general:1.0.0
 # Covers all CPU processes in daisybio/domainsplit pipeline:
-#   - DOWNLOAD_3DID_SQLITE (gawk + gzip + bin/mysql2sqlite)
-#   - INIT_DOMAINSPLIT_DB, INSERT_DDIS, INSERT_NEGATIVE_DDIS, INSERT_PPI_NEGATIVE_DDIS, SMOKE_FILTER (sqlite3 CLI/stdlib; INSERT_PPI_NEGATIVE_DDIS also needs pandas + pyarrow)
-#   - EXTRACT_UNIQUE_DOMAINS (sqlite3 CLI)
-#   - DOWNLOAD_PFAM_ALIGNMENT, CREATE_PROTEIN_DOMAIN_MAPPING (biopython)
-#   - INSERT_DOMAIN_GO_TERMS, INSERT_PROTEINS_WITH_EMBEDDINGS, INSERT_PROTEIN_GO_TERMS,
-#     INSERT_PPI, INSERT_DOMAIN_PROTEIN_MAPPING (pandas, numpy, h5py, biopython, tqdm, sqlite3 stdlib)
-#   - PROTT5_EMBEDDINGS_CHUNK (requests)
-#   - JOIN_HDF_FILES (h5py)
-#   - DOWNLOAD_PROTT5_EMBEDDINGS_COMPLETE (wget)
-#   - FILTER_SEQUENCES, AVERAGE_POOL_EMBEDDINGS (biopython / h5py / numpy)
-#   - RANDOM_DDI_SPLIT, RANDOM_DENOISE_SPLIT (python stdlib)
-#   - EXTRACT_PROTEIN_SEQUENCES, EXTRACT_DOMAIN_SEQUENCES (sqlite3 CLI + gzip)
-#   - ANALYZE_DDI_BIAS (matplotlib, numpy, sqlite3 stdlib)
-#   - MINIMAL_LEAKAGE_SPLIT_DOMAIN (pandas, numpy, tqdm, sqlite3 stdlib)
-#   - SPLIT_DATABASE (pandas, sqlite3 stdlib)
+#   - DOWNLOAD_3DID, INSERT_3DID (gawk + gzip + bin/mysql2sqlite, sqlite3 stdlib)
+#   - INIT_DOMAINSPLIT_DB (sqlite3 stdlib)
+#   - PARSE_SINGLE_DOMAIN_PPI, PARSE_PPIDM, PARSE_NEGATOME, BUILD_SWISSPROT_PFAM_MAP,
+#     INSERT_EXTERNAL_SOURCES (pandas, sqlite3 stdlib)
+#   - BUILD_CANDIDATE_NETWORK (pandas + pyarrow + requests)
+#   - EXPORT_UNION_FAMILIES, EXPORT_SPLIT_DDIS, EXPORT_SPLIT_INPUTS (sqlite3 stdlib)
+#   - INGEST_INSTANCES, INGEST_SPLIT_MEMBERSHIP, INGEST_SAMPLED_NEGATIVES (biopython, sqlite3 stdlib)
+#   - INSERT_DOMAIN_GO_TERMS, INSERT_PROTEIN_SEQUENCES, INSERT_PROTEIN_GO_TERMS,
+#     INSERT_PPI (pandas, biopython, tqdm, sqlite3 stdlib)
+#   - PRUNE_UNREPRESENTED_DDIS, BUILD_EXTERNAL_TEST, SUBSET_SPLIT_DB (sqlite3 stdlib)
+#   - SHARD_FASTA (biopython)
+#   - EXPORT_DOMAIN_EMBEDDINGS (h5py, numpy, sqlite3 stdlib)
 LABEL org.opencontainers.image.source="https://github.com/daisybio/domainsplit"
 LABEL org.opencontainers.image.version="1.0.0"
 LABEL org.opencontainers.image.description="domainsplit CPU container (pandas, pyarrow, numpy, h5py, biopython, tqdm, requests, matplotlib, sqlite, wget, gawk)"

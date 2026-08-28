@@ -7,9 +7,9 @@ after refreshing a source file:
 tests/bin/make_test_fixtures.py --sources ~/Downloads/pipeline_files
 ```
 
-The fixture covers about 40 Pfam families (raised from a dozen: at 12, the
-`external_test` row's val split had too few distinct families for
-`SAMPLE_NEGATIVES_ILP`'s neg_ratio=1.0 candidate sampling — see
+The fixture covers **85 Pfam families / 333 3did DDIs** (raised from a dozen, then
+40, then 85 — each time because `SAMPLE_NEGATIVES_ILP`'s neg_ratio=1.0 candidate
+sampling ran out of pairs in the smallest split; see "Candidate coverage" below and
 `PLAN_ppi_splitting_integration.md`). Which families is not a free choice: the
 pipeline runs `instance_tier = human_only`, so a family without human domain
 instances is dropped by `PRUNE_UNREPRESENTED_DDIS`, and a pair whose two
@@ -37,9 +37,8 @@ against `Domain` and reads nothing else.
 
 ## What is synthesised, and why
 
-No local copy of the UniProt/STRING/GO/ProtT5 sources exists, and the real ones
-are unusable as fixtures — the human per-residue ProtT5 h5 alone is tens of GB.
-These are written from the accessions and coordinates the kept Pfam records
+No local copy of the UniProt/STRING/GO sources exists, and the real ones are
+unusable as fixtures. These are written from the accessions and coordinates the kept Pfam records
 actually carry, so they stay consistent with what ingest puts in
 `domain_protein_map`: each protein sequence contains its real domain sequences at
 their real `start`/`end` offsets.
@@ -52,12 +51,8 @@ their real `start`/`end` offsets.
 | `uniprot_id_mapping.dat.gz`            | `params.url_uniprot_id_mapping`          |
 | `string.txt.gz`                        | `params.url_string`                      |
 | `pfam2go.txt`                          | `params.url_pfam2go`                     |
-| `prott5.h5`                            | `params.url_uniprot_prott5_embeddings`   |
 | `gene_pfam_mapping.json`               | `params.negative_ppi_gene_mapping`       |
 | `pfam/interpro_cache/pfam-38.0/`       | ppi-splitting's `params.interpro_cache`  |
-
-Embedding dimensionality in `prott5.h5` is arbitrary (4 instead of 1024): the
-pipeline pickles whatever array it finds under the key.
 
 `swissprot_pfam.tsv` describes exactly the proteins the kept HIPPIE rows name,
 each as a single-domain protein of one fixture family — otherwise
@@ -67,18 +62,39 @@ to carry exactly one Pfam domain.
 `gene_pfam_mapping.json` covers exactly the gene names in the parquet slice, which
 is what lets `BUILD_CANDIDATE_NETWORK` run without calling the UniProt REST API.
 
-`negative_ppi.parquet` is 400 real screen rows **plus 820 density rows** — one per
+`negative_ppi.parquet` is 400 real screen rows **plus 3655 density rows** — one per
 unordered fixture-family pair, self-pairs included, written with a representative
 gene per family. The real rows alone yielded a candidate network of 34 pairs, and
-that is not a scale problem but a shape problem: `SAMPLE_NEGATIVES_ILP` draws each
-split's `ilp_candidates` negatives from the pairs whose _both_ families landed in
-that split, and ppi-splitting's partitions are family-exclusive, so survival is
-quadratic in the split's share. At 34 pairs the 0.1 val split kept a median of
-**zero** usable pairs against ~4 positives. With the density rows the emitted
-`candidate_network.csv` is the complete non-positive pair set (698 pairs = 820
-possible − 122 3did positives, which `BUILD_CANDIDATE_NETWORK` subtracts itself).
-`conf/test.config` carries the resulting per-split survivor table and the
-condition for turning `ilp_candidates` on here.
+that was not a scale problem but a shape problem: the generator assigned each gene
+one family round-robin, so only ~40 distinct family pairs could ever come out of
+it. With the density rows the emitted `candidate_network.csv` is the complete
+non-positive pair set: **3336 pairs** = 3655 possible − 319 3did positives, which
+`BUILD_CANDIDATE_NETWORK` subtracts itself.
+
+## Candidate coverage
+
+`SAMPLE_NEGATIVES_ILP` draws each split's `ilp_candidates` negatives from the pairs
+whose _both_ families landed in that split, and ppi-splitting's partitions are
+family-exclusive — so survival is **quadratic** in the split's share, and the step
+hard-errors ("need N negatives but only M candidate pairs are available") rather
+than degrading. That is what sets the fixture size. Measured over this fixture's
+own pair set, 20 000 uniform family draws per fraction:
+
+| split fraction | families | candidate pairs (p5) | positives (p95) | P(candidates < positives) |
+| -------------- | -------- | -------------------- | --------------- | ------------------------- |
+| 0.10 (val)     | 8        | 23                   | 13              | 0.02 %                    |
+| 0.15           | 13       | 67                   | 24              | 0 %                       |
+| 0.20 (test)    | 17       | 118                  | 35              | 0 %                       |
+| 0.70 (train)   | 59       | 1573                 | 197             | 0 %                       |
+
+So the 0.1 val split covers itself with room to spare, and `conf/test.config` runs
+with `ppi_splitting_multi_negset = true`. At 40 families it kept a median of zero
+usable pairs; at 70 the tail was still 0.49 %. Growing the fixture was preferred
+over raising `split_val_fraction`, because the real ILP partition is lumpier than
+the uniform draw these numbers assume and only growth helps the lumpy case.
+
+Rerun the measurement after any fixture regeneration — the numbers are a property
+of the family set, not of the family count.
 
 ## The Pfam download cache
 
@@ -94,6 +110,10 @@ directory; they are gitignored.
 
 ## Not a fixture
 
-ESM3/ESMC embeddings. `generate_esm_embeddings` produces them from gated
-HuggingFace weights on a GPU, which is why `-profile test` is a cluster profile —
+Embeddings, of any model. `generate_domain_embeddings` produces them on a GPU from
+the **cut domain sequences**: ESM3 and ESMC from gated HuggingFace weights, ProtT5
+downloaded from an ungated repo. That is why `-profile test` is a cluster profile —
 see the header of `conf/test.config`.
+
+The synthetic `prott5.h5` that used to live here went with the retired per-residue
+protein embeddings; the generator deletes a leftover copy if it finds one.

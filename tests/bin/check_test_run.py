@@ -17,7 +17,12 @@ Checked:
 5. every DDI in the master DB has instances for both families (the prune invariant);
 6. the external test split holds only external DDIs, each represented by instance
    pairs whose parent proteins differ;
-7. the reports exist.
+7. the reports exist;
+8. every published embedding HDF5 satisfies the benchmark's own key contract --
+   `h5[str(domain_id)][COALESCE(instance_id, 'r' || rowid)]` resolves for the
+   master's domain instances -- and carries its root attributes. This is the seam
+   that yields zero training rows *silently* if it drifts, so it is checked here
+   as well as in tests/python/test_export_domain_embeddings.py.
 
 Usage: ``tests/bin/check_test_run.py --outdir results``
 """
@@ -27,16 +32,26 @@ import os
 import sqlite3
 import sys
 
-# `params.ppi_splitting_multi_negset = false` (the default) means one negative set
-# per dataset row, so the `_hcni` directories are not produced. Flip both here and
-# in nextflow.config when the ppi-splitting fan-out lands.
+# `params.ppi_splitting_multi_negset = true` (the default) asks ppi-splitting for
+# both ILP negative sets per ILP row, so each of those rows yields a plain
+# directory and an `_hcni` one: 5 method directories, 18 split databases. The
+# `random` row stays `uniform`-only -- the naive baseline stays a baseline.
+# Set `--ppi_splitting_multi_negset false` and this drops back to 3 / 11.
 INTERNAL_SPLITS = ["train", "validation", "test_balanced", "test_realistic"]
+EXTERNAL_SPLITS = ["train", "validation", "test"]
 EXPECTED = {
     "random": INTERNAL_SPLITS,
     "minimal_leakage": INTERNAL_SPLITS,
-    "external_test": ["train", "validation", "test"],
+    "minimal_leakage_hcni": INTERNAL_SPLITS,
+    "external_test": EXTERNAL_SPLITS,
+    "external_test_hcni": EXTERNAL_SPLITS,
 }
 EXTERNAL_SOURCES = ("single_domain_ppi", "PPIDM", "negatome")
+# Root attributes export_domain_embeddings.py writes; `domainsplit_run` is the
+# cross-run guard, since `domain.id` is a surrogate integer that means nothing
+# outside the run that assigned it.
+EMBEDDING_ATTRS = ("model", "pooling", "dim", "dtype", "key_layout",
+                   "n_domains", "n_instances", "domainsplit_run")
 
 failures = []
 notes = []
@@ -165,6 +180,49 @@ def check_splits(outdir, found, master_pairs):
             conn.close()
 
 
+def check_embeddings(outdir, master):
+    """Check every published embedding file against the benchmark's key contract."""
+    root = os.path.join(outdir, "embeddings")
+    if not os.path.isdir(root):
+        notes.append("no embeddings/ directory: expected only when "
+                     "--embedding_models_domainbench is empty")
+        return
+    files = sorted(f for f in os.listdir(root) if f.endswith(".h5"))
+    check(bool(files), "embeddings/ exists but holds no .h5 file")
+    if not files:
+        return
+    try:
+        import h5py
+    except ImportError:
+        notes.append("h5py is not installed, so the embedding files were not opened")
+        return
+
+    conn = sqlite3.connect(master)
+    instances = conn.execute(
+        "SELECT domain_id, COALESCE(instance_id, 'r' || rowid) FROM domain_protein_map"
+    ).fetchall()
+    conn.close()
+    check(bool(instances), "the master database has no domain instances at all")
+
+    for name in files:
+        path = os.path.join(root, name)
+        with h5py.File(path, "r") as h5:
+            for attr in EMBEDDING_ATTRS:
+                check(attr in h5.attrs, f"{name} is missing the root attribute {attr!r}")
+            # Not every instance has to resolve -- --embedding_max_len drops the
+            # long tail -- but the *shape* has to, or the benchmark skips silently.
+            resolved = sum(
+                1 for domain_id, key in instances
+                if str(domain_id) in h5 and key in h5[str(domain_id)]
+            )
+            check(resolved > 0,
+                  f"{name} resolves none of the master's {len(instances)} "
+                  "(domain_id, instance_key) pairs -- the key layout has drifted")
+            if 0 < resolved < len(instances):
+                notes.append(f"{name} covers {resolved} of {len(instances)} domain instances "
+                             "(the rest were dropped by --embedding_max_len or an OOM)")
+
+
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--outdir", required=True)
@@ -180,6 +238,7 @@ def main():
     if os.path.exists(master):
         master_pairs = check_master(master)
         check_splits(args.outdir, found, master_pairs)
+        check_embeddings(args.outdir, master)
 
     for note in notes:
         print(f"[check] note: {note}")

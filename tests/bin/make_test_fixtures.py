@@ -71,8 +71,16 @@ def parse_args():
     p = argparse.ArgumentParser()
     p.add_argument("--sources", required=True, help="directory holding the real source files")
     p.add_argument("--out", default=None, help="fixture directory (default: <repo>/tests/data)")
-    p.add_argument("--families", type=int, default=40, help="number of Pfam families to keep")
-    p.add_argument("--shortlist", type=int, default=150,
+    p.add_argument("--families", type=int, default=85,
+                   help="number of Pfam families to keep. Raised from 40 so `ilp_candidates` is "
+                        "usable at fixture scale: candidate pairs survive a split only if *both* "
+                        "families land in it, so survival is quadratic in the split's share and a "
+                        "0.1 val split of 40 families could not cover its own positives. 85 rather "
+                        "than the ~60 that first clears the bar, because the margin is what matters: "
+                        "measured over the fixture's own pair set, P(candidates < positives) for a "
+                        "0.1 split is 0.49% at 70 families and 0.02% at 85, for 21% more DDIs -- and "
+                        "the real ILP partition is lumpier than the uniform draw that measures")
+    p.add_argument("--shortlist", type=int, default=300,
                    help="families carried into the Pfam-A.fasta pass, before the human filter")
     p.add_argument("--min-human-instances", type=int, default=3,
                    help="human records a family needs to be kept; 2 is the minimum for a "
@@ -514,21 +522,20 @@ def write_parquet_and_mapping(out, parquet_path, families, n_rows, min_n_tested,
 
 
 def write_enrich_fixtures(out, records, families):
-    """The UniProt / STRING / GO / ProtT5 side, derived from the Pfam records.
+    """The UniProt / STRING / GO side, derived from the Pfam records.
 
     No local copy of these sources exists and the real ones are unusable as
-    fixtures (the human per-residue ProtT5 h5 alone is tens of GB), so they are
-    synthesised -- but from the accessions and coordinates the Pfam records
-    actually carry, which is what keeps them consistent with what ingest will put
-    in `domain_protein_map`. Embedding dimensionality is arbitrary here: the
-    pipeline pickles whatever array it finds under the key.
+    fixtures, so they are synthesised -- but from the accessions and coordinates
+    the Pfam records actually carry, which is what keeps them consistent with what
+    ingest will put in `domain_protein_map`.
 
-    ESM embeddings are not fixtures: `generate_esm_embeddings` produces them, on
-    a GPU, from gated weights. That is why `-profile test` is a cluster run.
+    Embeddings are not fixtures at all any more: every model runs over the *cut
+    domain sequence* on a GPU (ESM3/ESMC from gated weights, ProtT5 downloaded),
+    and the results are published as HDF5 files rather than stored in the
+    database. That is why `-profile test` is a cluster run. The synthetic
+    `prott5.h5` this used to write went with the retired per-residue protein
+    embeddings.
     """
-    import h5py
-    import numpy as np
-
     # accession -> (entry_name, [(start, end, domain_sequence)])
     proteins = {}
     for family in families:
@@ -559,12 +566,6 @@ def write_enrich_fixtures(out, records, families):
             for i in range(0, len(seq), 60):
                 fh.write(seq[i : i + 60] + "\n")
     log(f"wrote {fasta} ({len(proteins)} proteins)")
-
-    prott5 = os.path.join(out, "prott5.h5")
-    with h5py.File(prott5, "w") as h5:
-        for acc, seq in sorted(sequences.items()):
-            h5.create_dataset(acc, data=np.zeros((len(seq), 4), dtype="float32"))
-    log(f"wrote {prott5} ({os.path.getsize(prott5)} bytes)")
 
     go_terms = os.path.join(out, "uniprot_go_terms.tsv.gz")
     with gzip.open(go_terms, "wt", newline="") as fh:
@@ -730,7 +731,12 @@ def main():
 
     write_enrich_fixtures(out, records, families)
 
-    # Placeholders from the old `-stub` fixture set, superseded by the files above.
+    # Placeholders from the old `-stub` fixture set, superseded by the files
+    # above, plus prott5.h5 from the retired per-residue protein embeddings.
+    stale_prott5 = os.path.join(out, "prott5.h5")
+    if os.path.exists(stale_prott5):
+        os.remove(stale_prott5)
+        log("removed prott5.h5 (per-residue protein embeddings are retired)")
     for stale in ("uniprot_go_terms.tsv", "negatome_combined_pfam.txt"):
         path = os.path.join(out, stale)
         if os.path.exists(path) and os.path.getsize(path) == 0:

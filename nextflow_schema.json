@@ -55,12 +55,6 @@
                     "default": "https://ftp.uniprot.org/pub/databases/uniprot/current_release/knowledgebase/idmapping/by_organism/HUMAN_9606_idmapping.dat.gz",
                     "fa_icon": "fas fa-link"
                 },
-                "url_uniprot_prott5_embeddings": {
-                    "type": "string",
-                    "description": "URL of the per-residue ProtT5 UniProt embeddings HDF5.",
-                    "default": "https://ftp.ebi.ac.uk/pub/contrib/UniProt/embeddings/current_release/UP000005640_9606/per-residue.h5",
-                    "fa_icon": "fas fa-link"
-                },
                 "url_uniprot_go_terms": {
                     "type": "string",
                     "description": "URL of the UniProt GO terms TSV (REST stream).",
@@ -90,53 +84,6 @@
                     "description": "URL of the Pfam2GO mapping file.",
                     "default": "https://current.geneontology.org/ontology/external2go/pfam2go",
                     "fa_icon": "fas fa-link"
-                },
-                "esm_protein_shards": {
-                    "type": "integer",
-                    "description": "Number of FASTA shards for parallel per-residue ESM embedding generation over the protein sequences. Each shard runs as one GPU task; concurrency is capped by maxForks in conf/modules.config.",
-                    "default": 4,
-                    "minimum": 1,
-                    "fa_icon": "fas fa-puzzle-piece"
-                },
-                "esm_domain_shards": {
-                    "type": "integer",
-                    "description": "Number of FASTA shards for parallel pooled ESM embedding generation over the domain sequences. ~15k domains comfortably fit in 1 shard.",
-                    "default": 1,
-                    "minimum": 1,
-                    "fa_icon": "fas fa-puzzle-piece"
-                },
-                "esm_batch_size_protein": {
-                    "type": "integer",
-                    "description": "Initial batch size for protein per-residue ESM inference. Halved in-process on torch.OutOfMemoryError and retried.",
-                    "default": 8,
-                    "minimum": 1,
-                    "fa_icon": "fas fa-layer-group"
-                },
-                "esm_batch_size_domain": {
-                    "type": "integer",
-                    "description": "Initial batch size for domain pooled ESM inference. Domains are short, so this can be larger than the protein batch size.",
-                    "default": 32,
-                    "minimum": 1,
-                    "fa_icon": "fas fa-layer-group"
-                },
-                "esm_max_len": {
-                    "type": "integer",
-                    "description": "Maximum sequence length fed to ESM. Longer sequences are skipped (quadratic-attention long tail; would otherwise OOM or stall a chunk).",
-                    "default": 4096,
-                    "minimum": 0,
-                    "fa_icon": "fas fa-ruler-horizontal"
-                },
-                "esm_require_gpu": {
-                    "type": "boolean",
-                    "description": "Abort an ESM chunk task when no GPU is visible instead of falling back to CPU. CPU inference loads a 1.4B model per task and OOM-kills concurrent tasks rather than finishing slowly, so the failure is worth surfacing immediately. Set false only to deliberately accept CPU inference on a tiny input.",
-                    "default": true,
-                    "fa_icon": "fas fa-microchip"
-                },
-                "esm_hf_cache_dir": {
-                    "type": "string",
-                    "description": "Shared HF_HOME directory for the ESM chunk tasks (e.g. an NFS path). Avoids parallel chunks each re-downloading the gated ESM3 / ESMC weights. Set empty to use the per-task local cache.",
-                    "default": null,
-                    "fa_icon": "fas fa-folder-open"
                 },
                 "negative_ppi_parquet": {
                     "type": ["string"],
@@ -218,8 +165,8 @@
                 },
                 "ppi_splitting_multi_negset": {
                     "type": "boolean",
-                    "description": "Ask ppi-splitting for both ILP negative sets per split — plain `ilp` plus `ilp_candidates`, the same sampler restricted to the candidate network — which turns 3 method directories into 5. The candidate network must be dense enough that every split can cover itself from it: survival is quadratic in a split's share, because both families of a pair have to land in the same split.",
-                    "default": false,
+                    "description": "Ask ppi-splitting for both ILP negative sets per split — plain `ilp` plus `ilp_candidates`, the same sampler restricted to the candidate network — which turns 3 method directories into 5 and 11 split databases into 18. On by default: the comma-separated `negative_sampling_method` fan-out it needs is in the pinned submodule. The candidate network must be dense enough that every split can cover itself from it: survival is quadratic in a split's share, because both families of a pair have to land in the same split. Set false for a `--split_only` debug run, which ppi-splitting refuses unless `negative_sampling_method` is exactly \"ilp\".",
+                    "default": true,
                     "fa_icon": "fas fa-clone"
                 },
                 "url_uniprot_swissprot_pfam": {
@@ -253,6 +200,75 @@
                     "description": "Comma-separated PPIDM confidence classes to include.",
                     "default": "Bronze,Silver,Gold",
                     "fa_icon": "fas fa-tags"
+                }
+            }
+        },
+        "domain_embedding_options": {
+            "title": "Domain embedding options",
+            "type": "object",
+            "fa_icon": "fas fa-vector-square",
+            "description": "Which models embed the cut domain sequences, and how that inference is sharded.",
+            "help_text": "One pooled vector per domain instance per model, published as `<outdir>/embeddings/<model>_domain_embeddings.h5` keyed `{domain_id}/{instance_id}`. Nothing is written into the database: per-residue protein embeddings are retired, because protein context correlates with the interaction partner and slicing a protein embedding smuggles protein identity into a split that was partitioned on families.",
+            "properties": {
+                "embedding_models_domainbench": {
+                    "type": "string",
+                    "description": "Comma-separated domain-embedding models to run (`esm3`, `esmc`, `prott5`). One GPU task per (model, shard). Set empty to produce no embeddings at all.",
+                    "default": "esm3,esmc,prott5",
+                    "pattern": "^$|^(esm3|esmc|prott5)(,(esm3|esmc|prott5))*$",
+                    "fa_icon": "fas fa-vector-square"
+                },
+                "embedding_shards": {
+                    "type": "integer",
+                    "description": "Number of FASTA shards the domain sequences are split into. Each (model, shard) pair runs as one GPU task; concurrency is capped by maxForks in conf/modules.config.",
+                    "default": 4,
+                    "minimum": 1,
+                    "fa_icon": "fas fa-puzzle-piece"
+                },
+                "embedding_max_len": {
+                    "type": "integer",
+                    "description": "Maximum domain sequence length fed to a model. Longer sequences are skipped (quadratic-attention long tail; would otherwise OOM or stall a chunk).",
+                    "default": 4096,
+                    "minimum": 0,
+                    "fa_icon": "fas fa-ruler-horizontal"
+                },
+                "embedding_batch_size_esm3": {
+                    "type": "integer",
+                    "description": "Initial batch size for esm3 domain inference. Halved in-process on torch.OutOfMemoryError and retried.",
+                    "default": 32,
+                    "minimum": 1,
+                    "fa_icon": "fas fa-layer-group"
+                },
+                "embedding_batch_size_esmc": {
+                    "type": "integer",
+                    "description": "Initial batch size for esmc domain inference. Halved in-process on torch.OutOfMemoryError and retried.",
+                    "default": 32,
+                    "minimum": 1,
+                    "fa_icon": "fas fa-layer-group"
+                },
+                "embedding_batch_size_prott5": {
+                    "type": "integer",
+                    "description": "Initial batch size for prott5 domain inference. Halved in-process on torch.OutOfMemoryError and retried.",
+                    "default": 32,
+                    "minimum": 1,
+                    "fa_icon": "fas fa-layer-group"
+                },
+                "embedding_prott5_model": {
+                    "type": "string",
+                    "description": "HuggingFace id of the ProtT5 encoder. Ungated, so it needs no HF_TOKEN — unlike ESM3 / ESMC.",
+                    "default": "Rostlab/prot_t5_xl_half_uniref50-enc",
+                    "fa_icon": "fas fa-robot"
+                },
+                "embedding_require_gpu": {
+                    "type": "boolean",
+                    "description": "Abort an embedding chunk task when no GPU is visible instead of falling back to CPU. CPU inference loads a 1.4B model per task and OOM-kills concurrent tasks rather than finishing slowly, so the failure is worth surfacing immediately. Set false only to deliberately accept CPU inference on a tiny input.",
+                    "default": true,
+                    "fa_icon": "fas fa-microchip"
+                },
+                "embedding_hf_cache_dir": {
+                    "type": "string",
+                    "description": "Shared HF_HOME directory for the embedding chunk tasks (e.g. an NFS path). Avoids parallel chunks each re-downloading the gated ESM3 / ESMC weights. Set empty to use the per-task local cache.",
+                    "default": null,
+                    "fa_icon": "fas fa-folder-open"
                 }
             }
         },
@@ -387,6 +403,9 @@
         },
         {
             "$ref": "#/$defs/source_database_options"
+        },
+        {
+            "$ref": "#/$defs/domain_embedding_options"
         },
         {
             "$ref": "#/$defs/institutional_config_options"

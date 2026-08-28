@@ -1,22 +1,20 @@
 # yaml-language-server: $schema=https://raw.githubusercontent.com/nf-core/modules/master/subworkflows/yaml-schema.json
 name: "enrich_ddi_database"
-description: Sequentially annotate the DDI database with domain GO terms, proteins plus per-residue embeddings, protein GO terms, STRING PPIs, and the per-domain protein/embedding map.
+description: Sequentially annotate the DDI database with domain GO terms, protein sequences, protein GO terms and STRING PPIs. Embeddings are domain-level and published as HDF5 files by generate_domain_embeddings, not stored here.
 keywords:
   - ddi
   - go
-  - embeddings
   - ppi
   - annotation
 components:
   - insert/domain/go/terms
-  - insert/proteins/with/embeddings
+  - insert/protein/sequences
   - insert/protein/go/terms
   - insert/ppi
-  - insert/domain/protein/mapping
 input:
   - domainsplit_db_in:
       type: file
-      description: Domainsplit SQLite with curated domains.
+      description: Domainsplit SQLite with ingested splits and external sources.
       pattern: "*.sqlite3"
   - input_pfam2go:
       type: file
@@ -27,11 +25,7 @@ input:
       pattern: "*.{fasta,fa,gz}"
   - protein_domain_map:
       type: file
-      description: Protein-to-Pfam-domain mapping from CURATE_DOMAINS.
-  - prott5_embeddings:
-      type: file
-      description: ProtT5 per-residue protein embeddings.
-      pattern: "*.h5"
+      description: Protein-to-Pfam-domain mapping from INGEST_INSTANCES; only its uniprot_id column is read.
   - input_uniprot_go_terms:
       type: file
       description: UniProt protein-to-GO-term annotations.
@@ -41,12 +35,6 @@ input:
   - input_uniprot_id_mapping:
       type: file
       description: UniProt ID mapping linking STRING IDs to UniProt accessions.
-  - esm_protein_embeddings:
-      type: file
-      description: ESM per-residue protein embeddings.
-  - esm_domain_embeddings:
-      type: file
-      description: ESM pooled per-domain embeddings.
 output:
   - domainsplit_db:
       type: file

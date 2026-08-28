@@ -1,15 +1,23 @@
 #!/usr/bin/env python3
 """Checks for bin/ingest_instances.py (no Nextflow, no cluster).
 
-Two things are worth a test here:
+Three things are worth a test here:
 
+  * ``start_pos``/``end_pos`` are stored as **integers**. This is the assertion
+    whose absence let a real bug ship: the column was declared with no type, so
+    it took BLOB (none) affinity and SQLite converted nothing on insert. This
+    writer bound ``'10'`` while ENRICH's upsert bound ``10``, ``'10' != 10`` in a
+    no-affinity column, so ``ON CONFLICT(domain_id, protein_id, start_pos,
+    end_pos)`` never fired and every instance ended up as two rows -- the ingest
+    row reachable by ``instance_id``, the enrich twin carrying the embeddings.
+    Reading the columns back without checking their type could not see it;
   * the map is **instance level** -- a protein carrying two copies of one Pfam
-    family must produce two ``domain_protein_map`` rows, because the ESM H5 key
-    contract (``{pfam}_{uniprot}_{start}_{end}``) and ppi-splitting's
+    family must produce two ``domain_protein_map`` rows, because the embedding H5
+    key contract (``{pfam}_{uniprot}_{start}_{end}``) and ppi-splitting's
     ``instances.tsv`` are both instance level. The old ``UNIQUE(domain_id,
     protein_id)`` silently kept one;
   * a non-human instance is a **hard failure**, not a filtered row: everything
-    downstream (ProtT5, STRING, the UniProt idmapping) is human-only, so a
+    downstream (STRING, the UniProt idmapping) is human-only, so a
     non-9606 taxon means ppi-splitting was not run with
     ``instance_tier = 'human_only'`` and the resulting DB would be quietly wrong.
 
@@ -87,11 +95,20 @@ def test_instance_level_rows():
             "JOIN domain AS d ON d.id = m.domain_id "
             "JOIN protein AS p ON p.id = m.protein_id ORDER BY m.instance_id"
         ).fetchall()
+        # Storage class, not just value: `typeof()` is what a no-affinity column
+        # would answer 'text' to while `== 10` still looked right in Python.
+        types = conn.execute(
+            "SELECT DISTINCT typeof(start_pos), typeof(end_pos) FROM domain_protein_map"
+        ).fetchall()
         n_domains = conn.execute("SELECT COUNT(*) FROM domain").fetchone()[0]
         n_proteins = conn.execute("SELECT COUNT(*) FROM protein").fetchone()[0]
         conn.close()
 
         assert len(rows) == 3, rows
+        assert types == [("integer", "integer")], types
+        for row in rows:
+            assert isinstance(row[2], int), (row[2], type(row[2]))
+            assert isinstance(row[3], int), (row[3], type(row[3]))
         # Both copies of PF00001 on P11111 survived as separate rows.
         assert [r[4] for r in rows] == [
             "PF00001_P11111_10_60", "PF00001_P11111_90_140", "PF00002_Q22222_5_80"

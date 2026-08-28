@@ -1,13 +1,15 @@
-process INSERT_DOMAIN_PROTEIN_MAPPING {
-    tag "insert_domain_protein_mapping"
+process INSERT_PROTEIN_SEQUENCES {
+    tag "insert_protein_sequences"
+    // process_medium, not process_high: the memory this step used to need was the
+    // per-residue HDF5 reads, and those are gone.
     label 'process_medium'
     conda "${moduleDir}/environment.yml"
     container "docker.io/konstantinpelz/domainsplit-general:1.0.0"
 
     input:
     path domainsplit_db_in, stageAs: 'input.domainsplit.sqlite3'
+    path uniprot_database
     path protein_domain_map
-    path esm_domain_embeddings
 
     output:
     path "domainsplit.sqlite3", emit: domainsplit_db
@@ -15,10 +17,10 @@ process INSERT_DOMAIN_PROTEIN_MAPPING {
 
     script:
     """
-    insert_domain_protein_mapping.py \\
+    insert_protein_sequences.py \\
         --db-in ${domainsplit_db_in} \\
+        --uniprot-db ${uniprot_database} \\
         --protein-domain-map ${protein_domain_map} \\
-        --esm-domain-embeddings ${esm_domain_embeddings} \\
         --versions versions.yml \\
         --process-name "${task.process}"
     """

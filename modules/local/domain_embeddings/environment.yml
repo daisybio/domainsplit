@@ -10,3 +10,6 @@ dependencies:
   - pip:
       - esm==3.2.3
       - httpx
+      - transformers
+      - sentencepiece
+      - protobuf

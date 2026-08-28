@@ -2,30 +2,30 @@
 """BUILD_EXTERNAL_TEST must give the same answer either side of enrichment.
 
 `workflows/domainsplit.nf` schedules BUILD_EXTERNAL_TEST *before*
-ENRICH_DDI_DATABASE, because it clones the master and after enrichment ~99% of
-that file is per-residue ProtT5/ESM blobs this step never reads (590 MB of
-594 MB at `-profile test` scale, tens of GB in production).
+ENRICH_DDI_DATABASE, because it clones the master and enrichment only ever grows
+it -- so cloning first is the smaller copy. (The margin used to be enormous:
+enrichment wrote per-residue embedding blobs that were ~99% of the file. Those are
+gone, published as HDF5 instead, and the ordering is now merely the cheaper one.)
 
 That reorder is only legitimate if it cannot change the output, and the argument
-is narrow enough to be worth testing rather than reasoning about: the two steps
-write disjoint tables, and their one shared table is `domain_protein_map`, which
-`insert_domain_protein_mapping.py` upserts. It leaves `instance_id` NULL on rows
-it adds and updates only `domain_sequence` / `esm*_per_domain` on rows it hits,
-while `build_external_test.py` reads `domain_protein_map` WHERE
-`instance_id IS NOT NULL`. So the enrichment step is invisible to it.
+is narrow enough to be worth testing rather than reasoning about:
+`build_external_test.py` reads `domain_domain_interaction`, `domain` and
+`domain_protein_map` WHERE `instance_id IS NOT NULL`, and enrichment now writes
+none of those -- INSERT_DOMAIN_PROTEIN_MAPPING went with the embedding columns, so
+`domain_protein_map` is written once, by ingest, and never touched again.
 
 Asserted here: running build_external_test.py against the pre-enrichment DB and
-against the same DB after the two enrichment steps that touch `protein` and
-`domain_protein_map` yields byte-identical `ddi_split_membership` rows and an
-identical drop report. The enrichment steps are the real scripts, not a
-simulation of them -- a change to their upsert that started writing
-`instance_id`, or adding instance rows, would break this test, which is exactly
+against the same DB after the enrichment step that touches `protein` yields
+byte-identical `ddi_split_membership` rows and an identical drop report. The
+enrichment step is the real script, not a simulation of it -- a change that
+started adding `domain_protein_map` rows would break this test, which is exactly
 the regression the reorder is exposed to.
 
 Run directly (`python3 tests/python/test_external_test_before_enrich.py`) or via
 pytest.
 """
 
+import gzip
 import os
 import shutil
 import sqlite3
@@ -39,13 +39,47 @@ sys.path.insert(0, BIN)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 BUILD_EXTERNAL = os.path.join(BIN, "build_external_test.py")
-INSERT_PROTEINS = os.path.join(BIN, "insert_proteins_with_embeddings.py")
-INSERT_MAPPING = os.path.join(BIN, "insert_domain_protein_mapping.py")
+INSERT_PROTEINS = os.path.join(BIN, "insert_protein_sequences.py")
 
 from ddi_db_utils import ensure_domains, insert_ddis  # noqa: E402
-from test_enrich_after_ingest import INSTANCES, build_inputs  # noqa: E402
+from domainsplit_schema import add_instance, make_db  # noqa: E402
 
 ENV = dict(os.environ, PYTHONPATH=BIN + os.pathsep + os.environ.get("PYTHONPATH", ""))
+
+# Deliberately *not* imported from test_enrich_after_ingest: that file's fixture
+# exists to exercise the protein upsert, and coupling the two made a change to one
+# test silently reshape the other.
+INSTANCES = [
+    ("PF00001", "P11111", 10, 20),
+    ("PF00001", "P11111", 50, 60),
+    ("PF00002", "Q22222", 5, 15),
+]
+SEQUENCES = {"P11111": "M" * 80, "Q22222": "K" * 40}
+
+
+def build_inputs(tmp):
+    """`(db, protein_domain_map, uniprot_fasta)` for the instances above."""
+    db = os.path.join(tmp, "domainsplit.sqlite3")
+    make_db(db)
+    conn = sqlite3.connect(db)
+    conn.execute("PRAGMA foreign_keys=ON")
+    for pfam, uniprot, start, end in INSTANCES:
+        add_instance(conn, pfam, uniprot, start, end, clan="CL0192", sequence="A" * (end - start + 1))
+    conn.commit()
+    conn.close()
+
+    pd_map = os.path.join(tmp, "protein_domain_mapping.csv.gz")
+    with gzip.open(pd_map, "wt", newline="") as fh:
+        fh.write("pfam_id,uniprot_id,start_pos,end_pos,sequence\n")
+        for pfam, uniprot, start, end in INSTANCES:
+            fh.write(f"{pfam},{uniprot},{start},{end},{'A' * (end - start + 1)}\n")
+
+    fasta = os.path.join(tmp, "uniprot_sequences.fasta.gz")
+    with gzip.open(fasta, "wt") as fh:
+        for uniprot, seq in SEQUENCES.items():
+            fh.write(f">sp|{uniprot}|{uniprot}_HUMAN test protein\n{seq}\n")
+
+    return db, pd_map, fasta
 
 # Non-protected sources, so build_external_test.py treats them as the held-out
 # set. Both families carry instances via INSTANCES above.
@@ -91,41 +125,39 @@ def run_external_test(db, tmp, tag):
 
 def test_membership_is_unchanged_by_enrichment():
     with tempfile.TemporaryDirectory() as tmp:
-        db, pd_map, fasta, prott5, esm_protein, esm_domain = build_inputs(tmp)
+        db, pd_map, fasta = build_inputs(tmp)
         add_external_ddis(db)
 
         before = run_external_test(db, tmp, "before")
 
-        # The two enrichment steps that touch `protein` and `domain_protein_map`;
-        # the GO / PPI steps write tables build_external_test.py never reads.
-        # Both copy --db-in to ./domainsplit.sqlite3, so chain them through a
-        # staged name the way ENRICH_DDI_DATABASE chains the processes.
+        # The one enrichment step that touches a table build_external_test.py
+        # reads a *neighbour* of; the GO / PPI steps write tables it never reads.
+        # It copies --db-in to ./domainsplit.sqlite3, so stage it under another
+        # name the way ENRICH_DDI_DATABASE chains the processes.
         staged = os.path.join(tmp, "staged.sqlite3")
         shutil.copyfile(db, staged)
-        for cmd in (
+        done = subprocess.run(
             [sys.executable, INSERT_PROTEINS, "--db-in", staged, "--uniprot-db", fasta,
-             "--protein-domain-map", pd_map, "--prott5-embeddings", prott5,
-             "--esm-protein-embeddings", esm_protein,
+             "--protein-domain-map", pd_map,
              "--versions", os.path.join(tmp, "v1.yml"), "--process-name", "TEST"],
-            [sys.executable, INSERT_MAPPING, "--db-in", staged,
-             "--protein-domain-map", pd_map, "--esm-domain-embeddings", esm_domain,
-             "--versions", os.path.join(tmp, "v2.yml"), "--process-name", "TEST"],
-        ):
-            done = subprocess.run(cmd, env=ENV, cwd=tmp, capture_output=True, text=True)
-            assert done.returncode == 0, done.stderr
-            os.replace(os.path.join(tmp, "domainsplit.sqlite3"), staged)
+            env=ENV, cwd=tmp, capture_output=True, text=True,
+        )
+        assert done.returncode == 0, done.stderr
+        os.replace(os.path.join(tmp, "domainsplit.sqlite3"), staged)
         enriched = staged
 
-        # Enrichment really did happen -- otherwise this test would pass vacuously.
+        # Enrichment really did happen -- otherwise this test would pass
+        # vacuously. There are no blobs left to look for, so the proxy is the
+        # column the step owns: `protein.sequence`, NULL until it runs.
         conn = sqlite3.connect(enriched)
-        n_blobs = conn.execute(
-            "SELECT COUNT(*) FROM protein WHERE esm3_per_residue IS NOT NULL"
+        n_sequences = conn.execute(
+            "SELECT COUNT(*) FROM protein WHERE sequence IS NOT NULL"
         ).fetchone()[0]
         n_instances = conn.execute(
             "SELECT COUNT(*) FROM domain_protein_map WHERE instance_id IS NOT NULL"
         ).fetchone()[0]
         conn.close()
-        assert n_blobs > 0, "per-residue embeddings were not written"
+        assert n_sequences == len(SEQUENCES), n_sequences
         assert n_instances == len(INSTANCES), n_instances
 
         after = run_external_test(enriched, tmp, "after")

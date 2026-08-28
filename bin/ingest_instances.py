@@ -14,11 +14,17 @@ writes:
 
 It also emits ``protein_domain_mapping.csv.gz`` in exactly the format
 CREATE_PROTEIN_DOMAIN_MAPPING used to produce (``pfam_id,uniprot_id,start_pos,
-end_pos,sequence``), so ``generate_esm_embeddings`` and the ENRICH inserters keep
-their current interface when CURATE_DOMAINS is deleted.
+end_pos,sequence``). Its one remaining consumer is
+``insert_protein_sequences.py``, which reads only ``uniprot_id`` to pick the
+UniProt records worth storing -- the ``sequence`` column is dead weight, kept
+because the file is asserted line-for-line by
+``tests/python/test_ingest_instances.py`` and an unused column is cheaper than a
+churned interface. Domain embeddings are keyed by ``instance_id`` and read
+ppi-splitting's ``sequences.fasta`` directly, so nothing reconstructs keys from
+this file any more.
 
-**Hard fail on any instance whose ``taxon_id`` is not 9606.**  ProtT5, STRING and
-the UniProt idmapping steps downstream are all human-only; a non-human instance
+**Hard fail on any instance whose ``taxon_id`` is not 9606.**  STRING and the
+UniProt idmapping steps downstream are all human-only; a non-human instance
 here means ppi-splitting was not run with ``instance_tier = 'human_only'``, and
 carrying on would produce a silently wrong database.
 """
@@ -75,7 +81,7 @@ def load_instances(path):
             f"ERROR: {len(non_human)} of {stats['read']} instances are not human (taxon 9606): {sample}"
             + ("..." if len(non_human) > 10 else "")
             + "\nRun ppi-splitting with instance_tier = 'human_only'. Everything downstream of this "
-            "step (ProtT5 embeddings, STRING PPI, UniProt idmapping) assumes human-only proteins."
+            "step (STRING PPI, UniProt idmapping) assumes human-only proteins."
         )
     return rows, stats
 
@@ -106,8 +112,12 @@ def ingest(conn, rows, seqs):
                 domain_id[row["family"].strip()],
                 protein_id[row["protein_id"].strip()],
                 seq,
-                row["start"].strip(),
-                row["end"].strip(),
+                # int(), not the raw string: domain_protein_map.start_pos /
+                # end_pos are INTEGER and part of the instance UNIQUE key, so a
+                # TEXT binding would only match by affinity coercion. Binding the
+                # integer keeps this writer honest independently of the schema.
+                int(row["start"]),
+                int(row["end"]),
                 iid,
                 (row["clan"] or "").strip() or None,
                 row["taxon_id"].strip(),
@@ -125,7 +135,7 @@ def ingest(conn, rows, seqs):
 
 
 def write_mapping_csv(path, rows, seqs):
-    """Write the CSV view the ESM and ENRICH steps consume, sorted for determinism."""
+    """Write the CSV view INSERT_PROTEIN_SEQUENCES consumes, sorted for determinism."""
     written = 0
     with gzip.open(path, "wt", newline="") as out:
         out.write(MAPPING_HEADER)

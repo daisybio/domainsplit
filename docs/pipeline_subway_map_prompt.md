@@ -22,9 +22,8 @@ Create a **subway-map-style overview graphic** for the `daisybio/domainsplit` Ne
    - `EXTRACT_UNIQUE_DOMAINS` — reads distinct Pfam IDs from the in-build DB's `domain_domain_interaction` table.
    - `DOWNLOAD_PFAM_ALIGNMENT`
    - `CREATE_PROTEIN_DOMAIN_MAPPING`
-   - `DOWNLOAD_PROTT5_EMBEDDINGS`
-   - `GENERATE_ESM_PROTEIN_EMBEDDINGS` **and** `GENERATE_ESM_DOMAIN_EMBEDDINGS` — render these as two stations on a short parallel pair (like an interchange) since the ESM subworkflow emits both. Both rejoin the trunk immediately after.
-   - `INSERT_DOMAIN_GO_TERMS` → `INSERT_PROTEINS_WITH_EMBEDDINGS` → `INSERT_PROTEIN_GO_TERMS` → `INSERT_PPI` → `INSERT_DOMAIN_PROTEIN_MAPPING` — sequential `ENRICH_DDI_DATABASE` chain. Render as five close-spaced stations along the trunk; mark the last with a slightly larger dot to flag completion of `domainsplit.sqlite3`.
+   - `SHARD_FASTA` → `GENERATE_DOMAIN_EMBEDDINGS_CHUNK` → `EXPORT_DOMAIN_EMBEDDINGS` — a **branch line** off the trunk, not part of it: it never rejoins, and terminates at its own end-of-line station (the published `embeddings/*.h5`). Render `GENERATE_DOMAIN_EMBEDDINGS_CHUNK` as a fan of three parallel tracks, one per model (`esm3`, `esmc`, `prott5`), each itself sharded; they converge on one `EXPORT_DOMAIN_EMBEDDINGS` station per model.
+   - `INSERT_DOMAIN_GO_TERMS` → `INSERT_PROTEIN_SEQUENCES` → `INSERT_PROTEIN_GO_TERMS` → `INSERT_PPI` — sequential `ENRICH_DDI_DATABASE` chain. Render as four close-spaced stations along the trunk; mark the last with a slightly larger dot to flag completion of `domainsplit.sqlite3`.
    - `EXTRACT_PROTEIN_SEQUENCES` **and** `EXTRACT_DOMAIN_SEQUENCES` — another short parallel pair off the trunk, rejoining immediately.
    - `MMSEQS_EASYCLUSTER` — interchange dot. Only the `minimal_leakage` line "uses" this station; the other three lines pass through without stopping (render as a hollow / pass-through dot for them, filled solid for `minimal_leakage`).
 
@@ -43,7 +42,7 @@ Create a **subway-map-style overview graphic** for the `daisybio/domainsplit` Ne
 - Station labels in a monospaced font, all uppercase to match Nextflow process names. Sub-labels (e.g. ratios, variant flags) in a smaller weight underneath.
 - Legend in a corner: 4 lines with their color swatches and the split-method name.
 - Add a small subtitle: "Pipeline: daisybio/domainsplit — domainsplit DB assembly + train/optimization/test splitting".
-- Add a tiny annotation near `INSERT_DOMAIN_PROTEIN_MAPPING` ("completes domainsplit.sqlite3") and near `SPLIT_DATABASE` ("emits per-method, per-split SQLite DBs").
+- Add a tiny annotation near `INSERT_PPI` ("completes domainsplit.sqlite3"), near `SUBSET_SPLIT_DB` ("emits per-method, per-split SQLite DBs"), and at the end of the embeddings branch ("published HDF5, one per model").
 
 ### What NOT to include
 
@@ -79,23 +78,17 @@ Create a **subway-map-style overview graphic** for the `daisybio/domainsplit` Ne
 **Out:** protein <-> domain mapping table (CSV, `uniprot_id` keyed).
 **What:** Joins UniProt accessions to Pfam domain occurrences using the alignments. Produces the master mapping of which proteins contain which Pfam domains — the backbone of the protein/domain bridge.
 
-### `DOWNLOAD_PROTT5_EMBEDDINGS`
+### `generate_domain_embeddings` (branch line — terminates, does not rejoin)
 
-**In:** Distinct UniProt IDs derived from the protein↔domain mapping.
-**Out:** ProtT5 per-residue embeddings (HDF5) for those proteins.
-**What:** Fetches precomputed ProtT5 embeddings from the EBI mirror, restricted to the protein set the pipeline actually needs (rather than the full UniProt dump).
-
-### `GENERATE_ESM_PROTEIN_EMBEDDINGS` / `GENERATE_ESM_DOMAIN_EMBEDDINGS`
-
-**In:** UniProt SwissProt sequences (`url_uniprot_sequences`) + protein↔domain mapping.
-**Out:** Two HDF5 files — one with per-protein ESM embeddings, one with per-domain ESM embeddings.
-**What:** Runs the ESM3 model on a GPU to embed (a) full-length proteins and (b) the domain sub-sequences carved out by the Pfam mapping. Single Nextflow process, dual outputs. Requires `HF_TOKEN` for the gated EvolutionaryScale model.
+**In:** ppi-splitting's `sequences.fasta` (already the _domain_ FASTA, keyed by instance id) + the pruned `domainsplit.sqlite3`.
+**Out:** `embeddings/<model>_domain_embeddings.h5`, one file per model, keyed `{domain_id}/{instance_id}`.
+**What:** `SHARD_FASTA` splits the domain FASTA; one GPU task per (model, shard) embeds the **cut domain sequences** and mean-pools each to one vector; `EXPORT_DOMAIN_EMBEDDINGS` re-keys a model's chunks against the database. Three models: ESM3 and ESMC (gated, need `HF_TOKEN`) and ProtT5 (ungated). Protein-level and per-residue embeddings do not exist — a sliced protein embedding carries protein context, which correlates with the interaction partner and would leak into a family-partitioned split. Nothing is written into the database, which is why this is a branch and not a trunk segment.
 
 ### `ENRICH_DDI_DATABASE` (interchange / hub — sequential chain)
 
-**In:** post-DDI `domainsplit.sqlite3` + pfam2go, UniProt sequences, protein↔domain mapping, ProtT5 embeddings, UniProt GO terms, STRING links, UniProt id-mapping, ESM protein embeddings, ESM domain embeddings.
+**In:** post-DDI `domainsplit.sqlite3` + pfam2go, UniProt sequences, protein↔domain mapping, UniProt GO terms, STRING links, UniProt id-mapping.
 **Out:** Single unified `domainsplit.sqlite3` (the enriched DDI database).
-**What:** Five sequential `INSERT_*` processes, each opening the SQLite emitted by the previous step, committing one phase, and handing the DB forward — `INSERT_DOMAIN_GO_TERMS` → `INSERT_PROTEINS_WITH_EMBEDDINGS` → `INSERT_PROTEIN_GO_TERMS` → `INSERT_PPI` → `INSERT_DOMAIN_PROTEIN_MAPPING`. End state contains DDIs, PPIs (positive + negative), GO annotations, sequences, and both embedding modalities. This is the canonical artifact the splitting half of the pipeline consumes.
+**What:** Four sequential `INSERT_*` processes, each opening the SQLite emitted by the previous step, committing one phase, and handing the DB forward — `INSERT_DOMAIN_GO_TERMS` → `INSERT_PROTEIN_SEQUENCES` → `INSERT_PROTEIN_GO_TERMS` → `INSERT_PPI`. End state contains DDIs, PPIs (positive + negative), GO annotations and protein sequences — and no BLOBs. This is the canonical artifact the splitting half of the pipeline consumes.
 
 ### `EXTRACT_PROTEIN_SEQUENCES` / `EXTRACT_DOMAIN_SEQUENCES`
 

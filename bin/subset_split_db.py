@@ -9,13 +9,14 @@ is left here is bookkeeping.
 
 **Copy-in, not copy-and-delete.**  This used to clone the whole master, ``DELETE``
 almost all of it, then ``VACUUM`` -- which reads and writes the entire file twice
-to produce a fraction of it.  The master is ~99 % per-residue ProtT5/ESM blobs
-(590 MB of 594 MB even at ``-profile test`` scale, tens of GB in production), and
-this process runs once per (method, split) -- 11 times today, 18 with both
-negative sets -- so that clone was by far the largest I/O in the pipeline. Now an
-empty database is created, the master is ``ATTACH``ed **read-only**, and only the
-surviving rows are inserted. The blobs of proteins this split does not keep are
-never read.
+to produce a fraction of it, once per (method, split), 18 times. That was by far
+the largest I/O in the pipeline when the master was ~99 % per-residue embedding
+blobs. The blobs are gone -- embeddings are published as HDF5 and the master
+carries none -- but the shape of the work has not changed: a clone-and-delete
+still reads and writes every byte of the master 18 times to keep a fraction of
+it, and protein sequences and the STRING network are not small. Now an empty
+database is created, the master is ``ATTACH``ed **read-only**, and only the
+surviving rows are inserted.
 
 The schema is replayed from the master's own ``sqlite_master`` rather than
 restated here, so there is no second source of truth to drift from

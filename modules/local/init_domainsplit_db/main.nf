@@ -41,9 +41,6 @@ process INIT_DOMAINSPLIT_DB {
             id INTEGER PRIMARY KEY,
             uniprot_id,
             sequence,
-            prott5_per_residue,
-            esm3_per_residue,
-            esmc_per_residue,
             UNIQUE(uniprot_id)
         );
         CREATE TABLE protein_go_terms(
@@ -57,15 +54,21 @@ process INIT_DOMAINSPLIT_DB {
             UNIQUE(protein_id_a, protein_id_b)
         );
 
-        -- One row per domain *instance*, matching the ESM H5 key contract
+        -- One row per domain *instance*, matching the embedding H5 key contract
         -- ({pfam_id}_{uniprot_id}_{start}_{end}): a protein carrying two copies
         -- of the same family gets two rows. `instance_id` is ppi-splitting's
         -- own instance identifier (NULL for rows not sourced from it).
+        --
+        -- start_pos/end_pos are typed INTEGER on purpose. Declared with no type
+        -- they take BLOB (none) affinity, SQLite converts nothing on insert, and
+        -- TEXT '10' is not INTEGER 10 in the UNIQUE key below -- which is how two
+        -- writers that disagreed on the storage class ended up producing two rows
+        -- per instance instead of upserting one. With the affinity declared, a
+        -- writer binding '10' is coerced to 10 and cannot desync again.
         CREATE TABLE domain_protein_map (
             domain_id REFERENCES domain ON DELETE CASCADE,
             protein_id REFERENCES protein ON DELETE CASCADE,
-            domain_sequence, start_pos, end_pos,
-            esm3_per_domain, esmc_per_domain,
+            domain_sequence, start_pos INTEGER, end_pos INTEGER,
             instance_id, clan, taxon_id,
             UNIQUE(domain_id, protein_id, start_pos, end_pos)
         );

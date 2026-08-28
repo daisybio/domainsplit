@@ -13,7 +13,7 @@ include { EXPORT_SPLIT_DDIS           } from '../modules/local/export_split_ddis
 include { INGEST_SPLITS               } from '../subworkflows/local/ingest_splits/main.nf'
 include { INSERT_EXTERNAL_SOURCES     } from '../modules/local/insert_external_sources/main.nf'
 include { PRUNE_UNREPRESENTED_DDIS    } from '../modules/local/prune_unrepresented_ddis/main.nf'
-include { generate_esm_embeddings     } from '../modules/local/esm_embeddings/main.nf'
+include { generate_domain_embeddings  } from '../modules/local/domain_embeddings/main.nf'
 include { ENRICH_DDI_DATABASE         } from '../subworkflows/local/enrich_ddi_database/main.nf'
 include { BUILD_EXTERNAL_TEST         } from '../modules/local/build_external_test/main.nf'
 include { SUBSET_SPLIT_DB             } from '../modules/local/subset_split_db/main.nf'
@@ -45,9 +45,10 @@ include { SUBSET_DOMAIN_DATA          } from '../subworkflows/external/ppi-split
     `ilp_candidates` is the ILP sampler restricted to the candidate network of
     experimentally-tested-but-not-interacting Pfam pairs, so it yields
     high-confidence negative instances -- hence the `_hcni` directories. It needs
-    ppi-splitting's comma-separated `negative_sampling_method` fan-out; until
-    that lands, `params.ppi_splitting_multi_negset = false` keeps one negative
-    set per row and the `_hcni` directories are simply not produced.
+    ppi-splitting's comma-separated `negative_sampling_method` fan-out, which the
+    pinned submodule has (`parseNegsets` in its main.nf), so both ILP rows produce
+    two negative sets on one positive split and the run yields 5 method
+    directories / 18 split databases.
 ----------------------------------------------------------------------------*/
 
 // A function, not a script-level `def` variable: those are locals of the script's
@@ -75,12 +76,21 @@ def splitRows() {
     ]
 }
 
-// The negative sets a row actually produces on this run. Without the fan-out
-// only the first one is asked for -- ppi-splitting would treat
-// "ilp,ilp_candidates" as a single unknown method name and fall through to its
-// degree-preserving default sampler, silently.
+// The negative sets a row actually produces on this run. Normally all of them:
+// `params.ppi_splitting_multi_negset` exists so a `--split_only` debug run can
+// drop back to one, because ppi-splitting rejects `--split_only` unless
+// `negative_sampling_method` is exactly "ilp" (its main.nf). With the param off,
+// each row keeps only its *first* negative set and the `_hcni` directories are
+// not produced.
 def activeNegsets(row) {
-    return params.ppi_splitting_multi_negset ? row.negsets.keySet() as List : [row.negsets.keySet().first()]
+    // `.toString().toBoolean()`, not the raw param: a CLI `--ppi_splitting_multi_negset
+    // false` arrives as the *String* "false", and every non-empty String is truthy in
+    // Groovy -- so testing the param directly would silently keep both negative sets on
+    // exactly the run that asked for one. It mattered less when the default was `false`
+    // (turning it *on* passes "true", which is truthy by luck); now that the default is
+    // `true`, turning it off is the operation that has to work.
+    def multi = params.ppi_splitting_multi_negset.toString().toBoolean()
+    return multi ? row.negsets.keySet() as List : [row.negsets.keySet().first()]
 }
 
 // ppi-splitting labels its splits train/val/test_balanced/test_realistic and
@@ -137,8 +147,6 @@ main:
     input_uniprot_sequences  = file(params.url_uniprot_sequences)
     input_string             = file(params.url_string)
     input_pfam2go            = file(params.url_pfam2go)
-
-    def prott5_file = file(params.url_uniprot_prott5_embeddings)
 
     empty_db = INIT_DOMAINSPLIT_DB().domainsplit_db
 
@@ -316,22 +324,21 @@ main:
     // none of which can have appeared in any split of any set. Written as the
     // `test` split of every external_test method directory.
     //
-    // Deliberately *before* enrichment, and it is not an optimisation of
-    // convenience: BUILD_EXTERNAL_TEST clones the master, and after enrichment
-    // ~99% of that file is per-residue ProtT5/ESM blobs (590 MB of 594 MB at
-    // `-profile test` scale, tens of GB in production) that this step never
-    // reads. Running it here clones a few MB instead.
+    // Deliberately *before* enrichment. BUILD_EXTERNAL_TEST clones the master,
+    // and enrichment only ever grows it -- protein sequences, GO terms and the
+    // STRING network -- so cloning first is the smaller copy. (It used to be a
+    // far larger win: enrichment wrote per-residue embedding blobs that were
+    // ~99% of the file. Those are gone, published as HDF5 instead, and the
+    // ordering is now merely the cheaper one rather than the only tolerable one.)
     //
     // Safe because the two write disjoint tables and the read sets do not move:
     // this step reads `domain_domain_interaction`, `domain` and
     // `domain_protein_map` WHERE instance_id IS NOT NULL, and writes only
-    // `ddi_split_membership`. Enrichment never touches the first two or the
-    // last; its one overlap is INSERT_DOMAIN_PROTEIN_MAPPING's upsert, which
-    // leaves `instance_id` NULL on the rows it adds and updates only
-    // domain_sequence / esm*_per_domain on the rows it hits -- so the set of
-    // rows with a non-NULL instance_id, and their (domain_id, instance_id,
-    // protein_id) triples, are identical either side of it. Sampling is seeded
-    // per DDI, so the membership rows come out the same.
+    // `ddi_split_membership`. Enrichment writes `protein`, `protein_go_terms`,
+    // `domain_go_terms` and `protein_protein_interaction` and now touches
+    // `domain_protein_map` not at all -- INSERT_DOMAIN_PROTEIN_MAPPING went with
+    // the embedding columns. Sampling is seeded per DDI, so the membership rows
+    // come out the same.
     //
     // It must stay *after* PRUNE_UNREPRESENTED_DDIS: ddi_split_membership.ddi_id
     // is ON DELETE CASCADE, so writing membership before the prune would lose
@@ -348,26 +355,41 @@ main:
     )
 
     //
+    // Domain embeddings, published as one HDF5 per model rather than stored.
+    //
+    // Keyed on the *pruned* database, not the enriched one, so this whole branch
+    // runs concurrently with enrichment. Same style of ordering invariant as
+    // BUILD_EXTERNAL_TEST above: the export needs only the `(domain.id,
+    // instance_id)` pairs of `domain_protein_map`, and nothing downstream of the
+    // prune adds or removes a `domain` or a `domain_protein_map` row --
+    // BUILD_EXTERNAL_TEST writes only `ddi_split_membership`, and with
+    // INSERT_DOMAIN_PROTEIN_MAPPING deleted enrichment writes neither table.
+    // SUBSET_SPLIT_DB copies `domain.id` verbatim and the prune deletes without
+    // renumbering, so those pairs are exactly the ones in every published split
+    // database of this run.
+    //
+    // The FASTA is ppi-splitting's `sequences.fasta` itself: it already holds the
+    // cut domain sequences keyed by instance id, which is the key the export
+    // needs, so nothing re-derives it.
+    //
+    generate_domain_embeddings(
+        union_sequences,
+        domainsplit_db,
+    )
+
+    //
     // Enrichment, on the master database, before any subsetting.
     //
     protein_domain_map = ingested.protein_domain_map
-
-    generate_esm_embeddings(
-        input_uniprot_sequences,
-        protein_domain_map,
-    )
 
     ENRICH_DDI_DATABASE(
         external.domainsplit_db,
         input_pfam2go,
         input_uniprot_sequences,
         protein_domain_map,
-        prott5_file,
         input_uniprot_go_terms,
         input_string,
         input_uniprot_id_mapping,
-        generate_esm_embeddings.out.protein_embeddings,
-        generate_esm_embeddings.out.domain_embeddings,
     )
 
     enriched_db = ENRICH_DDI_DATABASE.out.domainsplit_db
@@ -404,7 +426,7 @@ main:
         INGEST_SPLITS.out.versions,
         INSERT_EXTERNAL_SOURCES.out.versions,
         PRUNE_UNREPRESENTED_DDIS.out.versions,
-        generate_esm_embeddings.out.versions,
+        generate_domain_embeddings.out.versions,
         ENRICH_DDI_DATABASE.out.versions,
         BUILD_EXTERNAL_TEST.out.versions,
         SUBSET_SPLIT_DB.out.versions,
@@ -423,6 +445,7 @@ emit:
     // including the external test set BUILD_EXTERNAL_TEST wrote upstream.
     domainsplit_db    = enriched_db
     split_db          = split_dbs.split_db
+    domain_embeddings = generate_domain_embeddings.out.embeddings
     candidate_network = candidate_network
     source_conflicts  = inserted.conflicts
     bias_analysis     = ppi.multiqc_report

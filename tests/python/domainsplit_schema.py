@@ -7,7 +7,10 @@ Kept in step with ``modules/local/init_domainsplit_db/main.nf`` -- in particular
   comma-joined source list;
 * ``domain_protein_map`` keyed by ``(domain_id, protein_id, start_pos, end_pos)``
   and carrying ``instance_id``, so a protein with two copies of one family is two
-  rows -- the ESM H5 key contract is instance-level, and so is ppi-splitting;
+  rows -- the embedding H5 key contract is instance-level, and so is
+  ppi-splitting. ``start_pos``/``end_pos`` are **INTEGER**: with no declared type
+  they take BLOB affinity and TEXT ``'10'`` stops matching INTEGER ``10`` in the
+  UNIQUE key, which is exactly the desync this mirror has to reproduce;
 * ``ddi_split_membership``, which SUBSET_SPLIT_DB filters on.
 
 The GO / PPI tables are here only so the prune and subset tests can assert that
@@ -37,9 +40,6 @@ CREATE TABLE protein (
     id INTEGER PRIMARY KEY,
     uniprot_id,
     sequence,
-    prott5_per_residue,
-    esm3_per_residue,
-    esmc_per_residue,
     UNIQUE(uniprot_id)
 );
 CREATE TABLE protein_go_terms(
@@ -56,8 +56,7 @@ CREATE TABLE protein_protein_interaction (
 CREATE TABLE domain_protein_map (
     domain_id REFERENCES domain ON DELETE CASCADE,
     protein_id REFERENCES protein ON DELETE CASCADE,
-    domain_sequence, start_pos, end_pos,
-    esm3_per_domain, esmc_per_domain,
+    domain_sequence, start_pos INTEGER, end_pos INTEGER,
     instance_id, clan, taxon_id,
     UNIQUE(domain_id, protein_id, start_pos, end_pos)
 );
@@ -100,6 +99,11 @@ def add_instance(conn, pfam, uniprot, start, end, taxon="9606", clan=None, seque
 
     Mirrors what INGEST_INSTANCES writes, including the
     ``{family}_{uniprot}_{start}_{end}`` instance id ppi-splitting uses.
+
+    ``start``/``end`` are bound as **strings** on purpose, so every fixture DB
+    exercises the INTEGER affinity coercion instead of hiding it: every caller
+    passes Python ints, which is why a fixture DB used to match a TEXT-binding
+    writer that the real pipeline did not.
     """
     conn.execute("INSERT OR IGNORE INTO domain(pfam_id) VALUES (?)", (pfam,))
     conn.execute("INSERT OR IGNORE INTO protein(uniprot_id) VALUES (?)", (uniprot,))
@@ -110,6 +114,6 @@ def add_instance(conn, pfam, uniprot, start, end, taxon="9606", clan=None, seque
         "INSERT OR IGNORE INTO domain_protein_map"
         "(domain_id, protein_id, domain_sequence, start_pos, end_pos, instance_id, clan, taxon_id) "
         "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        (domain_id, protein_id, sequence, start, end, instance_id, clan, taxon),
+        (domain_id, protein_id, sequence, str(start), str(end), instance_id, clan, taxon),
     )
     return instance_id
