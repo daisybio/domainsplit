@@ -7,6 +7,7 @@ include { paramsSummaryMap            } from 'plugin/nf-schema'
 include { softwareVersionsToYAML      } from '../subworkflows/nf-core/utils_nfcore_pipeline'
 include { methodsDescriptionText      } from '../subworkflows/local/utils_nfcore_domainsplit_pipeline'
 include { INIT_DOMAINSPLIT_DB         } from '../modules/local/init_domainsplit_db/main.nf'
+include { PARSE_SWISSPROT             } from '../modules/local/parse_swissprot/main.nf'
 include { COLLECT_DDI_DATA            } from '../subworkflows/local/collect_ddi_data/main.nf'
 include { EXPORT_UNION_FAMILIES       } from '../modules/local/export_union_families/main.nf'
 include { EXPORT_SPLIT_DDIS           } from '../modules/local/export_split_ddis/main.nf'
@@ -143,10 +144,23 @@ main:
     ch_versions = Channel.empty()
 
     input_uniprot_id_mapping = file(params.url_uniprot_id_mapping)
-    input_uniprot_go_terms   = file(params.url_uniprot_go_terms)
-    input_uniprot_sequences  = file(params.url_uniprot_sequences)
     input_string             = file(params.url_string)
     input_pfam2go            = file(params.url_pfam2go)
+
+    //
+    // One pass over the SwissProt flat file, three consumers. See the
+    // `url_uniprot_swissprot_dat` comment in nextflow.config for why this is a
+    // parse of a static FTP file rather than two REST stream queries.
+    //
+    PARSE_SWISSPROT(
+        file(params.url_uniprot_swissprot_dat),
+        params.swissprot_taxon_ids,
+    )
+    ch_versions = ch_versions.mix(PARSE_SWISSPROT.out.versions)
+
+    input_uniprot_go_terms  = PARSE_SWISSPROT.out.go_terms
+    input_uniprot_sequences = PARSE_SWISSPROT.out.sequences
+    input_swissprot_pfam    = PARSE_SWISSPROT.out.pfam_tsv
 
     empty_db = INIT_DOMAINSPLIT_DB().domainsplit_db
 
@@ -157,7 +171,7 @@ main:
         empty_db,
         params.url_3did,
         params.url_negatome,
-        params.url_uniprot_swissprot_pfam,
+        input_swissprot_pfam,
         params.hippie_tsv,
         params.ppidm_tsv,
         params.negative_ppi_parquet,

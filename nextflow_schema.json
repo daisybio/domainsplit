@@ -55,17 +55,17 @@
                     "default": "https://ftp.uniprot.org/pub/databases/uniprot/current_release/knowledgebase/idmapping/by_organism/HUMAN_9606_idmapping.dat.gz",
                     "fa_icon": "fas fa-link"
                 },
-                "url_uniprot_go_terms": {
+                "url_uniprot_swissprot_dat": {
                     "type": "string",
-                    "description": "URL of the UniProt GO terms TSV (REST stream).",
-                    "default": "https://rest.uniprot.org/uniprotkb/stream?compressed=true&fields=accession%2Cgo_id&format=tsv&query=%28%28database%3AGO%29+AND+%28reviewed%3Atrue%29%29",
+                    "description": "URL or path of the UniProt-SwissProt flat file. PARSE_SWISSPROT reads it once and emits the GO-term TSV, the accession-to-Pfam TSV and the protein FASTA, replacing two throttled rest.uniprot.org stream queries.",
+                    "default": "https://ftp.uniprot.org/pub/databases/uniprot/current_release/knowledgebase/complete/uniprot_sprot.dat.gz",
                     "fa_icon": "fas fa-link"
                 },
-                "url_uniprot_sequences": {
+                "swissprot_taxon_ids": {
                     "type": "string",
-                    "description": "URL of the UniProt-SwissProt FASTA archive.",
-                    "default": "https://ftp.uniprot.org/pub/databases/uniprot/current_release/knowledgebase/complete/uniprot_sprot.fasta.gz",
-                    "fa_icon": "fas fa-link"
+                    "description": "Comma-separated NCBI taxon ids PARSE_SWISSPROT keeps; an empty string keeps every species. 9606 by default because ingest rejects non-human instances.",
+                    "default": "9606",
+                    "fa_icon": "fas fa-filter"
                 },
                 "url_negatome": {
                     "type": "string",
@@ -168,12 +168,6 @@
                     "description": "Ask ppi-splitting for both ILP negative sets per split — plain `ilp` plus `ilp_candidates`, the same sampler restricted to the candidate network — which turns 3 method directories into 5 and 11 split databases into 18. On by default: the comma-separated `negative_sampling_method` fan-out it needs is in the pinned submodule. The candidate network must be dense enough that every split can cover itself from it: survival is quadratic in a split's share, because both families of a pair have to land in the same split. Set false for a `--split_only` debug run, which ppi-splitting refuses unless `negative_sampling_method` is exactly \"ilp\".",
                     "default": true,
                     "fa_icon": "fas fa-clone"
-                },
-                "url_uniprot_swissprot_pfam": {
-                    "type": "string",
-                    "description": "UniProt stream URL (or local TSV path) of reviewed human proteins with fields accession, entry name, gene names and Pfam xrefs. Used to detect single-domain proteins for the HIPPIE-derived positive DDIs.",
-                    "default": "https://rest.uniprot.org/uniprotkb/stream?compressed=true&format=tsv&fields=accession%2Cid%2Cgene_names%2Cxref_pfam&query=%28%28reviewed%3Atrue%29+AND+%28organism_id%3A9606%29%29",
-                    "fa_icon": "fas fa-link"
                 },
                 "hippie_tsv": {
                     "type": ["string"],

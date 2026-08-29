@@ -409,14 +409,25 @@ def write_hippie(out, rows):
     log(f"wrote {path} ({len(rows)} rows)")
 
 
-def write_swissprot_tsv(out, tsv_rows):
-    path = os.path.join(out, "swissprot_pfam.tsv")
-    with open(path, "w", newline="") as fh:
-        writer = csv.writer(fh, delimiter="\t", lineterminator="\n")
-        writer.writerow(["Entry", "Entry Name", "Gene Names", "Pfam"])
-        for acc, entry_name, gene, family in tsv_rows:
-            writer.writerow([acc, entry_name, gene, f"{family};"])
-    log(f"wrote {path} ({len(tsv_rows)} proteins)")
+def write_dat_entry(fh, acc, entry_name, gene, seq, pfams=(), go=(), taxid="9606"):
+    """One UniProt-SwissProt flat-file entry, in the subset of the format
+    `parse_swissprot_dat.py` reads: ID/AC/DE/GN/OS/OX, the DR GO and DR Pfam
+    cross-references, and the SQ block."""
+    fh.write(f"ID   {entry_name}   Reviewed;   {len(seq)} AA.\n")
+    fh.write(f"AC   {acc};\n")
+    fh.write(f"DE   RecName: Full=Synthetic fixture protein {acc};\n")
+    if gene:
+        fh.write(f"GN   Name={gene};\n")
+    fh.write("OS   Homo sapiens (Human).\n")
+    fh.write(f"OX   NCBI_TaxID={taxid};\n")
+    for go_id in go:
+        fh.write(f"DR   GO; {go_id}; F:synthetic fixture term; IEA:fixture.\n")
+    for pfam in pfams:
+        fh.write(f"DR   Pfam; {pfam}; {pfam}_name; 1.\n")
+    fh.write(f"SQ   SEQUENCE   {len(seq)} AA;  0 MW;  0000000000000000 CRC64;\n")
+    for i in range(0, len(seq), 60):
+        fh.write("     " + seq[i : i + 60] + "\n")
+    fh.write("//\n")
 
 
 # ---------------------------------------------------------------------------
@@ -521,7 +532,7 @@ def write_parquet_and_mapping(out, parquet_path, families, n_rows, min_n_tested,
 # ---------------------------------------------------------------------------
 
 
-def write_enrich_fixtures(out, records, families):
+def write_enrich_fixtures(out, records, families, swissprot_rows):
     """The UniProt / STRING / GO side, derived from the Pfam records.
 
     No local copy of these sources exists and the real ones are unusable as
@@ -558,21 +569,31 @@ def write_enrich_fixtures(out, records, families):
             chars[start - 1 : end] = list(window)
         sequences[acc] = "".join(chars)
 
-    fasta = os.path.join(out, "uniprot_sequences.fasta.gz")
-    with gzip.open(fasta, "wt") as fh:
-        for acc, (entry, _spans) in sorted(proteins.items()):
-            fh.write(f">sp|{acc}|{entry} synthetic fixture protein OS=Homo sapiens OX=9606\n")
-            seq = sequences[acc]
-            for i in range(0, len(seq), 60):
-                fh.write(seq[i : i + 60] + "\n")
-    log(f"wrote {fasta} ({len(proteins)} proteins)")
-
-    go_terms = os.path.join(out, "uniprot_go_terms.tsv.gz")
-    with gzip.open(go_terms, "wt", newline="") as fh:
-        fh.write("Entry\tGene Ontology IDs\n")
-        for acc in sorted(proteins):
-            fh.write(f"{acc}\tGO:0005515; GO:0005829\n")
-    log(f"wrote {go_terms}")
+    # One flat file, three consumers: PARSE_SWISSPROT carves the protein FASTA,
+    # the GO-term TSV and the accession->Pfam TSV back out of it. The two protein
+    # sets stay as separate as they were when those were three fixture files --
+    # Pfam-derived accessions carry GO and a sequence, HIPPIE-derived ones carry
+    # the Pfam xref the single-domain step looks up -- so the sparser-than-real
+    # fixture drives exactly the behaviour it drove before.
+    dat = os.path.join(out, "uniprot_sprot.dat.gz")
+    hippie_side = {acc: (entry_name, gene, family)
+                   for acc, entry_name, gene, family in swissprot_rows}
+    with gzip.open(dat, "wt") as fh:
+        for acc in sorted(set(proteins) | set(hippie_side)):
+            entry_name, _spans = proteins.get(acc, (None, None))
+            hippie = hippie_side.get(acc)
+            if hippie:
+                entry_name = entry_name or hippie[0]
+            write_dat_entry(
+                fh,
+                acc=acc,
+                entry_name=entry_name,
+                gene=hippie[1] if hippie else entry_name.split("_")[0],
+                seq=sequences.get(acc, "MSSRSVSRSR"),
+                pfams=[hippie[2]] if hippie else [],
+                go=["GO:0005515", "GO:0005829"] if acc in proteins else [],
+            )
+    log(f"wrote {dat} ({len(proteins)} Pfam-derived + {len(hippie_side)} HIPPIE-derived entries)")
 
     pfam2go = os.path.join(out, "pfam2go.txt")
     with open(pfam2go, "w") as fh:
@@ -723,13 +744,12 @@ def main():
         src("HIPPIE-current.txt"), families, args.hippie_pairs, 0.63, rng
     )
     write_hippie(out, hippie_rows)
-    write_swissprot_tsv(out, swissprot_rows)
 
     write_parquet_and_mapping(
         out, src("negative_data_y2h_ms.pq"), families, args.parquet_rows, 5, rng
     )
 
-    write_enrich_fixtures(out, records, families)
+    write_enrich_fixtures(out, records, families, swissprot_rows)
 
     # Placeholders from the old `-stub` fixture set, superseded by the files
     # above, plus prott5.h5 from the retired per-residue protein embeddings.
@@ -742,6 +762,14 @@ def main():
         if os.path.exists(path) and os.path.getsize(path) == 0:
             os.remove(path)
             log(f"removed empty placeholder {stale}")
+
+    # Superseded by uniprot_sprot.dat.gz, which PARSE_SWISSPROT splits into all three.
+    for stale in ("swissprot_pfam.tsv", "uniprot_go_terms.tsv.gz",
+                  "uniprot_sequences.fasta.gz"):
+        path = os.path.join(out, stale)
+        if os.path.exists(path):
+            os.remove(path)
+            log(f"removed {stale} (now carved out of uniprot_sprot.dat.gz)")
 
     log("done")
 

@@ -31,7 +31,8 @@ Example `params.yaml`:
 ```yaml
 outdir: "./results"
 url_3did: "https://3did.irbbarcelona.org/download/2022_01/3did.sql.gz"
-url_uniprot_sequences: "https://ftp.uniprot.org/pub/databases/uniprot/current_release/knowledgebase/complete/uniprot_sprot.fasta.gz"
+url_uniprot_swissprot_dat: "https://ftp.uniprot.org/pub/databases/uniprot/current_release/knowledgebase/complete/uniprot_sprot.dat.gz"
+swissprot_taxon_ids: "9606"
 ```
 
 > [!WARNING]

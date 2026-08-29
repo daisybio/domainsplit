@@ -42,7 +42,7 @@ workflow COLLECT_DDI_DATA {
     domainsplit_db_in
     url_3did
     url_negatome
-    url_uniprot_swissprot_pfam
+    swissprot_pfam_tsv
     hippie_tsv
     ppidm_tsv
     negative_ppi_parquet
@@ -62,7 +62,7 @@ workflow COLLECT_DDI_DATA {
     domainsplit_db = INSERT_3DID(domainsplit_db_in, sqlite_3did).domainsplit_db
 
     // 2. external sources -> normalized TSVs (no DB writes)
-    swissprot_map = BUILD_SWISSPROT_PFAM_MAP(url_uniprot_swissprot_pfam).map
+    swissprot_map = BUILD_SWISSPROT_PFAM_MAP(swissprot_pfam_tsv).map
     single_domain_ddis = PARSE_SINGLE_DOMAIN_PPI(
         file(hippie_tsv),
         swissprot_map,

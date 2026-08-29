@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Build a reviewed-human UniProt -> Pfam map for single-domain detection.
+"""Build a UniProt -> Pfam map for single-domain detection.
 
-Downloads one UniProt stream (TSV, fields accession,id,gene_names,xref_pfam for
-``reviewed:true AND organism_id:9606``) and emits ``swissprot_pfam_map.json``:
+Reads the ``Entry/Entry Name/Gene Names/Pfam`` TSV that ``PARSE_SWISSPROT``
+carves out of the SwissProt flat file (a URL is still accepted, for the same TSV
+served over http) and emits ``swissprot_pfam_map.json``:
 
     {
       "accession_to_pfams": {accession: [Pfam, ...]},
@@ -28,7 +29,8 @@ import urllib.request
 
 def parse_args():
     p = argparse.ArgumentParser()
-    p.add_argument("--url", required=True, help="UniProt stream URL or local TSV(.gz) file")
+    p.add_argument("--source", required=True, dest="url",
+                   help="local TSV(.gz) from PARSE_SWISSPROT, or a URL serving the same TSV")
     p.add_argument("--out", required=True, help="Output JSON path")
     p.add_argument("--versions", required=True)
     p.add_argument("--process-name", required=True)
@@ -55,7 +57,7 @@ def fetch(url, out_path):
     elif os.path.exists(url):
         shutil.copy(url, out_path)
     else:
-        raise SystemExit(f"url_uniprot_swissprot_pfam '{url}' is neither a URL nor a local file")
+        raise SystemExit(f"--source '{url}' is neither a URL nor a local file")
 
 
 def open_maybe_gzip(path):

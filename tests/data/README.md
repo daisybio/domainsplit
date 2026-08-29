@@ -45,16 +45,22 @@ their real `start`/`end` offsets.
 
 | fixture                                | maps to                                  |
 | -------------------------------------- | ---------------------------------------- |
-| `swissprot_pfam.tsv`                   | `params.url_uniprot_swissprot_pfam`      |
-| `uniprot_sequences.fasta.gz`           | `params.url_uniprot_sequences`           |
-| `uniprot_go_terms.tsv.gz`              | `params.url_uniprot_go_terms`            |
+| `uniprot_sprot.dat.gz`                 | `params.url_uniprot_swissprot_dat`       |
 | `uniprot_id_mapping.dat.gz`            | `params.url_uniprot_id_mapping`          |
 | `string.txt.gz`                        | `params.url_string`                      |
 | `pfam2go.txt`                          | `params.url_pfam2go`                     |
 | `gene_pfam_mapping.json`               | `params.negative_ppi_gene_mapping`       |
 | `pfam/interpro_cache/pfam-38.0/`       | ppi-splitting's `params.interpro_cache`  |
 
-`swissprot_pfam.tsv` describes exactly the proteins the kept HIPPIE rows name,
+`uniprot_sprot.dat.gz` is one flat file that `PARSE_SWISSPROT` splits back into a
+protein FASTA, a GO-term TSV and an accession→Pfam TSV, the way the real
+`uniprot_sprot.dat.gz` is split in a production run. It carries two protein sets,
+kept as separate as they were when those were three fixture files: Pfam-derived
+accessions have GO terms and a sequence but no `DR Pfam` line, HIPPIE-derived ones
+have the `DR Pfam` xref the single-domain step looks up. So the fixture is sparser
+than the real file, and drives exactly the behaviour the three files drove.
+
+Its HIPPIE-derived entries describe exactly the proteins the kept HIPPIE rows name,
 each as a single-domain protein of one fixture family — otherwise
 `PARSE_SINGLE_DOMAIN_PPI` would keep no row, since it requires *both* interactors
 to carry exactly one Pfam domain.

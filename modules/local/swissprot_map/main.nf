@@ -5,7 +5,7 @@ process BUILD_SWISSPROT_PFAM_MAP {
     container "docker.io/konstantinpelz/domainsplit-general:1.0.0"
 
     input:
-    val url
+    path swissprot_pfam_tsv
 
     output:
     path "swissprot_pfam_map.json", emit: map
@@ -14,7 +14,7 @@ process BUILD_SWISSPROT_PFAM_MAP {
     script:
     """
     build_swissprot_pfam_map.py \\
-        --url "${url}" \\
+        --source ${swissprot_pfam_tsv} \\
         --out swissprot_pfam_map.json \\
         --versions versions.yml \\
         --process-name "${task.process}"
