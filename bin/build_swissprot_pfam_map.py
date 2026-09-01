@@ -5,15 +5,20 @@ Reads the ``Entry/Entry Name/Gene Names/Pfam`` TSV that ``PARSE_SWISSPROT``
 carves out of the SwissProt flat file (a URL is still accepted, for the same TSV
 served over http) and emits ``swissprot_pfam_map.json``:
 
-    {
-      "accession_to_pfams": {accession: [Pfam, ...]},
-      "name_to_accession":  {entry_name_or_gene: accession}
-    }
+    {"accession_to_pfams": {accession: [Pfam, ...]}}
 
-``name_to_accession`` lets the single-domain step resolve HIPPIE identifiers that
-are entry names (e.g. ``AL1A1_HUMAN``) or gene names; accessions resolve directly
-against ``accession_to_pfams``.  Gene names that map to more than one accession are
-dropped as ambiguous; unique entry names always win.
+Only accessions. There used to be a ``name_to_accession`` map so the single-domain
+step could resolve HIPPIE identifiers that were entry names or gene names, with
+ambiguous gene names dropped; ``HIPPIE-current.txt`` carries UniProt accessions in
+columns 1 and 4, so nothing needs it and an ambiguity that had to be resolved by
+dropping rows is gone with it.
+
+The Pfam lists come from UniProt's own ``DR Pfam`` cross-references rather than
+from ``Pfam-A.regions.tsv.gz``, which is the other table that could answer "which
+families does this protein carry". Those two agree closely -- both derive from the
+same Pfam matches -- and reading regions here would mean a second pass over a
+4.7 GB file at a point in the DAG that runs *before* the Pfam fetch, for a
+disagreement that switching the instance source already removed.
 """
 
 import argparse
@@ -75,8 +80,6 @@ def main():
     fetch(args.url, raw)
 
     accession_to_pfams = {}
-    gene_to_accs = {}      # gene token -> set of accessions (for ambiguity check)
-    entry_name_to_acc = {}
 
     n_lines = 0
     with open_maybe_gzip(raw) as fh:
@@ -89,7 +92,7 @@ def main():
             cols = line.split("\t")
             if len(cols) < 4:
                 cols += [""] * (4 - len(cols))
-            accession, entry_name, gene_names, pfam_field = cols[0], cols[1], cols[2], cols[3]
+            accession, pfam_field = cols[0], cols[3]
             if not accession:
                 continue
             n_lines += 1
@@ -97,30 +100,11 @@ def main():
             pfams = sorted({p for p in pfam_field.replace(",", ";").split(";") if p})
             accession_to_pfams[accession] = pfams
 
-            if entry_name:
-                entry_name_to_acc[entry_name] = accession
-            for token in gene_names.split():
-                gene_to_accs.setdefault(token, set()).add(accession)
-
-    # entry names are unique and authoritative; add unambiguous gene names that
-    # do not collide with an entry name
-    name_to_accession = dict(entry_name_to_acc)
-    for token, accs in gene_to_accs.items():
-        if token in name_to_accession:
-            continue
-        if len(accs) == 1:
-            name_to_accession[token] = next(iter(accs))
-
     n_single = sum(1 for pfams in accession_to_pfams.values() if len(pfams) == 1)
-    print(f"[swissprot_map] proteins={n_lines} single_domain={n_single} "
-          f"names={len(name_to_accession)}", flush=True)
+    print(f"[swissprot_map] proteins={n_lines} single_domain={n_single}", flush=True)
 
     with open(args.out, "w") as fh:
-        json.dump(
-            {"accession_to_pfams": accession_to_pfams,
-             "name_to_accession": name_to_accession},
-            fh,
-        )
+        json.dump({"accession_to_pfams": accession_to_pfams}, fh)
 
     with open(args.versions, "w") as f:
         f.write(f'"{args.process_name}":\n')

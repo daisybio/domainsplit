@@ -28,7 +28,7 @@ workflow ENRICH_DDI_DATABASE {
     protein_domain_map
     input_uniprot_go_terms
     input_string
-    input_uniprot_id_mapping
+    input_string_map
 
     main:
     db_after_domain_go = INSERT_DOMAIN_GO_TERMS(
@@ -50,7 +50,7 @@ workflow ENRICH_DDI_DATABASE {
     domainsplit_db = INSERT_PPI(
         db_after_protein_go,
         input_string,
-        input_uniprot_id_mapping
+        input_string_map
     ).domainsplit_db
 
     ch_versions = Channel.empty().mix(

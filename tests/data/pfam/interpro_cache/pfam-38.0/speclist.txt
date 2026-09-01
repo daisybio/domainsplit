@@ -1,2 +1,0 @@
-Real code Taxon Node/Scientific name
-HUMAN E 9606: N=Homo sapiens

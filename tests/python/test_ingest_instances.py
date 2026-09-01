@@ -18,7 +18,7 @@ Three things are worth a test here:
     protein_id)`` silently kept one;
   * a non-human instance is a **hard failure**, not a filtered row: everything
     downstream (STRING, the UniProt idmapping) is human-only, so a
-    non-9606 taxon means ppi-splitting was not run with
+    a taxon outside the configured universe means ppi-splitting was not run with
     ``instance_tier = 'human_only'`` and the resulting DB would be quietly wrong.
 
 Run directly (`python3 tests/python/test_ingest_instances.py`) or via pytest.
@@ -64,7 +64,7 @@ def write_fasta(path, rows):
             fh.write(f">{row[0]}\nAAAA\n")
 
 
-def run_ingest(tmp, rows, check=True):
+def run_ingest(tmp, rows, check=True, taxon_ids="9606"):
     db = os.path.join(tmp, "domainsplit.sqlite3")
     make_db(db)
     instances = os.path.join(tmp, "instances.tsv")
@@ -77,6 +77,7 @@ def run_ingest(tmp, rows, check=True):
     proc = subprocess.run(
         [sys.executable, INGEST, "--db", db, "--instances", instances,
          "--sequences", sequences, "--mapping-out", mapping,
+         "--taxon-ids", taxon_ids,
          "--versions", os.path.join(tmp, "versions.yml"),
          "--process-name", "TEST:INGEST_INSTANCES"],
         check=check, env=env, capture_output=True, text=True,
@@ -125,13 +126,16 @@ def test_instance_level_rows():
         ], lines[1:]
 
 
-def test_non_human_instance_is_fatal():
+def test_instance_outside_the_taxon_universe_is_fatal():
     with tempfile.TemporaryDirectory() as tmp:
-        db, _, proc = run_ingest(tmp, HUMAN_ROWS + [MOUSE_ROW], check=False)
+        db, _, proc = run_ingest(tmp, HUMAN_ROWS + [MOUSE_ROW], check=False, taxon_ids="9606")
 
         assert proc.returncode != 0, proc.stdout
-        assert "not human" in proc.stderr, proc.stderr
-        assert "human_only" in proc.stderr, proc.stderr
+        assert "outside the configured taxon universe" in proc.stderr, proc.stderr
+        # The message must name both knobs: the two of them disagreeing is the
+        # only way to reach this, and neither one alone tells you what to change.
+        assert "swissprot_taxon_ids" in proc.stderr, proc.stderr
+        assert "instance_tier" in proc.stderr, proc.stderr
 
         # Nothing was written -- the check runs before the first insert.
         conn = sqlite3.connect(db)
@@ -139,7 +143,28 @@ def test_non_human_instance_is_fatal():
         conn.close()
 
 
+def test_a_wider_universe_admits_the_same_instance():
+    """The assertion is against the configured universe, not against 9606.
+
+    Same mouse row, two runs: fatal when the universe is human, ingested when the
+    universe is empty (all species) or names its taxon. This is what makes an
+    any-species run possible at all.
+    """
+    for taxa in ("", "9606,10090"):
+        with tempfile.TemporaryDirectory() as tmp:
+            db, _, proc = run_ingest(tmp, HUMAN_ROWS + [MOUSE_ROW], taxon_ids=taxa)
+            assert proc.returncode == 0, proc.stderr
+            conn = sqlite3.connect(db)
+            # And the taxon is kept, not merely checked -- protein.taxon_id is what
+            # makes a mixed-species database stratifiable.
+            taxa_in_db = dict(conn.execute("SELECT uniprot_id, taxon_id FROM protein"))
+            conn.close()
+            assert taxa_in_db["P33333"] == "10090", taxa_in_db
+            assert taxa_in_db["P11111"] == "9606", taxa_in_db
+
+
 if __name__ == "__main__":
     test_instance_level_rows()
-    test_non_human_instance_is_fatal()
-    print("OK: ingest_instances is instance level and refuses non-human taxa")
+    test_instance_outside_the_taxon_universe_is_fatal()
+    test_a_wider_universe_admits_the_same_instance()
+    print("OK: ingest_instances is instance level and enforces the taxon universe")

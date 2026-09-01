@@ -53,7 +53,7 @@ The main outputs in the `results` directory are:
 - `databases/<method>/<split>.sqlite3` — one database per (splitting method, split). With the
   default `--ppi_splitting_multi_negset true` that is **5 method directories, 18 databases**.
 - `embeddings/<model>_domain_embeddings.h5` — one pooled vector per domain instance per model
-  (`esm3`, `esmc`, `prott5`), keyed `{domain_id}/{instance_id}`. Embeddings are not stored in
+  (`esm3`, `esmc`, `prott5`), keyed `{pfam_id}/{instance_id}`. Embeddings are not stored in
   the databases.
 - `reports/`, `external_ddis/`, `candidate_network/`, `ppi_splitting/`, `pipeline_info/` —
   provenance and diagnostics. See [docs/output.md](docs/output.md).

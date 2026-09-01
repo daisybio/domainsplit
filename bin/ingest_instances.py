@@ -23,10 +23,16 @@ churned interface. Domain embeddings are keyed by ``instance_id`` and read
 ppi-splitting's ``sequences.fasta`` directly, so nothing reconstructs keys from
 this file any more.
 
-**Hard fail on any instance whose ``taxon_id`` is not 9606.**  STRING and the
-UniProt idmapping steps downstream are all human-only; a non-human instance
-here means ppi-splitting was not run with ``instance_tier = 'human_only'``, and
-carrying on would produce a silently wrong database.
+**Hard fail on any instance outside the configured taxon universe**
+(``--taxon-ids``, from ``params.swissprot_taxon_ids``; empty accepts every
+taxon).  An instance from outside it means the run's two taxon knobs disagree --
+ppi-splitting sampled a species the protein universe was never parsed for -- and
+carrying on would produce a database whose ``protein`` rows have no sequence and
+no GO terms, silently.
+
+The taxon is *kept*, not just checked: ``protein.taxon_id`` is what makes a
+multi-species database stratifiable, and what tells a reader which proteins went
+unenriched because their species had no STRING file.
 """
 
 import argparse
@@ -37,8 +43,6 @@ from collections import Counter
 
 from split_io import read_fasta, read_instances_tsv
 
-HUMAN_TAXON = "9606"
-
 MAPPING_HEADER = "pfam_id,uniprot_id,start_pos,end_pos,sequence\n"
 
 
@@ -47,26 +51,34 @@ def parse_args():
     p.add_argument("--db", required=True, help="domainsplit SQLite (modified in place)")
     p.add_argument("--instances", required=True, help="ppi-splitting instances.tsv")
     p.add_argument("--sequences", required=True, help="ppi-splitting sequences.fasta (keyed by instance id)")
+    p.add_argument(
+        "--taxon-ids",
+        default="",
+        help="comma-separated NCBI taxon ids the run's protein universe covers; "
+        "an instance outside them is fatal. Empty accepts every taxon",
+    )
     p.add_argument("--mapping-out", required=True, help="protein_domain_mapping.csv.gz to write")
     p.add_argument("--versions", required=True)
     p.add_argument("--process-name", required=True)
     return p.parse_args()
 
 
-def load_instances(path):
-    """Return ``(rows, stats)``; raises on any non-human instance.
+def load_instances(path, wanted_taxa):
+    """Return ``(rows, stats)``; raises on any instance outside ``wanted_taxa``.
+
+    ``wanted_taxa`` empty means every taxon is acceptable -- the any-species case.
 
     Duplicate ``instance_id``s are dropped -- ``instances.tsv`` is written once
     per run, but the DB's unique index on ``instance_id`` would fail loudly here
     rather than at the end of a long insert.
     """
     rows, seen, stats = [], set(), Counter()
-    non_human = []
+    off_universe = []
     for row in read_instances_tsv(path):
         stats["read"] += 1
         taxon = (row["taxon_id"] or "").strip()
-        if taxon != HUMAN_TAXON:
-            non_human.append((row["instance_id"], taxon or "<empty>"))
+        if wanted_taxa and taxon not in wanted_taxa:
+            off_universe.append((row["instance_id"], taxon or "<empty>"))
             continue
         iid = row["instance_id"].strip()
         if iid in seen:
@@ -75,13 +87,15 @@ def load_instances(path):
         seen.add(iid)
         rows.append(row)
 
-    if non_human:
-        sample = ", ".join(f"{iid} (taxon {t})" for iid, t in non_human[:10])
+    if off_universe:
+        sample = ", ".join(f"{iid} (taxon {t})" for iid, t in off_universe[:10])
         raise SystemExit(
-            f"ERROR: {len(non_human)} of {stats['read']} instances are not human (taxon 9606): {sample}"
-            + ("..." if len(non_human) > 10 else "")
-            + "\nRun ppi-splitting with instance_tier = 'human_only'. Everything downstream of this "
-            "step (STRING PPI, UniProt idmapping) assumes human-only proteins."
+            f"ERROR: {len(off_universe)} of {stats['read']} instances are outside the "
+            f"configured taxon universe ({', '.join(sorted(wanted_taxa))}): {sample}"
+            + ("..." if len(off_universe) > 10 else "")
+            + "\n--swissprot_taxon_ids decides which proteins exist and --instance_tier "
+            "decides which of them may be sampled; these two disagree. Either widen "
+            "--swissprot_taxon_ids or set --instance_tier human_only."
         )
     return rows, stats
 
@@ -94,9 +108,18 @@ def ingest(conn, rows, seqs):
     conn.executemany("INSERT OR IGNORE INTO domain(pfam_id) VALUES (?)", [(f,) for f in families])
     stats["families"] = len(families)
 
-    proteins = sorted({r["protein_id"].strip() for r in rows})
-    conn.executemany("INSERT OR IGNORE INTO protein(uniprot_id) VALUES (?)", [(p,) for p in proteins])
+    # One taxon per protein by construction -- an accession belongs to one entry --
+    # so first-seen is the only value there is.
+    protein_taxa = {}
+    for r in rows:
+        protein_taxa.setdefault(r["protein_id"].strip(), (r["taxon_id"] or "").strip())
+    proteins = sorted(protein_taxa)
+    conn.executemany(
+        "INSERT OR IGNORE INTO protein(uniprot_id, taxon_id) VALUES (?, ?)",
+        [(p, protein_taxa[p]) for p in proteins],
+    )
     stats["proteins"] = len(proteins)
+    stats["taxa"] = len(set(protein_taxa.values()))
 
     domain_id = {pfam: did for did, pfam in conn.execute("SELECT id, pfam_id FROM domain")}
     protein_id = {up: pid for pid, up in conn.execute("SELECT id, uniprot_id FROM protein")}
@@ -151,7 +174,12 @@ def write_mapping_csv(path, rows, seqs):
 def main():
     args = parse_args()
 
-    rows, read_stats = load_instances(args.instances)
+    wanted_taxa = {t.strip() for t in args.taxon_ids.split(",") if t.strip()}
+    print(
+        f"[instances] taxon universe: {sorted(wanted_taxa) if wanted_taxa else 'none (all species)'}",
+        flush=True,
+    )
+    rows, read_stats = load_instances(args.instances, wanted_taxa)
     seqs = read_fasta(args.sequences)
     print(f"[ingest] {read_stats['read']} instance rows, {len(rows)} kept, {len(seqs)} sequences", flush=True)
     if read_stats["duplicate_instance_id"]:

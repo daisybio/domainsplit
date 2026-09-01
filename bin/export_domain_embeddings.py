@@ -4,19 +4,30 @@
 Chunks arrive keyed flat by ``instance_id`` (see ``run_embeddings.py``). The
 consumer -- ``daisybio-domainbenchmark``'s ``bin/features/embeddings.py`` -- reads
 
-    h5[str(domain_id)][instance_key]
+    h5[pfam_id][instance_key]
 
-where ``domain_id`` is ``domain.id`` from the split database and ``instance_key``
-is ``COALESCE(instance_id, 'r' || rowid)`` over ``domain_protein_map``. Only this
+where ``pfam_id`` is the Pfam accession (``PF00069``) and ``instance_key`` is
+``COALESCE(instance_id, 'r' || rowid)`` over ``domain_protein_map``. Only this
 pipeline knows the mapping, so the re-key happens here, against the database, and
 this step replaces the generic HDF5 join: one pass instead of a join followed by
 a second full-file copy.
 
-``domain.id`` is a **surrogate integer**. ``SUBSET_SPLIT_DB`` copies it verbatim
-and ``PRUNE_UNREPRESENTED_DDIS`` deletes without renumbering, so one global file
-is valid across every split database *of the same run* and silently wrong across
-runs. The root attributes exist so a consumer can detect that rather than trust
-it: ``domainsplit_run`` identifies the run that produced both artefacts.
+**The outer key is the Pfam accession, not ``domain.id``.** It used to be
+``domain.id``, which is a surrogate integer: ``SUBSET_SPLIT_DB`` copies it
+verbatim and ``PRUNE_UNREPRESENTED_DDIS`` deletes without renumbering, so a file
+keyed on it was valid across every split database *of the same run* and silently
+wrong across runs -- the failure being a silent lookup of the wrong domain's
+vectors, not an error. ``domain`` is ``UNIQUE(pfam_id)``, so the two are 1:1 and
+the accession carries the same information while meaning the same thing in every
+run. The instance keys already embedded the accession
+(``{family}_{uniprot}_{start}_{end}``), so this makes the two levels agree.
+
+There is deliberately no run identifier on the file. When the key was
+``domain.id`` one was necessary -- a file from another run resolved to the wrong
+domain's vectors and only a recorded run id could catch it. Keyed on the
+accession there is nothing for it to guard: a lookup either finds the family or
+does not. Pairing an embedding file with the databases it belongs to is the
+caller's business.
 """
 
 import argparse
@@ -28,7 +39,7 @@ import sys
 import h5py
 import numpy as np
 
-ROOT_KEY_LAYOUT = "{domain_id}/{instance_id}"
+ROOT_KEY_LAYOUT = "{pfam_id}/{instance_id}"
 
 
 def parse_args():
@@ -38,7 +49,6 @@ def parse_args():
                    help="glob for the staged per-shard HDF5 chunks")
     p.add_argument("--model", required=True, help="model name, recorded as a root attribute")
     p.add_argument("--output-h5", required=True)
-    p.add_argument("--run-id", default="", help="value for the domainsplit_run root attribute")
     p.add_argument("--versions", required=True)
     p.add_argument("--process-name", required=True)
     return p.parse_args()
@@ -55,17 +65,21 @@ def _open_chunk(path):
 
 
 def read_instances(db_path):
-    """``[(domain_id, instance_id, output_key)]`` for every domain instance.
+    """``[(pfam_id, instance_id, output_key)]`` for every domain instance.
 
     ``output_key`` is the benchmark's ``COALESCE(instance_id, 'r' || rowid)``.
     ``instance_id`` is what the chunks are keyed by, and is NULL only for a row no
     embedding can exist for -- the mapping is written once, by INGEST_INSTANCES,
     from the same ``instances.tsv`` the FASTA was keyed from.
+
+    Ordered by accession rather than by ``domain.id`` so the write order, and
+    therefore the file, does not depend on a per-run surrogate either.
     """
     conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
     rows = conn.execute(
-        "SELECT domain_id, instance_id, COALESCE(instance_id, 'r' || rowid) "
-        "FROM domain_protein_map ORDER BY domain_id, rowid"
+        "SELECT d.pfam_id, m.instance_id, COALESCE(m.instance_id, 'r' || m.rowid) "
+        "FROM domain_protein_map AS m JOIN domain AS d ON d.id = m.domain_id "
+        "ORDER BY d.pfam_id, m.rowid"
     ).fetchall()
     conn.close()
     return rows
@@ -84,7 +98,7 @@ def main() -> int:
 
     written = missing = no_instance_id = 0
     dims = set()
-    domains = set()
+    families = set()
     sample_missing = []
 
     with h5py.File(args.output_h5, "w") as out_h5:
@@ -98,7 +112,7 @@ def main() -> int:
         print(f"[export] {len(located)} embedded instances across the chunks", flush=True)
 
         by_chunk = {}
-        for domain_id, instance_id, out_key in rows:
+        for pfam_id, instance_id, out_key in rows:
             if instance_id is None:
                 no_instance_id += 1
                 continue
@@ -108,18 +122,18 @@ def main() -> int:
                 if len(sample_missing) < 10:
                     sample_missing.append(instance_id)
                 continue
-            by_chunk.setdefault(path, []).append((domain_id, instance_id, out_key))
+            by_chunk.setdefault(path, []).append((pfam_id, instance_id, out_key))
 
         for path in chunks:
             todo = by_chunk.get(path)
             if not todo:
                 continue
             with _open_chunk(path) as chunk:
-                for domain_id, instance_id, out_key in todo:
+                for pfam_id, instance_id, out_key in todo:
                     vector = np.asarray(chunk[instance_id], dtype=np.float16)
-                    out_h5.create_dataset(f"{domain_id}/{out_key}", data=vector)
+                    out_h5.create_dataset(f"{pfam_id}/{out_key}", data=vector)
                     dims.add(int(vector.shape[-1]))
-                    domains.add(domain_id)
+                    families.add(pfam_id)
                     written += 1
 
         out_h5.attrs["model"] = args.model
@@ -127,11 +141,10 @@ def main() -> int:
         out_h5.attrs["dim"] = sorted(dims)[0] if len(dims) == 1 else -1
         out_h5.attrs["dtype"] = "float16"
         out_h5.attrs["key_layout"] = ROOT_KEY_LAYOUT
-        out_h5.attrs["n_domains"] = len(domains)
+        out_h5.attrs["n_domains"] = len(families)
         out_h5.attrs["n_instances"] = written
-        out_h5.attrs["domainsplit_run"] = args.run_id
 
-    print(f"[export] wrote {written} vectors under {len(domains)} domains -> {args.output_h5}", flush=True)
+    print(f"[export] wrote {written} vectors under {len(families)} Pfam families -> {args.output_h5}", flush=True)
     if len(dims) > 1:
         print(f"[export] WARNING: mixed embedding dimensions {sorted(dims)}; dim attr set to -1", flush=True)
     if no_instance_id:

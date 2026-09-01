@@ -81,7 +81,7 @@ Create a **subway-map-style overview graphic** for the `daisybio/domainsplit` Ne
 ### `generate_domain_embeddings` (branch line — terminates, does not rejoin)
 
 **In:** ppi-splitting's `sequences.fasta` (already the _domain_ FASTA, keyed by instance id) + the pruned `domainsplit.sqlite3`.
-**Out:** `embeddings/<model>_domain_embeddings.h5`, one file per model, keyed `{domain_id}/{instance_id}`.
+**Out:** `embeddings/<model>_domain_embeddings.h5`, one file per model, keyed `{pfam_id}/{instance_id}`.
 **What:** `SHARD_FASTA` splits the domain FASTA; one GPU task per (model, shard) embeds the **cut domain sequences** and mean-pools each to one vector; `EXPORT_DOMAIN_EMBEDDINGS` re-keys a model's chunks against the database. Three models: ESM3 and ESMC (gated, need `HF_TOKEN`) and ProtT5 (ungated). Protein-level and per-residue embeddings do not exist — a sliced protein embedding carries protein context, which correlates with the interaction partner and would leak into a family-partitioned split. Nothing is written into the database, which is why this is a branch and not a trunk segment.
 
 ### `ENRICH_DDI_DATABASE` (interchange / hub — sequential chain)

@@ -231,7 +231,8 @@ def main():
     master = os.path.join(args.outdir, "domainsplit.sqlite3")
     check(os.path.exists(master), f"{master} does not exist")
     for report in ("reports/source_conflicts.tsv", "reports/pruned_ddis.tsv",
-                   "reports/external_test_dropped.tsv"):
+                   "reports/external_test_dropped.tsv",
+                   "reports/ddi_source_attrition.tsv"):
         check(os.path.exists(os.path.join(args.outdir, report)), f"missing {report}")
 
     found = check_layout(args.outdir)

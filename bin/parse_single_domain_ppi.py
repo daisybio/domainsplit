@@ -3,25 +3,27 @@
 
 A PPI contributes a positive DDI only when *both* interactors are reviewed human
 proteins annotated with exactly one Pfam domain; the DDI is then the pair of
-those two single domains.  Identifiers in the HIPPIE columns may be UniProt
-accessions or entry names (e.g. ``AL1A1_HUMAN``) -- both are resolved via the
-SwissProt map.
+those two single domains.  Interactors are read from HIPPIE's **UniProt accession**
+columns and nothing else: the accession is the identifier every other table in
+this pipeline is keyed by, while an entry name (``AL1A1_HUMAN``) has to be
+resolved through a second map, and gene names are ambiguous often enough that the
+old resolver dropped them.
 
 Emits the normalized external-DDI TSV (``negative=0, source='single_domain_ppi'``);
 insertion happens later, in ``insert_external_sources.py``.
 
-HIPPIE ships in two layouts and the difference is silent, not loud: the classic
-one is ``name_A, entrez_A, name_B, entrez_B, score, info`` while
 ``HIPPIE-current.txt`` is ``uniprot_accession_A, uniprot_name_A, entrez_A,
-uniprot_accession_B, uniprot_name_B, entrez_B, score, info``. Reading the current
-file at the classic offsets puts an entry name where the score is expected, every
-row fails to parse as a float, and the step reports zero DDIs from a 170 MB input
-without erroring. So the header decides the layout, and a file without one falls
-back to the classic offsets.
+uniprot_accession_B, uniprot_name_B, entrez_B, score, info``, and the accession
+columns are located by name from the header. The older layout
+(``name_A, entrez_A, name_B, entrez_B, score, info``) carries no accession at all
+and is **rejected**, loudly: reading it at these offsets would put an entry name
+where the score belongs, every row would fail to parse as a float, and the step
+would report zero DDIs from a 170 MB input without erroring. A hard failure
+naming the missing column is the only outcome that cannot be mistaken for "this
+source contributed nothing".
 """
 
 import argparse
-import itertools
 import json
 import sys
 
@@ -39,20 +41,34 @@ def parse_args():
     return p.parse_args()
 
 
-# Column offsets per layout: (identifier A candidates, identifier B candidates, score).
-LEGACY_LAYOUT = ((0,), (2,), 4)
-CURRENT_LAYOUT = ((0, 1), (3, 4), 6)
+#: Where the accession columns sit in HIPPIE-current.txt, used only if a header is
+#: present but does not name them explicitly.
+DEFAULT_ACCESSION_COLUMNS = (0, 3, 6)
 
 
 def detect_layout(first_line):
-    """``(layout, is_header)`` for HIPPIE's two column layouts."""
+    """``(col_a, col_b, col_score)`` from HIPPIE's header. Raises if it has none.
+
+    Located by name rather than by offset: HIPPIE has changed its column set
+    before, and a positional read of the wrong layout fails silently -- an entry
+    name parses as a bad float, every row is skipped, and the step reports zero
+    DDIs from a 170 MB file.
+    """
     cols = [c.strip().lower() for c in first_line.rstrip("\n").split("\t")]
-    if "score" in cols:
-        a = tuple(i for i, c in enumerate(cols) if c.startswith("uniprot") and c.endswith("_a"))
-        b = tuple(i for i, c in enumerate(cols) if c.startswith("uniprot") and c.endswith("_b"))
-        layout = (a or CURRENT_LAYOUT[0], b or CURRENT_LAYOUT[1], cols.index("score"))
-        return layout, True
-    return LEGACY_LAYOUT, False
+    if "score" not in cols:
+        raise SystemExit(
+            "ERROR: the HIPPIE file has no header row naming a 'score' column, so it "
+            "is the older layout that carries no UniProt accessions. Supply "
+            "HIPPIE-current.txt, whose columns are uniprot_accession_A, "
+            "uniprot_name_A, entrez_A, uniprot_accession_B, uniprot_name_B, "
+            "entrez_B, score, info."
+        )
+    a = [i for i, c in enumerate(cols) if c.startswith("uniprot_accession") and c.endswith("_a")]
+    b = [i for i, c in enumerate(cols) if c.startswith("uniprot_accession") and c.endswith("_b")]
+    if not a or not b:
+        d_a, d_b, _ = DEFAULT_ACCESSION_COLUMNS
+        a, b = a or [d_a], b or [d_b]
+    return a[0], b[0], cols.index("score")
 
 
 def main():
@@ -61,7 +77,6 @@ def main():
     with open(args.swissprot_map) as fh:
         smap = json.load(fh)
     accession_to_pfams = smap["accession_to_pfams"]
-    name_to_accession = smap["name_to_accession"]
 
     # single-domain proteins: accession -> its one Pfam
     single_domain = {
@@ -71,31 +86,23 @@ def main():
     }
     print(f"[single_domain_ppi] single-domain proteins: {len(single_domain)}", flush=True)
 
-    def resolve_pfam(token):
-        """Return the single Pfam of ``token`` (accession or name), else None."""
-        acc = token if token in accession_to_pfams else name_to_accession.get(token)
-        if acc is None:
+    def resolve_pfam(cols, index):
+        """The single Pfam of the accession in column ``index``, else None."""
+        if index >= len(cols):
             return None
-        return single_domain.get(acc)
-
-    def resolve_any(cols, indices):
-        """First of ``indices`` whose identifier is a known single-domain protein."""
-        for i in indices:
-            if i < len(cols):
-                pfam = resolve_pfam(cols[i])
-                if pfam:
-                    return pfam
-        return None
+        return single_domain.get(cols[index].strip())
 
     pairs = []
     n_rows = n_kept = n_unresolved = n_unscored = 0
     with open(args.hippie) as fh:
         first = fh.readline()
-        (col_a, col_b, col_score), is_header = detect_layout(first)
-        print(f"[single_domain_ppi] columns: A={col_a} B={col_b} score={col_score} "
-              f"(header {'present' if is_header else 'absent'})", flush=True)
-        lines = fh if is_header else itertools.chain([first], fh)
-        for line in lines:
+        col_a, col_b, col_score = detect_layout(first)
+        print(
+            f"[single_domain_ppi] accession columns: A={col_a} B={col_b} score={col_score}",
+            flush=True,
+        )
+        # detect_layout only returns on a header row, so `first` is consumed.
+        for line in fh:
             line = line.rstrip("\n")
             if not line:
                 continue
@@ -110,8 +117,8 @@ def main():
                 continue
             if score < args.min_score:
                 continue
-            pfam_a = resolve_any(cols, col_a)
-            pfam_b = resolve_any(cols, col_b)
+            pfam_a = resolve_pfam(cols, col_a)
+            pfam_b = resolve_pfam(cols, col_b)
             if pfam_a is None or pfam_b is None:
                 n_unresolved += 1
                 continue

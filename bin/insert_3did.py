@@ -17,6 +17,10 @@ def parse_args():
     p = argparse.ArgumentParser()
     p.add_argument("--db", required=True, help="domainsplit SQLite (modified in place)")
     p.add_argument("--sqlite-3did", required=True, help="3did SQLite from DOWNLOAD_3DID_SQLITE")
+    p.add_argument(
+        "--counts-out",
+        help="TSV of what this source offered vs. inserted, for REPORT_DDI_ATTRITION",
+    )
     p.add_argument("--versions", required=True)
     p.add_argument("--process-name", required=True)
     return p.parse_args()
@@ -52,8 +56,18 @@ def main():
 
     insert_ddis(conn, pairs, negative=False, source="3did")
     conn.commit()
-    print(f"[3did] n_ddis_source_3did = {count_source(conn, '3did')}", flush=True)
+    inserted = count_source(conn, "3did")
+    print(f"[3did] n_ddis_source_3did = {inserted}", flush=True)
     conn.close()
+
+    # `len(pairs)` is what 3did offered; `inserted` is what survived
+    # canonicalisation and dedup. Only the log carried the first number before,
+    # and the log goes away with the work directory -- so REPORT_DDI_ATTRITION
+    # could not show 3did's first attrition step at all.
+    if args.counts_out:
+        with open(args.counts_out, "w") as fh:
+            fh.write("source\toffered\tinserted\n")
+            fh.write(f"3did\t{len(pairs)}\t{inserted}\n")
 
     with open(args.versions, "w") as f:
         f.write(f'"{args.process_name}":\n')

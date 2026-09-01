@@ -45,6 +45,7 @@ DR   GO; GO:0005856; C:cytoskeleton; IEA:UniProtKB-KW.
 DR   GO; GO:0005515; F:protein binding; IPI:IntAct.
 DR   Pfam; PF00514; Arm; 6.
 DR   Pfam; PF00071; Ras; 1.
+DR   STRING; 9606.ENSP00000263045; -.
 DR   PROSITE; PS50176; ARM_REPEAT; 1.
 SQ   SEQUENCE   30 AA;  3466 MW;  A1B2C3D4E5F6 CRC64;
      MSSRSVSRSR ARSRSPRRSR SRSRSPAYKR
@@ -57,6 +58,7 @@ OS   Mus musculus (Mouse).
 OX   NCBI_TaxID=10090;
 DR   GO; GO:0000001; C:nope; IEA:X.
 DR   Pfam; PF99999; Nope; 1.
+DR   STRING; 10090.ENSMUSP00000000001; -.
 SQ   SEQUENCE   12 AA;  1000 MW;  FFFF CRC64;
      MSSRSVSRSR AR
 //
@@ -77,12 +79,13 @@ def run(tmp, taxon_ids):
     with gzip.open(dat, "wt") as fh:
         fh.write(DAT)
     out = {name: os.path.join(tmp, name) for name in
-           ("go.tsv.gz", "pfam.tsv.gz", "seq.fasta.gz")}
+           ("go.tsv.gz", "pfam.tsv.gz", "seq.fasta.gz", "string.tsv.gz")}
     proc = subprocess.run(
         [sys.executable, PARSER, "--dat", dat,
          "--go-terms", out["go.tsv.gz"],
          "--pfam-map", out["pfam.tsv.gz"],
          "--sequences", out["seq.fasta.gz"],
+         "--string-map", out["string.tsv.gz"],
          "--taxon-ids", taxon_ids,
          "--versions", os.path.join(tmp, "versions.yml"),
          "--process-name", "TEST"],
@@ -90,6 +93,39 @@ def run(tmp, taxon_ids):
     )
     assert proc.returncode == 0, proc.stderr
     return {name: gzip.open(path, "rt").read() for name, path in out.items()}
+
+
+def test_string_map_replaces_the_idmapping_download():
+    """The STRING map must be byte-compatible with what insert_ppi.py already reads.
+
+    That script's loader splits each line on tabs into (uniprot, id_type, symbol)
+    and keeps the rows whose type is "STRING", so the map is a drop-in for the
+    per-organism <ORG>_<taxid>_idmapping.dat.gz it replaces -- and unlike that file
+    it follows --taxon-ids, so it covers exactly the species the run's protein
+    universe does.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        human = run(tmp, "9606")["string.tsv.gz"].splitlines()
+        assert human == ["O00192\tSTRING\t9606.ENSP00000263045"], human
+
+    with tempfile.TemporaryDirectory() as tmp:
+        every = run(tmp, "")["string.tsv.gz"].splitlines()
+        assert every == [
+            "O00192\tSTRING\t9606.ENSP00000263045",
+            "P99999\tSTRING\t10090.ENSMUSP00000000001",
+        ], every
+
+    # insert_ppi.py's own loader, run over the file it will actually be handed.
+    sys.path.insert(0, os.path.dirname(PARSER))
+    from insert_ppi import load_uniprot_id_mapping  # noqa: E402
+
+    with tempfile.TemporaryDirectory() as tmp:
+        run(tmp, "")
+        mapping = load_uniprot_id_mapping(os.path.join(tmp, "string.tsv.gz"), "STRING")
+    assert mapping == {
+        "9606.ENSP00000263045": "O00192",
+        "10090.ENSMUSP00000000001": "P99999",
+    }, mapping
 
 
 def test_human_filter_and_output_shapes():
@@ -142,6 +178,7 @@ def test_taxon_matching_nothing_is_fatal():
              "--go-terms", os.path.join(tmp, "go.tsv.gz"),
              "--pfam-map", os.path.join(tmp, "pfam.tsv.gz"),
              "--sequences", os.path.join(tmp, "seq.fasta.gz"),
+             "--string-map", os.path.join(tmp, "string.tsv.gz"),
              "--taxon-ids", "7227",
              "--versions", os.path.join(tmp, "versions.yml"),
              "--process-name", "TEST"],
@@ -153,6 +190,7 @@ def test_taxon_matching_nothing_is_fatal():
 
 if __name__ == "__main__":
     test_human_filter_and_output_shapes()
+    test_string_map_replaces_the_idmapping_download()
     test_no_filter_keeps_every_species()
     test_taxon_matching_nothing_is_fatal()
-    print("OK: parse_swissprot_dat emits the three shapes its consumers parse")
+    print("OK: parse_swissprot_dat emits the four shapes its consumers parse")

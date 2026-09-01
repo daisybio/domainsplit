@@ -55,7 +55,16 @@ workflow INGEST_SPLITS {
     instance_splits     // channel of [method, split, *_instances.csv]
 
     main:
-    instances = INGEST_INSTANCES(domainsplit_db_in, instances_tsv, sequences_fasta)
+    // The taxon universe is params.swissprot_taxon_ids -- the same value
+    // PARSE_SWISSPROT filtered the protein file by. INGEST_INSTANCES asserts the
+    // instances fall inside it, which is what catches a run whose instance_tier
+    // and swissprot_taxon_ids disagree.
+    instances = INGEST_INSTANCES(
+        domainsplit_db_in,
+        instances_tsv,
+        sequences_fasta,
+        params.swissprot_taxon_ids,
+    )
 
     family_ordered = orderedSplits(family_splits)
     negatives = INGEST_SAMPLED_NEGATIVES(

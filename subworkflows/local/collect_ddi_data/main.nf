@@ -104,6 +104,9 @@ workflow COLLECT_DDI_DATA {
     emit:
     domainsplit_db
     external_ddis
+    // What 3did offered before dedup. Emitted rather than published because
+    // REPORT_DDI_ATTRITION is the only consumer and reads it from the channel.
+    offered_counts    = INSERT_3DID.out.counts
     candidate_network = candidates.candidate_network
     pfam_mapping      = candidates.pfam_mapping
     versions          = ch_versions

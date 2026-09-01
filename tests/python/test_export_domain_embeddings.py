@@ -4,7 +4,7 @@
 This is the seam that fails *silently*. `daisybio-domainbenchmark` reads a domain
 encoding as
 
-    h5[str(domain_id)][COALESCE(instance_id, 'r' || rowid)]
+    h5[pfam_id][COALESCE(instance_id, 'r' || rowid)]
 
 and skips any instance pair it cannot resolve. A key layout that drifts therefore
 does not raise: it yields zero training rows, which looks exactly like a model
@@ -71,11 +71,11 @@ def build(tmp):
     return db
 
 
-def run_export(tmp, db, model="esm3", run_id="sess-1234"):
+def run_export(tmp, db, model="esm3"):
     out = os.path.join(tmp, f"{model}_domain_embeddings.h5")
     done = subprocess.run(
         [sys.executable, EXPORT, "--db", db, "--chunk-glob", "chunk*",
-         "--model", model, "--output-h5", out, "--run-id", run_id,
+         "--model", model, "--output-h5", out,
          "--versions", os.path.join(tmp, "versions.yml"), "--process-name", "TEST:EXPORT"],
         env=ENV, cwd=tmp, capture_output=True, text=True,
     )
@@ -88,18 +88,20 @@ def test_layout_matches_the_benchmark_lookup():
         db = build(tmp)
         out, stdout = run_export(tmp, db)
 
-        # The benchmark's own query, verbatim.
+        # The benchmark's own query, verbatim -- resolving domain_id to its Pfam
+        # accession, which is what the outer HDF5 key is.
         conn = sqlite3.connect(db)
         rows = conn.execute(
-            "SELECT domain_id, COALESCE(instance_id, 'r' || rowid) FROM domain_protein_map"
+            "SELECT d.pfam_id, COALESCE(m.instance_id, 'r' || m.rowid) "
+            "FROM domain_protein_map AS m JOIN domain AS d ON d.id = m.domain_id"
         ).fetchall()
         conn.close()
         assert len(rows) == len(INSTANCES), rows
 
         with h5py.File(out, "r") as h5:
             resolved = []
-            for domain_id, key in rows:
-                group = str(domain_id)
+            for pfam_id, key in rows:
+                group = pfam_id
                 if key == UNEMBEDDED:
                     # No vector was produced for it, so it must simply be absent --
                     # not present-but-empty, which would train on zeros.
@@ -112,10 +114,12 @@ def test_layout_matches_the_benchmark_lookup():
                 resolved.append(key)
         assert len(resolved) == len(INSTANCES) - 1, resolved
 
-        # The two instances of PF00001 are two datasets in one group.
+        # The two instances of PF00001 are two datasets in one group, and the
+        # group is named by the accession -- not by a surrogate that changes run
+        # to run, which is the whole point of the key.
         with h5py.File(out, "r") as h5:
-            pf1 = str(rows[0][0])
-            assert sorted(h5[pf1].keys()) == ["PF00001_P11111_10_20", "PF00001_P11111_50_60"]
+            assert sorted(h5["PF00001"].keys()) == ["PF00001_P11111_10_20", "PF00001_P11111_50_60"]
+            assert all(g.startswith("PF") for g in h5.keys()), sorted(h5.keys())
 
         assert "1 instances have no esm3 embedding" in stdout, stdout
 
@@ -123,19 +127,19 @@ def test_layout_matches_the_benchmark_lookup():
 def test_root_attributes_are_the_cross_run_guard():
     with tempfile.TemporaryDirectory() as tmp:
         db = build(tmp)
-        out, _ = run_export(tmp, db, model="prott5", run_id="sess-abcd")
+        out, _ = run_export(tmp, db, model="prott5")
         with h5py.File(out, "r") as h5:
             attrs = dict(h5.attrs)
         assert attrs["model"] == "prott5"
         assert attrs["pooling"] == "mean"
         assert attrs["dim"] == DIM
         assert attrs["dtype"] == "float16"
-        assert attrs["key_layout"] == "{domain_id}/{instance_id}"
+        assert attrs["key_layout"] == "{pfam_id}/{instance_id}"
         assert attrs["n_domains"] == 2, attrs          # PF00001 and PF00002
         assert attrs["n_instances"] == len(INSTANCES) - 1, attrs
-        # domain.id is a surrogate integer: without this a consumer cannot tell a
-        # file from another run apart from one that belongs to its databases.
-        assert attrs["domainsplit_run"] == "sess-abcd"
+        # No run identifier: with accession keys there is nothing for one to
+        # guard, and a stale one would invite exactly the trust it cannot earn.
+        assert "domainsplit_run" not in attrs, attrs
 
 
 def test_total_key_mismatch_is_fatal():
@@ -147,7 +151,7 @@ def test_total_key_mismatch_is_fatal():
         os.remove(os.path.join(tmp, "chunk2"))
         done = subprocess.run(
             [sys.executable, EXPORT, "--db", db, "--chunk-glob", "chunk*", "--model", "esmc",
-             "--output-h5", os.path.join(tmp, "esmc_domain_embeddings.h5"), "--run-id", "x",
+             "--output-h5", os.path.join(tmp, "esmc_domain_embeddings.h5"),
              "--versions", os.path.join(tmp, "v.yml"), "--process-name", "TEST"],
             env=ENV, cwd=tmp, capture_output=True, text=True,
         )

@@ -14,6 +14,7 @@ include { EXPORT_SPLIT_DDIS           } from '../modules/local/export_split_ddis
 include { INGEST_SPLITS               } from '../subworkflows/local/ingest_splits/main.nf'
 include { INSERT_EXTERNAL_SOURCES     } from '../modules/local/insert_external_sources/main.nf'
 include { PRUNE_UNREPRESENTED_DDIS    } from '../modules/local/prune_unrepresented_ddis/main.nf'
+include { REPORT_DDI_ATTRITION        } from '../modules/local/report_ddi_attrition/main.nf'
 include { generate_domain_embeddings  } from '../modules/local/domain_embeddings/main.nf'
 include { ENRICH_DDI_DATABASE         } from '../subworkflows/local/enrich_ddi_database/main.nf'
 include { BUILD_EXTERNAL_TEST         } from '../modules/local/build_external_test/main.nf'
@@ -143,14 +144,53 @@ workflow DOMAINSPLIT {
 main:
     ch_versions = Channel.empty()
 
-    input_uniprot_id_mapping = file(params.url_uniprot_id_mapping)
-    input_string             = file(params.url_string)
-    input_pfam2go            = file(params.url_pfam2go)
+    //
+    // Two knobs, one outcome, and the failure mode is silence.
+    //
+    // `swissprot_taxon_ids` decides which proteins exist at all -- it is the filter
+    // PARSE_SWISSPROT applies and the universe FETCH_DOMAIN_META samples out of.
+    // `instance_tier` decides which strata of that universe are eligible. Asking
+    // for `any` against a universe parsed for one taxon is a no-op that looks like
+    // it worked: the run completes, every instance is human, and nothing says so.
+    // Asking for `human_only` against a universe with no human in it produces zero
+    // instances and a pruned-empty database several steps later.
+    //
+    // Checked here rather than in a process so it costs nothing and fails before
+    // the first task is submitted.
+    //
+    def taxa = params.swissprot_taxon_ids.toString().trim()
+    if (params.instance_tier == 'any' && taxa) {
+        error("--instance_tier any needs every species in the protein universe, but --swissprot_taxon_ids is '${taxa}', so PARSE_SWISSPROT keeps only those and 'any' would select from a single-taxon universe. Clear --swissprot_taxon_ids (pass an empty string), or use --instance_tier human_only.")
+    }
+    if (params.instance_tier == 'human_only' && taxa && !(taxa.tokenize(',').collect { t -> t.trim() }.contains('9606'))) {
+        error("--instance_tier human_only samples human instances, but --swissprot_taxon_ids is '${taxa}', which does not include 9606 -- the universe would contain no human protein and every family would end with zero instances. Add 9606, or use --instance_tier any with an empty --swissprot_taxon_ids.")
+    }
 
     //
-    // One pass over the SwissProt flat file, three consumers. See the
+    // STRING is the one enrichment input that is still per-species. Its
+    // UniProt mapping is not -- that comes from the flat file's own DR STRING
+    // lines and follows `swissprot_taxon_ids` -- but the links file names one
+    // taxon in its URL, so a wider run would enrich nothing outside it and say
+    // nothing about it. Refuse instead. See "What is still missing for true
+    // any-species" in the plan: an all-species links file exists, and using it
+    // needs insert_ppi.py to stream rather than load a DataFrame.
+    //
+    if (!taxa && params.url_string.toString().contains('/9606.')) {
+        error("--swissprot_taxon_ids is empty (every species) but --url_string is still the human-only STRING file, so no non-human protein would receive a single interaction and nothing would report that. Supply a STRING links file covering the species you want, or pin --swissprot_taxon_ids to 9606.")
+    }
+
+    input_string  = file(params.url_string)
+    input_pfam2go = file(params.url_pfam2go)
+
+    //
+    // One pass over the SwissProt flat file, five consumers. See the
     // `url_uniprot_swissprot_dat` comment in nextflow.config for why this is a
     // parse of a static FTP file rather than two REST stream queries.
+    //
+    // The fifth consumer is FETCH_DOMAIN_META, which needs it as the protein
+    // universe -- it is handed the raw file rather than a PARSE_SWISSPROT output,
+    // because it needs sequences and taxa for every accession Pfam might name,
+    // which is a superset of what the enrichment outputs carry.
     //
     PARSE_SWISSPROT(
         file(params.url_uniprot_swissprot_dat),
@@ -161,6 +201,9 @@ main:
     input_uniprot_go_terms  = PARSE_SWISSPROT.out.go_terms
     input_uniprot_sequences = PARSE_SWISSPROT.out.sequences
     input_swissprot_pfam    = PARSE_SWISSPROT.out.pfam_tsv
+    // Entry -> STRING id for every species the taxon filter admits, replacing the
+    // per-organism idmapping download INSERT_PPI used to take.
+    input_string_map        = PARSE_SWISSPROT.out.string_map
 
     empty_db = INIT_DOMAINSPLIT_DB().domainsplit_db
 
@@ -198,9 +241,13 @@ main:
     clans_ch = params.pfam_clans
         ? channel.value(file(params.pfam_clans, checkIfExists: true))
         : channel.value([])
-    fasta_ch = params.pfam_fasta
-        ? channel.value(file(params.pfam_fasta, checkIfExists: true))
-        : channel.value([])
+    regions_ch = params.pfam_regions
+        ? channel.value(file(params.pfam_regions, checkIfExists: true))
+        : channel.value(file(params.url_pfam_regions))
+    // The protein universe. The same flat file PARSE_SWISSPROT reads, handed over
+    // raw: FETCH_DOMAIN_META needs a sequence and a taxon for every accession Pfam
+    // might name, which is wider than any of the parsed outputs.
+    sprot_ch = channel.value(file(params.url_uniprot_swissprot_dat))
     cache_dir = params.interpro_cache ? file(params.interpro_cache).toAbsolutePath().toString() : ''
     if (cache_dir && !file(cache_dir).exists()) {
         log.warn "--interpro_cache ${cache_dir} does not exist yet; FETCH_DOMAIN_META will create it."
@@ -209,15 +256,16 @@ main:
     fetched = FETCH_DOMAIN_META(
         families.map { fams -> tuple([id: 'union'], fams) },
         clans_ch,
-        fasta_ch,
+        regions_ch,
+        sprot_ch,
         channel.value(cache_dir),
     )
 
     // The families Pfam had nothing usable for, one row per family with a
     // `reason` column. Taken from the channel, never read back from the
     // published path. Three reasons and they are not interchangeable:
-    // `no_eligible_instances` is a consequence of `instance_tier`, which this
-    // pipeline pins to `human_only`, so it fires in bulk and would bury the
+    // `no_eligible_instances` is a consequence of `instance_tier`, which defaults
+    // to `human_only`, so it can fire in bulk and would bury the
     // other two -- `dead` and `not_in_pfam` are facts about Pfam, and a
     // mistyped accession arrives as `not_in_pfam`. So they are counted apart
     // and only the Pfam-fact reasons warn.
@@ -334,6 +382,29 @@ main:
     domainsplit_db = pruned.domainsplit_db
 
     //
+    // Where each source's DDIs went, in one table.
+    //
+    // PPI_SPLITTING's own attrition waterfall begins at `split_ddis` -- so the
+    // 3did DDIs that `instance_tier = human_only` stranded before the splitting
+    // stage are, correctly, absent from it, and there was no published artifact
+    // showing them at all. The counters existed only in three `.command.log`
+    // files, which do not survive the work directory.
+    //
+    // Keyed on the pruned DB, so `surviving` means "in the published master".
+    // Every other input is a file that is published anyway, which is what makes
+    // the report reproducible from a finished run.
+    //
+    attrition = REPORT_DDI_ATTRITION(
+        domainsplit_db,
+        pruned.pruned,
+        split_ddis,
+        external_ddis,
+        inserted.conflicts,
+        COLLECT_DDI_DATA.out.offered_counts,
+        '3did',
+    )
+
+    //
     // The external test set: DDIs from PPIDM / single_domain_ppi / negatome,
     // none of which can have appeared in any split of any set. Written as the
     // `test` split of every external_test method directory.
@@ -403,7 +474,7 @@ main:
         protein_domain_map,
         input_uniprot_go_terms,
         input_string,
-        input_uniprot_id_mapping,
+        input_string_map,
     )
 
     enriched_db = ENRICH_DDI_DATABASE.out.domainsplit_db
@@ -440,6 +511,7 @@ main:
         INGEST_SPLITS.out.versions,
         INSERT_EXTERNAL_SOURCES.out.versions,
         PRUNE_UNREPRESENTED_DDIS.out.versions,
+        REPORT_DDI_ATTRITION.out.versions,
         generate_domain_embeddings.out.versions,
         ENRICH_DDI_DATABASE.out.versions,
         BUILD_EXTERNAL_TEST.out.versions,
@@ -462,6 +534,7 @@ emit:
     domain_embeddings = generate_domain_embeddings.out.embeddings
     candidate_network = candidate_network
     source_conflicts  = inserted.conflicts
+    ddi_attrition     = attrition.report
     bias_analysis     = ppi.multiqc_report
     dropped_families  = dropped_families
 }

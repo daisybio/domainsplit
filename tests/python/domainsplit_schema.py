@@ -40,6 +40,7 @@ CREATE TABLE protein (
     id INTEGER PRIMARY KEY,
     uniprot_id,
     sequence,
+    taxon_id,
     UNIQUE(uniprot_id)
 );
 CREATE TABLE protein_go_terms(

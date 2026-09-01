@@ -9,8 +9,13 @@ process INSERT_3DID {
     path sqlite_3did
 
     output:
-    path "domainsplit.sqlite3", emit: domainsplit_db
-    path "versions.yml",        emit: versions
+    path "domainsplit.sqlite3",   emit: domainsplit_db
+    // The pairs 3did offered, before this step's dedup and before the
+    // human-instance filter downstream. It is the only place that number exists
+    // -- the DB keeps unique pairs -- and REPORT_DDI_ATTRITION's `offered`
+    // column for 3did comes from here.
+    path "insert_3did_counts.tsv", emit: counts
+    path "versions.yml",           emit: versions
 
     script:
     """
@@ -25,6 +30,7 @@ process INSERT_3DID {
     insert_3did.py \\
         --db domainsplit.sqlite3 \\
         --sqlite-3did ${sqlite_3did} \\
+        --counts-out insert_3did_counts.tsv \\
         --versions versions.yml \\
         --process-name "${task.process}"
     """

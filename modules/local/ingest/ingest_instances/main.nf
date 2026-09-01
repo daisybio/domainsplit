@@ -8,6 +8,7 @@ process INGEST_INSTANCES {
     path domainsplit_db_in, stageAs: 'input.domainsplit.sqlite3'
     path instances_tsv
     path sequences_fasta
+    val  taxon_ids
 
     output:
     path "domainsplit.sqlite3",             emit: domainsplit_db
@@ -28,6 +29,7 @@ process INGEST_INSTANCES {
         --db domainsplit.sqlite3 \\
         --instances ${instances_tsv} \\
         --sequences ${sequences_fasta} \\
+        --taxon-ids "${taxon_ids.toString().trim()}" \\
         --mapping-out protein_domain_mapping.csv.gz \\
         --versions versions.yml \\
         --process-name "${task.process}"

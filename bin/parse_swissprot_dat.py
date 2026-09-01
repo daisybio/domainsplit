@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Parse the UniProt-SwissProt flat file into the three TSV/FASTA inputs the
+"""Parse the UniProt-SwissProt flat file into the four TSV/FASTA inputs the
 enrichment chain used to fetch separately.
 
 One pass over ``uniprot_sprot.dat.gz`` (a static FTP file that transfers at full
@@ -18,12 +18,20 @@ produced, so ``insert_protein_go_terms.py``, ``build_swissprot_pfam_map.py`` and
                    ``accession,id,gene_names,xref_pfam`` stream.
 * ``--sequences``  ``>sp|ACC|ENTRY_NAME ...`` FASTA.gz, the same headers
                    ``uniprot_sprot.fasta.gz`` carries.
+* ``--string-map`` ``Entry\tSTRING`` TSV.gz, one row per ``DR   STRING;`` id, in
+                   the ``uniprot_id\tid_type\tsymbol`` shape ``insert_ppi.py``
+                   already reads -- so it is a drop-in replacement for the
+                   per-organism ``<ORG>_<taxid>_idmapping.dat.gz`` download, and
+                   unlike that file it covers **every** reviewed species from the
+                   one pass we were already making. STRING ids carry their own
+                   taxon prefix (``9606.ENSP…``) and are globally unique, so a
+                   multi-species map joins correctly with no taxon bookkeeping.
 
 ``--taxon-ids`` restricts the output to the given NCBI taxonomy ids; omit it (or
 pass an empty string) to keep every reviewed entry. The default at the pipeline
-level is 9606, because ``ingest_instances.py`` rejects any non-human instance and
-so every ``protein`` row is human -- but nothing here is human-specific, and
-widening the pipeline to more species is a parameter change, not a code change.
+level is 9606, and it is the single knob that decides the protein universe for the
+whole run: ``instance_tier`` selects from within it, and ``ingest_instances.py``
+asserts against it. Nothing here is human-specific.
 """
 
 import argparse
@@ -46,6 +54,7 @@ def parse_args():
     p.add_argument("--go-terms", required=True, help="output TSV.gz")
     p.add_argument("--pfam-map", required=True, help="output TSV.gz")
     p.add_argument("--sequences", required=True, help="output FASTA.gz")
+    p.add_argument("--string-map", required=True, help="output TSV.gz: Entry -> STRING id")
     p.add_argument("--taxon-ids", default="",
                    help="comma-separated NCBI taxon ids; empty keeps every entry")
     p.add_argument("--versions", required=True)
@@ -72,8 +81,8 @@ def gene_tokens(gn_lines):
     return tokens
 
 
-def flush(entry, out_go, out_pfam, out_fasta, stats):
-    """Write one finished entry to the three outputs."""
+def flush(entry, out_go, out_pfam, out_fasta, out_string, stats):
+    """Write one finished entry to the four outputs."""
     acc = entry["acc"]
     if not acc:
         stats["no_accession"] += 1
@@ -100,10 +109,18 @@ def flush(entry, out_go, out_pfam, out_fasta, stats):
             out_fasta.write(seq[i:i + 60] + "\n")
         stats["with_sequence"] += 1
 
+    # One row per STRING id, matching load_uniprot_id_mapping()'s
+    # "uniprot \t id_type \t symbol" expectation. An entry usually has one; a few
+    # carry several and every one of them is a valid join key.
+    for string_id in entry["string"]:
+        out_string.write(f"{acc}\tSTRING\t{string_id}\n")
+    if entry["string"]:
+        stats["with_string"] += 1
+
 
 def new_entry():
     return {"acc": "", "id": "", "de": "", "os": "", "ox": "",
-            "gn": [], "go": [], "pfam": [], "seq": [], "in_seq": False}
+            "gn": [], "go": [], "pfam": [], "string": [], "seq": [], "in_seq": False}
 
 
 def main():
@@ -115,7 +132,7 @@ def main():
     )
 
     stats = dict.fromkeys(
-        ("entries", "kept", "with_go", "with_sequence", "single_pfam",
+        ("entries", "kept", "with_go", "with_sequence", "with_string", "single_pfam",
          "wrong_taxon", "no_accession"), 0
     )
     entry = new_entry()
@@ -129,6 +146,7 @@ def main():
         gzip.open(args.go_terms, "wt", newline="") as out_go,
         gzip.open(args.pfam_map, "wt", newline="") as out_pfam,
         gzip.open(args.sequences, "wt", newline="") as out_fasta,
+        gzip.open(args.string_map, "wt", newline="") as out_string,
     ):
         out_go.write("Entry\tGene Ontology IDs\n")
         out_pfam.write("Entry\tEntry Name\tGene Names\tPfam\n")
@@ -139,7 +157,7 @@ def main():
             if tag == "//":
                 stats["entries"] += 1
                 if not skipping:
-                    flush(entry, out_go, out_pfam, out_fasta, stats)
+                    flush(entry, out_go, out_pfam, out_fasta, out_string, stats)
                 entry = new_entry()
                 skipping = False
                 continue
@@ -181,6 +199,11 @@ def main():
                     pfam = body[6:].split(";")[0].strip()
                     if pfam and pfam not in entry["pfam"]:
                         entry["pfam"].append(pfam)
+                elif body.startswith("STRING; "):
+                    # "DR   STRING; 9606.ENSP00000269305; -."
+                    string_id = body[8:].split(";")[0].strip()
+                    if string_id and string_id not in entry["string"]:
+                        entry["string"].append(string_id)
             elif tag == "SQ":
                 entry["in_seq"] = True
 

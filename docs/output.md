@@ -78,12 +78,12 @@ Set `--ppi_splitting_multi_negset false` and this drops to 3 directories / 11 da
 One mean-pooled `float16` vector per **domain instance** per model, keyed
 
 ```
-h5[str(domain_id)][instance_id]
+h5[pfam_id][instance_id]
 ```
 
-where `domain_id` is `domain.id` and `instance_id` is `domain_protein_map.instance_id` — precisely
-`h5[str(domain_id)][COALESCE(instance_id, 'r' || rowid)]` over the split database's
-`domain_protein_map`.
+where `pfam_id` is the Pfam accession (`PF00069`) and `instance_id` is
+`domain_protein_map.instance_id` — precisely `h5[pfam_id][COALESCE(instance_id, 'r' || rowid)]` over
+the split database's `domain_protein_map`, joined to `domain` for the accession.
 
 Only the **cut domain sequence** is embedded, never the parent protein. A per-residue protein
 embedding sliced to a domain's coordinates still carries protein context, and protein context
@@ -91,12 +91,15 @@ correlates with the interaction partner — which would smuggle protein identity
 was partitioned on families.
 
 Root attributes on each file: `model`, `pooling`, `dim`, `dtype`, `key_layout`, `n_domains`,
-`n_instances`, `domainsplit_run`.
+`n_instances`.
 
-> [!IMPORTANT]
-> `domain.id` is a **surrogate integer**. One embedding file is valid across every split database of
-> the same run, and silently wrong across runs. Check `domainsplit_run` before pairing an embedding
-> file with databases you did not produce together.
+> [!NOTE]
+> The outer key used to be `domain.id`, a **surrogate integer**, which made a file valid across every
+> split database of the same run and silently wrong across runs — the failure mode being a successful
+> lookup of the wrong domain's vectors. `domain` is `UNIQUE(pfam_id)`, so the accession is the same
+> information with run-independent meaning. There is deliberately no run identifier on the file: with
+> accession keys a lookup either finds the family or does not, so pairing an embedding file with the
+> databases it belongs to is the caller's business.
 
 Which models run is `--embedding_models_domainbench` (default `esm3,esmc,prott5`); set it empty to
 skip embedding entirely. ESM3 and ESMC need `HF_TOKEN`; ProtT5 does not.

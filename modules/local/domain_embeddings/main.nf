@@ -23,7 +23,10 @@
   - One model per task, not all of them per task: independent retries and a
     per-model batch size, and a shard that OOMs costs one model.
   - EXPORT_DOMAIN_EMBEDDINGS takes the database as well as the chunks, because
-    only the database knows `domain.id` -- see bin/export_domain_embeddings.py.
+    only the database maps an instance id to its Pfam family -- see
+    bin/export_domain_embeddings.py. The published key is the Pfam accession,
+    deliberately not `domain.id`: that surrogate differs between runs, so a file
+    keyed on it read the wrong domain's vectors rather than failing.
 */
 
 include { SHARD_FASTA } from '../util/main.nf'
@@ -88,7 +91,7 @@ process GENERATE_DOMAIN_EMBEDDINGS_CHUNK {
     """
 }
 
-// Collect one model's chunks and re-key them to {domain_id}/{instance_id}.
+// Collect one model's chunks and re-key them to {pfam_id}/{instance_id}.
 process EXPORT_DOMAIN_EMBEDDINGS {
     tag { model }
     label 'process_medium'
@@ -109,7 +112,6 @@ process EXPORT_DOMAIN_EMBEDDINGS {
         --chunk-glob 'chunk*' \\
         --model ${model} \\
         --output-h5 "${model}_domain_embeddings.h5" \\
-        --run-id "${workflow.sessionId}" \\
         --versions versions.yml \\
         --process-name "${task.process}"
     """
@@ -118,7 +120,7 @@ process EXPORT_DOMAIN_EMBEDDINGS {
 workflow generate_domain_embeddings {
     take:
     domain_sequences   // ppi-splitting's sequences.fasta, keyed by instance id
-    domainsplit_db     // the pruned master; supplies domain.id
+    domainsplit_db     // the pruned master; supplies the instance -> Pfam family map
 
     main:
     // Validated here rather than in the schema: nf-schema can check the string's

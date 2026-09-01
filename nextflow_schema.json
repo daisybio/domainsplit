@@ -49,15 +49,21 @@
                     "default": "https://3did.irbbarcelona.org/download/current/3did.sql.gz",
                     "fa_icon": "fas fa-link"
                 },
-                "url_uniprot_id_mapping": {
+                "url_pfam_regions": {
                     "type": "string",
-                    "description": "URL of the UniProt id-mapping file (per organism).",
-                    "default": "https://ftp.uniprot.org/pub/databases/uniprot/current_release/knowledgebase/idmapping/by_organism/HUMAN_9606_idmapping.dat.gz",
+                    "description": "URL or path of Pfam-A.regions.tsv.gz, FETCH_DOMAIN_META's instance source: every Pfam region of every reference-proteome protein, with no redundancy reduction. Deliberately not Pfam-A.fasta, which is 90% non-redundant and drops the human member of well-conserved families.",
+                    "default": "https://ftp.ebi.ac.uk/pub/databases/Pfam/current_release/Pfam-A.regions.tsv.gz",
                     "fa_icon": "fas fa-link"
+                },
+                "pfam_regions": {
+                    "type": "string",
+                    "format": "file-path",
+                    "description": "Local Pfam-A.regions.tsv.gz, skipping the ~4.7 GB transfer.",
+                    "fa_icon": "fas fa-file"
                 },
                 "url_uniprot_swissprot_dat": {
                     "type": "string",
-                    "description": "URL or path of the UniProt-SwissProt flat file. PARSE_SWISSPROT reads it once and emits the GO-term TSV, the accession-to-Pfam TSV and the protein FASTA, replacing two throttled rest.uniprot.org stream queries.",
+                    "description": "URL or path of the UniProt-SwissProt flat file. PARSE_SWISSPROT reads it once and emits the GO-term TSV, the accession-to-Pfam TSV, the protein FASTA and the STRING-id map, replacing two throttled rest.uniprot.org stream queries and the per-organism idmapping download. It is also FETCH_DOMAIN_META's protein universe: Pfam-A.regions carries coordinates only, so the domain sequence and taxon come from here.",
                     "default": "https://ftp.uniprot.org/pub/databases/uniprot/current_release/knowledgebase/complete/uniprot_sprot.dat.gz",
                     "fa_icon": "fas fa-link"
                 },
