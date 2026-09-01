@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Delete DDIs that no domain instance can represent, and the rows they stranded.
 
-A Pfam family can end up with zero instances: ``--tier human_only`` drops
+A Pfam family can end up with zero instances: a narrow ``--instance_tier`` drops
 families whose strata are all non-human, and a dead or mistyped accession never
 resolves at all.  A DDI touching such a family cannot be turned into an instance
 pair, so it cannot be split, cannot be embedded, and cannot appear in the
@@ -16,7 +16,7 @@ step cleans up afterwards.
 Deleted, in order:
 
 1. every DDI where either family has no ``domain_protein_map`` row, whatever its
-   source -- 3did included, since the orphan 3did DDIs that ``human_only``
+   source -- 3did included, since the orphan 3did DDIs that a narrow tier
    strands are exactly this case;
 2. every ``domain`` row no surviving DDI references (this cascades to its
    ``domain_protein_map`` rows);

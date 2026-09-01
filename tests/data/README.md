@@ -1,14 +1,14 @@
 > **Instance source changed.** Domain instances now come from
 > `pfam/Pfam-A.regions.tsv.gz` (every Pfam region of every reference-proteome
-> protein) joined to `uniprot_sprot.dat.gz`, which supplies the parent sequence and
-> the taxon. `pfam/Pfam-A.fasta.gz` is gone: Pfam publishes it 90 % non-redundant,
+> protein) joined to `uniprot_universe.dat.gz`, which supplies the parent sequence,
+> the taxon and the review flag. `pfam/Pfam-A.fasta.gz` is gone: Pfam publishes it 90 % non-redundant,
 > which drops the human member of well-conserved families. `uniprot_id_mapping.dat.gz`
 > is gone too — the STRING map is built from the flat file's own `DR STRING;` lines.
 > The `interpro_cache` fixture keeps only `Pfam-A.dead`; `reviewed.list` and
 > `speclist.txt` existed solely for the old code path.
 >
 > `Pfam-A.regions.tsv.gz` was derived from the fixture set it replaces, and every
-> one of its 1,122 regions slices out of the corresponding `uniprot_sprot.dat.gz`
+> one of its regions slices out of the corresponding `uniprot_universe.dat.gz`
 > sequence exactly. **`tests/bin/make_test_fixtures.py` has not been updated to
 > regenerate it** — see the note at the end of this file.
 
@@ -25,7 +25,7 @@ The fixture covers **85 Pfam families / 333 3did DDIs** (raised from a dozen, th
 40, then 85 — each time because `SAMPLE_NEGATIVES_ILP`'s neg_ratio=1.0 candidate
 sampling ran out of pairs in the smallest split; see "Candidate coverage" below and
 `PLAN_ppi_splitting_integration.md`). Which families is not a free choice: the
-pipeline runs `instance_tier = human_only`, so a family without human domain
+pipeline runs `instance_tier = human_reviewed`, so a family without human domain
 instances is dropped by `PRUNE_UNREPRESENTED_DDIS`, and a pair whose two
 families are not *both* in the fixture cannot reach the external test set. The
 generator therefore takes one pass over the real `Pfam-A.fasta.gz`, keeps the
@@ -59,16 +59,19 @@ their real `start`/`end` offsets.
 
 | fixture                                | maps to                                  |
 | -------------------------------------- | ---------------------------------------- |
-| `uniprot_sprot.dat.gz`                 | `params.url_uniprot_swissprot_dat`       |
+| `uniprot_universe.dat.gz`              | `params.uniprot_dat_urls`                |
 | `uniprot_id_mapping.dat.gz`            | `params.url_uniprot_id_mapping`          |
 | `string.txt.gz`                        | `params.url_string`                      |
 | `pfam2go.txt`                          | `params.url_pfam2go`                     |
 | `gene_pfam_mapping.json`               | `params.negative_ppi_gene_mapping`       |
-| `pfam/interpro_cache/pfam-38.0/`       | ppi-splitting's `params.interpro_cache`  |
+| `pfam/interpro_cache/pfam-38.0/`       | under `params.cache_dir`                 |
 
-`uniprot_sprot.dat.gz` is one flat file that `PARSE_SWISSPROT` splits back into a
-protein FASTA, a GO-term TSV and an accession→Pfam TSV, the way the real
-`uniprot_sprot.dat.gz` is split in a production run. It carries two protein sets,
+`uniprot_universe.dat.gz` is one flat file that `PARSE_SWISSPROT` splits back into
+a protein FASTA, a GO-term TSV, an accession→Pfam TSV and a STRING-id map, the way
+the real UniProt flat files are split in a production run. It is named for the
+*universe*, not for Swiss-Prot: since the tier work it also carries unreviewed
+entries, and a name containing `uniprot_sprot` would additionally trip the
+"provably reviewed-only" guard on `--instance_tier *_any_review_status`. It carries two protein sets,
 kept as separate as they were when those were three fixture files: Pfam-derived
 accessions have GO terms and a sequence but no `DR Pfam` line, HIPPIE-derived ones
 have the `DR Pfam` xref the single-domain step looks up. So the fixture is sparser
@@ -118,7 +121,8 @@ of the family set, not of the family count.
 
 ## The Pfam download cache
 
-`pfam/interpro_cache/pfam-38.0/` is ppi-splitting's own release-keyed cache,
+`pfam/interpro_cache/pfam-38.0/` is ppi-splitting's release-keyed cache under
+`params.cache_dir`,
 pre-populated with `speclist.txt`, `reviewed.list` and an empty `Pfam-A.dead`.
 `fetch_domains.py` only downloads a file the cache does not have, so with these
 three present and `params.pfam_release` pinned to `38.0` (which skips the
@@ -127,6 +131,36 @@ release string only labels the directory — it must match `params.pfam_release`
 
 A run also *writes* `instances-<hash>.tsv` and `sequences-<hash>.fasta` into that
 directory; they are gitignored.
+
+## The protein-universe tier entries
+
+Everything the generator writes is human and `Reviewed;`, so strata 1-3 of
+ppi-splitting's tier ladder (`other_reviewed`, `human_unreviewed`,
+`other_unreviewed`) cannot fill from it and any test of a widened
+`--instance_tier` would pass vacuously. `tests/bin/universe_tier_fixtures.py`
+appends one entry per empty stratum, each with a matching row in
+`pfam/Pfam-A.regions.tsv.gz` on a family the fixture already carries:
+
+| accession | entry name    | `OX`  | `ID` flag     | family    | stratum            |
+| --------- | ------------- | ----- | ------------- | --------- | ------------------ |
+| `X0TIE2`  | `TIER2_HUMAN` | 9606  | `Unreviewed;` | `PF00001` | `human_unreviewed` |
+| `X0TIE1`  | `TIER1_MOUSE` | 10090 | `Reviewed;`   | `PF00179` | `other_reviewed`   |
+| `X0TIE3`  | `TIER3_MOUSE` | 10090 | `Unreviewed;` | `PF00595` | `other_unreviewed` |
+
+Only the reviewed one gets a `DR   STRING;` line, because that is what UniProt
+itself does — it does not cross-reference STRING for unreviewed entries — and
+`FETCH_STRING_LINKS` reports that gap.
+
+**The default `-profile test` run is unchanged by them.** It runs
+`--instance_tier human_reviewed`, which derives `swissprot_taxon_ids = 9606` (so
+`PARSE_SWISSPROT` drops both mouse entries) and the `human_reviewed` stratum only
+(so the human TrEMBL entry is parsed but never sampled). They cost that run one
+extra FASTA record and nothing else.
+
+The script is idempotent and is called at the end of `make_test_fixtures.py`, so a
+regeneration reproduces them. It is also the only writer of
+`pfam/Pfam-A.regions.tsv.gz`, which the generator otherwise does not produce — see
+the section below.
 
 ## Not a fixture
 
@@ -142,7 +176,7 @@ protein embeddings; the generator deletes a leftover copy if it finds one.
 ## Regenerating these fixtures — not yet possible
 
 `tests/bin/make_test_fixtures.py` still harvests domain sequences out of the real
-`Pfam-A.fasta.gz` and embeds them into a synthesised `uniprot_sprot.dat.gz` at
+`Pfam-A.fasta.gz` and embeds them into a synthesised `uniprot_universe.dat.gz` at
 their real offsets. With the instance source now being `Pfam-A.regions.tsv.gz`,
 which carries neither sequence nor species, that dependency has to run the other
 way: the DAT becomes the primary generator and the regions fixture is carved out

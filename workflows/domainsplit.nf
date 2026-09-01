@@ -14,6 +14,7 @@ include { EXPORT_SPLIT_DDIS           } from '../modules/local/export_split_ddis
 include { INGEST_SPLITS               } from '../subworkflows/local/ingest_splits/main.nf'
 include { INSERT_EXTERNAL_SOURCES     } from '../modules/local/insert_external_sources/main.nf'
 include { PRUNE_UNREPRESENTED_DDIS    } from '../modules/local/prune_unrepresented_ddis/main.nf'
+include { FETCH_STRING_LINKS          } from '../modules/local/fetch_string_links/main.nf'
 include { REPORT_DDI_ATTRITION        } from '../modules/local/report_ddi_attrition/main.nf'
 include { generate_domain_embeddings  } from '../modules/local/domain_embeddings/main.nf'
 include { ENRICH_DDI_DATABASE         } from '../subworkflows/local/enrich_ddi_database/main.nf'
@@ -145,55 +146,101 @@ main:
     ch_versions = Channel.empty()
 
     //
-    // Two knobs, one outcome, and the failure mode is silence.
+    // One knob, three derived values, and every failure mode here is silence.
     //
-    // `swissprot_taxon_ids` decides which proteins exist at all -- it is the filter
-    // PARSE_SWISSPROT applies and the universe FETCH_DOMAIN_META samples out of.
-    // `instance_tier` decides which strata of that universe are eligible. Asking
-    // for `any` against a universe parsed for one taxon is a no-op that looks like
-    // it worked: the run completes, every instance is human, and nothing says so.
-    // Asking for `human_only` against a universe with no human in it produces zero
-    // instances and a pruned-empty database several steps later.
+    // `instance_tier` is the protein universe. It decides which UniProt flat
+    // files are downloaded (`uniprot_dat_urls`), which taxa survive parsing
+    // (`swissprot_taxon_ids`) and which strata FETCH_DOMAIN_META may sample
+    // (`instance_tiers`, ppi-splitting's vocabulary). Those three are derived in
+    // nextflow.config -- not here -- because FETCH_DOMAIN_META lives in the
+    // read-only submodule and reads `params.instance_tiers` straight out of its
+    // own script block, and `params` is read-only by the time a workflow body
+    // runs.
     //
-    // Checked here rather than in a process so it costs nothing and fails before
-    // the first task is submitted.
+    // What is left here is the checking. Each guard exists because the failure it
+    // catches otherwise produces a green run with fewer families and nothing
+    // saying why. Checked before the first task is submitted, so it costs nothing.
     //
+    def tier = params.instance_tier.toString()
+
+    if (tier == 'all_species_any_review_status') {
+        error("""--instance_tier all_species_any_review_status is not implemented.
+
+It needs the full TrEMBL flat file (uniprot_trembl.dat.gz, 110 GB, ~250M entries),
+which FETCH_DOMAIN_META cannot hold: it parses the protein universe into an in-memory
+dict. Implementing it requires a cached accession -> (taxon, reviewed, byte offset)
+index and offset-seek sequence retrieval.
+
+See https://github.com/daisybio/domainsplit/issues/4
+Use all_species_reviewed or human_any_review_status.""")
+    }
+    // The retired vocabulary, mapped rather than aliased. `any` used to mean "four
+    // strata over a Swiss-Prot universe", i.e. the new `all_species_reviewed` --
+    // NOT `all_species_any_review_status`. Aliasing it would silently change the
+    // universe of a working invocation, so it is an error with the mapping instead.
+    if (tier in ['human_only', 'any']) {
+        error("--instance_tier '${tier}' is the retired vocabulary. 'human_only' is now 'human_reviewed'; 'any' is now 'all_species_reviewed' (it meant a Swiss-Prot universe over every species -- NOT 'all_species_any_review_status', which adds TrEMBL and is unimplemented).")
+    }
+    if (!params.instance_tiers) {
+        error("--instance_tier '${tier}' is not a known protein universe. One of: human_reviewed, all_species_reviewed, human_any_review_status, all_species_any_review_status (unimplemented, see daisybio/domainsplit#4).")
+    }
+
+    // `--swissprot_taxon_ids ''` on the command line is parsed by Nextflow as a
+    // bare flag and arrives as Boolean true, which would then stringify to "true"
+    // and filter every entry out. There is no reason to pass it empty any more --
+    // an `all_species_*` tier derives it -- so say that rather than let it through.
+    if (params.swissprot_taxon_ids instanceof Boolean) {
+        error("--swissprot_taxon_ids was given no value; Nextflow parsed it as a bare boolean flag. An empty taxon filter is what `--instance_tier all_species_reviewed` already derives, so drop the flag; to set it explicitly to empty, use a -params-file.")
+    }
+
     def taxa = params.swissprot_taxon_ids.toString().trim()
-    if (params.instance_tier == 'any' && taxa) {
-        error("--instance_tier any needs every species in the protein universe, but --swissprot_taxon_ids is '${taxa}', so PARSE_SWISSPROT keeps only those and 'any' would select from a single-taxon universe. Clear --swissprot_taxon_ids (pass an empty string), or use --instance_tier human_only.")
+    def uniprot_dats = (params.uniprot_dat_urls instanceof List ? params.uniprot_dat_urls : params.uniprot_dat_urls.toString().tokenize(','))
+        .collect { u -> u.toString().trim() }
+        .findAll { u -> u }
+
+    if (!uniprot_dats) {
+        error("--uniprot_dat_urls resolved to nothing for --instance_tier ${tier}. Pass a comma-separated list of UniProt flat files, Swiss-Prot first.")
     }
-    if (params.instance_tier == 'human_only' && taxa && !(taxa.tokenize(',').collect { t -> t.trim() }.contains('9606'))) {
-        error("--instance_tier human_only samples human instances, but --swissprot_taxon_ids is '${taxa}', which does not include 9606 -- the universe would contain no human protein and every family would end with zero instances. Add 9606, or use --instance_tier any with an empty --swissprot_taxon_ids.")
+    if (tier.startsWith('human_') && taxa && !(taxa.tokenize(',').collect { t -> t.trim() }.contains('9606'))) {
+        error("--instance_tier ${tier} samples human instances, but --swissprot_taxon_ids is '${taxa}', which does not include 9606 -- the universe would contain no human protein and every family would end with zero instances. Add 9606, or use an all_species_* tier.")
+    }
+    // An unreviewed stratum that can never fill looks exactly like a successful run
+    // with fewer families. The authoritative check is upstream's, against the
+    // *parsed* universe; this one exists only to catch the derived-default case
+    // before a 4.7 GB regions stream, so it fires only when the file list is
+    // *provably* reviewed-only -- every entry named `uniprot_sprot*`, UniProt's
+    // own Swiss-Prot filenames. A locally-named file it cannot classify passes
+    // here and is judged upstream on its contents, which is the check that can
+    // actually be right.
+    def reviewed_only = uniprot_dats.every { u -> u.toLowerCase() ==~ /.*uniprot_sprot.*/ }
+    if (tier.endsWith('_any_review_status') && reviewed_only) {
+        error("--instance_tier ${tier} asks for an unreviewed stratum, but every resolved --uniprot_dat_urls entry is a Swiss-Prot flat file:\n  ${uniprot_dats.join('\n  ')}\nAn unreviewed stratum that can never fill produces a green run with fewer families and nothing saying why. Add the matching uniprot_trembl_*.dat.gz.")
+    }
+    // Not an error: this is how a human+mouse run is expressed.
+    if (tier.startsWith('all_species_') && taxa) {
+        log.info "--instance_tier ${tier} with --swissprot_taxon_ids '${taxa}': the universe is deliberately narrowed to those taxa, not every species."
     }
 
-    //
-    // STRING is the one enrichment input that is still per-species. Its
-    // UniProt mapping is not -- that comes from the flat file's own DR STRING
-    // lines and follows `swissprot_taxon_ids` -- but the links file names one
-    // taxon in its URL, so a wider run would enrich nothing outside it and say
-    // nothing about it. Refuse instead. See "What is still missing for true
-    // any-species" in the plan: an all-species links file exists, and using it
-    // needs insert_ppi.py to stream rather than load a DataFrame.
-    //
-    if (!taxa && params.url_string.toString().contains('/9606.')) {
-        error("--swissprot_taxon_ids is empty (every species) but --url_string is still the human-only STRING file, so no non-human protein would receive a single interaction and nothing would report that. Supply a STRING links file covering the species you want, or pin --swissprot_taxon_ids to 9606.")
-    }
+    // The whole derivation on one line of the run log. Four values that must
+    // agree, three of them invisible because they are derived -- so a run whose
+    // family count surprises someone six months later can be diagnosed from its
+    // log rather than from a guess about which defaults were in effect.
+    log.info "protein universe: instance_tier=${tier} -> tiers=${params.instance_tiers}, taxa=${taxa ?: 'all species'}, ${uniprot_dats.size()} UniProt flat file(s): ${uniprot_dats.collect { u -> file(u).name }.join(', ')}"
 
-    input_string  = file(params.url_string)
     input_pfam2go = file(params.url_pfam2go)
 
     //
-    // One pass over the SwissProt flat file, five consumers. See the
-    // `url_uniprot_swissprot_dat` comment in nextflow.config for why this is a
-    // parse of a static FTP file rather than two REST stream queries.
+    // One pass over the UniProt flat files, six consumers. See the
+    // `uniprot_dat_urls` comment in nextflow.config for why this is a parse of
+    // static FTP files rather than two REST stream queries.
     //
-    // The fifth consumer is FETCH_DOMAIN_META, which needs it as the protein
-    // universe -- it is handed the raw file rather than a PARSE_SWISSPROT output,
+    // The sixth consumer is FETCH_DOMAIN_META, which needs them as the protein
+    // universe -- handed the raw files rather than a PARSE_SWISSPROT output,
     // because it needs sequences and taxa for every accession Pfam might name,
     // which is a superset of what the enrichment outputs carry.
     //
     PARSE_SWISSPROT(
-        file(params.url_uniprot_swissprot_dat),
+        uniprot_dats.collect { u -> file(u) },
         params.swissprot_taxon_ids,
     )
     ch_versions = ch_versions.mix(PARSE_SWISSPROT.out.versions)
@@ -244,13 +291,15 @@ main:
     regions_ch = params.pfam_regions
         ? channel.value(file(params.pfam_regions, checkIfExists: true))
         : channel.value(file(params.url_pfam_regions))
-    // The protein universe. The same flat file PARSE_SWISSPROT reads, handed over
-    // raw: FETCH_DOMAIN_META needs a sequence and a taxon for every accession Pfam
-    // might name, which is wider than any of the parsed outputs.
-    sprot_ch = channel.value(file(params.url_uniprot_swissprot_dat))
-    cache_dir = params.interpro_cache ? file(params.interpro_cache).toAbsolutePath().toString() : ''
+    // The protein universe. The same flat files PARSE_SWISSPROT reads, handed over
+    // raw: FETCH_DOMAIN_META needs a sequence, a taxon and a review flag for every
+    // accession Pfam might name, which is wider than any of the parsed outputs.
+    // A list, Swiss-Prot first -- the upstream parser takes the first writer on a
+    // duplicate accession, and the reviewed record is the one to keep.
+    sprot_ch = channel.value(uniprot_dats.collect { u -> file(u) })
+    cache_dir = params.cache_dir ? file(params.cache_dir).toAbsolutePath().toString() : ''
     if (cache_dir && !file(cache_dir).exists()) {
-        log.warn "--interpro_cache ${cache_dir} does not exist yet; FETCH_DOMAIN_META will create it."
+        log.warn "--cache_dir ${cache_dir} does not exist yet; it will be created."
     }
 
     fetched = FETCH_DOMAIN_META(
@@ -265,7 +314,7 @@ main:
     // `reason` column. Taken from the channel, never read back from the
     // published path. Three reasons and they are not interchangeable:
     // `no_eligible_instances` is a consequence of `instance_tier`, which defaults
-    // to `human_only`, so it can fire in bulk and would bury the
+    // to `human_reviewed`, so it can fire in bulk and would bury the
     // other two -- `dead` and `not_in_pfam` are facts about Pfam, and a
     // mistyped accession arrives as `not_in_pfam`. So they are counted apart
     // and only the Pfam-fact reasons warn.
@@ -298,8 +347,8 @@ main:
     union_lengths   = GET_LENGTHS(fetched.sequences).map { _meta, f -> f }
 
     // The split population: 3did positives only, restricted to families that
-    // actually resolved to instances. Under `instance_tier = human_only` a
-    // family whose strata are all non-human ends with none, and its DDIs leave
+    // actually resolved to instances. Under `instance_tier = human_reviewed` a
+    // family with no human Swiss-Prot region ends with none, and its DDIs leave
     // the database later, in PRUNE_UNREPRESENTED_DDIS.
     split_ddis = EXPORT_SPLIT_DDIS(domainsplit_db_ddi, union_instances, '3did').ddis
 
@@ -382,10 +431,39 @@ main:
     domainsplit_db = pruned.domainsplit_db
 
     //
+    // STRING links for every species in the database.
+    //
+    // Placed here because the `protein` table is final by this point -- ingest
+    // created the rows, the prune removed the DDIs but not the proteins -- and
+    // ENRICH_DDI_DATABASE, the consumer, runs after BUILD_EXTERNAL_TEST below.
+    //
+    // The taxon list is derived from the STRING ids themselves, not from
+    // `protein.taxon_id`: a STRING id is `9606.ENSP00000269305` and its prefix is
+    // STRING's own species-level taxid, while UniProt's OX can be a strain-level
+    // id with no STRING file behind it. Taking the prefix makes the join exact by
+    // construction.
+    //
+    // `--url_string` short-circuits the whole thing with one explicit links file,
+    // which is what `-profile test` uses to stay offline.
+    //
+    if (params.url_string) {
+        input_string = channel.value(file(params.url_string))
+        log.info "--url_string is set: using ${params.url_string} verbatim; FETCH_STRING_LINKS is skipped and only the species that file covers are enriched."
+    }
+    else {
+        input_string = FETCH_STRING_LINKS(
+            domainsplit_db,
+            input_string_map,
+            channel.value(cache_dir),
+        ).links
+        ch_versions = ch_versions.mix(FETCH_STRING_LINKS.out.versions)
+    }
+
+    //
     // Where each source's DDIs went, in one table.
     //
     // PPI_SPLITTING's own attrition waterfall begins at `split_ddis` -- so the
-    // 3did DDIs that `instance_tier = human_only` stranded before the splitting
+    // 3did DDIs that `instance_tier` stranded before the splitting
     // stage are, correctly, absent from it, and there was no published artifact
     // showing them at all. The counters existed only in three `.command.log`
     // files, which do not survive the work directory.

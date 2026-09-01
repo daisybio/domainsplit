@@ -37,15 +37,19 @@ process INIT_DOMAINSPLIT_DB {
             UNIQUE(domain_id_a, domain_id_b)
         );
 
-        -- `taxon_id` comes from instances.tsv via INGEST_INSTANCES. It is only
-        -- ever one value on a `swissprot_taxon_ids = 9606` run, but without it a
-        -- multi-species database cannot be stratified, and there is no way to tell
-        -- which proteins went unenriched because their species had no STRING file.
+        -- `taxon_id` and `reviewed` both come from instances.tsv via
+        -- INGEST_INSTANCES (`reviewed` out of its `source_db` column). They are
+        -- one value each on a `human_reviewed` run, but without them a
+        -- multi-species / multi-review-status database cannot be stratified, and
+        -- there is no way to tell which proteins went unenriched because their
+        -- species had no STRING file or because UniProt cross-references no STRING
+        -- id for unreviewed entries.
         CREATE TABLE protein (
             id INTEGER PRIMARY KEY,
             uniprot_id,
             sequence,
             taxon_id,
+            reviewed TEXT,
             UNIQUE(uniprot_id)
         );
         CREATE TABLE protein_go_terms(

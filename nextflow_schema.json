@@ -61,16 +61,23 @@
                     "description": "Local Pfam-A.regions.tsv.gz, skipping the ~4.7 GB transfer.",
                     "fa_icon": "fas fa-file"
                 },
-                "url_uniprot_swissprot_dat": {
+                "cache_dir": {
                     "type": "string",
-                    "description": "URL or path of the UniProt-SwissProt flat file. PARSE_SWISSPROT reads it once and emits the GO-term TSV, the accession-to-Pfam TSV, the protein FASTA and the STRING-id map, replacing two throttled rest.uniprot.org stream queries and the per-organism idmapping download. It is also FETCH_DOMAIN_META's protein universe: Pfam-A.regions carries coordinates only, so the domain sequence and taxon come from here.",
-                    "default": "https://ftp.uniprot.org/pub/databases/uniprot/current_release/knowledgebase/complete/uniprot_sprot.dat.gz",
+                    "format": "directory-path",
+                    "description": "One cache root for every download this pipeline caches: ppi-splitting's Pfam/UniProt files under pfam-<release>/ and the per-organism STRING links under string/. Must be an absolute path on a filesystem every compute node shares. A convenience only: a cold run produces identical output.",
+                    "help_text": "ppi-splitting's own param name for this is interpro_cache, which is kept as a legacy alias; passing either works and cache_dir wins.",
+                    "fa_icon": "fas fa-database"
+                },
+                "uniprot_dat_urls": {
+                    "type": "string",
+                    "description": "Comma-separated UniProt flat files (URL or path) that ARE the run's protein universe, Swiss-Prot first. Leave unset: it is derived from instance_tier. PARSE_SWISSPROT reads them once and emits the GO-term TSV, the accession-to-Pfam TSV, the protein FASTA and the STRING-id map; FETCH_DOMAIN_META reads the same list as its protein universe, because Pfam-A.regions carries coordinates only and the domain sequence, taxon and review flag come from here.",
+                    "help_text": "Set explicitly only to pin a release or point at local copies. Swiss-Prot must come first: an accession promoted from TrEMBL to Swiss-Prot between releases exists in both files and both parsers take the first writer, so the reviewed record has to be the one they see. Derived defaults: human_reviewed -> uniprot_sprot_human.dat.gz (114 MB); all_species_reviewed -> uniprot_sprot.dat.gz (667 MB); human_any_review_status -> uniprot_sprot_human.dat.gz + uniprot_trembl_human.dat.gz.",
                     "fa_icon": "fas fa-link"
                 },
                 "swissprot_taxon_ids": {
                     "type": "string",
-                    "description": "Comma-separated NCBI taxon ids PARSE_SWISSPROT keeps; an empty string keeps every species. 9606 by default because ingest rejects non-human instances.",
-                    "default": "9606",
+                    "description": "Comma-separated NCBI taxon ids kept while parsing the UniProt flat files; an empty string keeps every species. Leave unset: it is derived from instance_tier ('9606' for the human_* tiers, empty for the all_species_* ones).",
+                    "help_text": "Set explicitly only to narrow further, e.g. '9606,10090' together with --instance_tier all_species_reviewed for a human+mouse run. Note that `--swissprot_taxon_ids \"\"` on the command line is parsed by Nextflow as a bare boolean flag and rejected; use an all_species_* tier, or a -params-file.",
                     "fa_icon": "fas fa-filter"
                 },
                 "url_negatome": {
@@ -81,9 +88,21 @@
                 },
                 "url_string": {
                     "type": "string",
-                    "description": "URL of the STRING protein-protein links file.",
-                    "default": "https://stringdb-downloads.org/download/protein.links.v12.0/9606.protein.links.v12.0.txt.gz",
+                    "description": "One explicit STRING links file (URL or path). Leave unset: FETCH_STRING_LINKS then derives the taxon list from the STRING ids of the proteins in the database and downloads STRING's per-organism links file for each, so every species the universe admits is enriched. Setting it pins that one file and skips the fetch, which is what -profile test does to stay offline.",
                     "fa_icon": "fas fa-link"
+                },
+                "string_release": {
+                    "type": "string",
+                    "description": "STRING release used to build the per-organism download URL: https://stringdb-downloads.org/download/protein.links.v<rel>/<taxid>.protein.links.v<rel>.txt.gz",
+                    "default": "12.0",
+                    "fa_icon": "fas fa-tag"
+                },
+                "string_min_proteins_per_taxon": {
+                    "type": "integer",
+                    "description": "Skip a taxon contributing fewer than this many proteins, so one stray protein does not cost a 50 MB STRING download. 1 fetches for every taxon present.",
+                    "default": 1,
+                    "minimum": 1,
+                    "fa_icon": "fas fa-filter"
                 },
                 "url_pfam2go": {
                     "type": "string",
@@ -107,7 +126,7 @@
                 "negative_ppi_gene_mapping": {
                     "type": "string",
                     "format": "file-path",
-                    "description": "Optional `gene_pfam_mapping.json` from an earlier BUILD_CANDIDATE_NETWORK run. Supplied, the gene → UniProt → Pfam lookup is read from it instead of the UniProt REST API — the only way the pipeline runs fully offline. Genes the file does not cover count as unmapped.",
+                    "description": "Optional `gene_pfam_mapping.json` from an earlier BUILD_CANDIDATE_NETWORK run. Supplied, the gene \u2192 UniProt \u2192 Pfam lookup is read from it instead of the UniProt REST API \u2014 the only way the pipeline runs fully offline. Genes the file does not cover count as unmapped.",
                     "default": null,
                     "fa_icon": "fas fa-file-import"
                 },
@@ -133,10 +152,17 @@
                 },
                 "instance_tier": {
                     "type": "string",
-                    "enum": ["human_only", "any"],
-                    "description": "Which Pfam domain instances may represent a family. `human_only` (default) restricts them to taxon 9606, which everything downstream of ingest assumes — ProtT5 embeddings, the STRING network and the UniProt idmapping stream are all human-only, and INGEST_INSTANCES fails the run on a non-human instance. Families left with no instance have their DDIs pruned.",
-                    "default": "human_only",
-                    "fa_icon": "fas fa-user"
+                    "enum": [
+                        "human_reviewed",
+                        "all_species_reviewed",
+                        "human_any_review_status",
+                        "all_species_any_review_status"
+                    ],
+                    "description": "The run's protein universe, and the only one of these four params you have to set: uniprot_dat_urls, swissprot_taxon_ids and ppi-splitting's instance_tiers are all derived from it. Families left with no eligible instance keep none and their DDIs are dropped by PRUNE_UNREPRESENTED_DDIS.",
+                    "help_text": "human_reviewed (~20k entries, default) is human Swiss-Prot. all_species_reviewed (~573k) adds non-human Swiss-Prot. human_any_review_status (~200k) adds human TrEMBL. all_species_any_review_status is NOT IMPLEMENTED and fails before any task is submitted -- it needs the 110 GB TrEMBL flat file, which FETCH_DOMAIN_META cannot hold in memory (daisybio/domainsplit#4). Upstream fills strata in the order human_reviewed -> other_reviewed -> human_unreviewed -> other_unreviewed: reviewed outranks human. Lower strata fill freely rather than as a top-up, so widening the universe reshapes the instance pool of families that were never dropped, not only the ones that were. The retired values are 'human_only' (now human_reviewed) and 'any' (now all_species_reviewed -- NOT all_species_any_review_status).",
+                    "errorMessage": "instance_tier must be one of human_reviewed, all_species_reviewed, human_any_review_status, all_species_any_review_status (unimplemented). The retired values map as: human_only -> human_reviewed, any -> all_species_reviewed.",
+                    "default": "human_reviewed",
+                    "fa_icon": "fas fa-globe"
                 },
                 "ddi_mode": {
                     "type": "boolean",
@@ -171,7 +197,7 @@
                 },
                 "ppi_splitting_multi_negset": {
                     "type": "boolean",
-                    "description": "Ask ppi-splitting for both ILP negative sets per split — plain `ilp` plus `ilp_candidates`, the same sampler restricted to the candidate network — which turns 3 method directories into 5 and 11 split databases into 18. On by default: the comma-separated `negative_sampling_method` fan-out it needs is in the pinned submodule. The candidate network must be dense enough that every split can cover itself from it: survival is quadratic in a split's share, because both families of a pair have to land in the same split. Set false for a `--split_only` debug run, which ppi-splitting refuses unless `negative_sampling_method` is exactly \"ilp\".",
+                    "description": "Ask ppi-splitting for both ILP negative sets per split \u2014 plain `ilp` plus `ilp_candidates`, the same sampler restricted to the candidate network \u2014 which turns 3 method directories into 5 and 11 split databases into 18. On by default: the comma-separated `negative_sampling_method` fan-out it needs is in the pinned submodule. The candidate network must be dense enough that every split can cover itself from it: survival is quadratic in a split's share, because both families of a pair have to land in the same split. Set false for a `--split_only` debug run, which ppi-splitting refuses unless `negative_sampling_method` is exactly \"ilp\".",
                     "default": true,
                     "fa_icon": "fas fa-clone"
                 },
@@ -254,7 +280,7 @@
                 },
                 "embedding_prott5_model": {
                     "type": "string",
-                    "description": "HuggingFace id of the ProtT5 encoder. Ungated, so it needs no HF_TOKEN — unlike ESM3 / ESMC.",
+                    "description": "HuggingFace id of the ProtT5 encoder. Ungated, so it needs no HF_TOKEN \u2014 unlike ESM3 / ESMC.",
                     "default": "Rostlab/prot_t5_xl_half_uniref50-enc",
                     "fa_icon": "fas fa-robot"
                 },

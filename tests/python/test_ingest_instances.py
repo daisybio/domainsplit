@@ -16,10 +16,14 @@ Three things are worth a test here:
     key contract (``{pfam}_{uniprot}_{start}_{end}``) and ppi-splitting's
     ``instances.tsv`` are both instance level. The old ``UNIQUE(domain_id,
     protein_id)`` silently kept one;
-  * a non-human instance is a **hard failure**, not a filtered row: everything
-    downstream (STRING, the UniProt idmapping) is human-only, so a
-    a taxon outside the configured universe means ppi-splitting was not run with
-    ``instance_tier = 'human_only'`` and the resulting DB would be quietly wrong.
+  * a non-human instance is a **hard failure**, not a filtered row: a taxon
+    outside the configured universe means the run's protein universe and the
+    strata ppi-splitting sampled from disagree, and the resulting DB would carry
+    proteins with no sequence and no GO terms, quietly;
+  * ``protein.reviewed`` is stored, from ``instances.tsv``'s ``source_db``
+    column. It is what makes "how many DDIs survive only because the universe was
+    widened to TrEMBL" answerable, and it went missing for a whole release
+    because ``split_io.read_instances_tsv`` simply never asked for the column.
 
 Run directly (`python3 tests/python/test_ingest_instances.py`) or via pytest.
 """
@@ -83,6 +87,28 @@ def run_ingest(tmp, rows, check=True, taxon_ids="9606"):
         check=check, env=env, capture_output=True, text=True,
     )
     return db, mapping, proc
+
+
+def test_protein_review_status_is_stored():
+    """``source_db`` is the per-instance review flag; it has to reach the DB.
+
+    Without it, `report_ddi_attrition.py`'s tier breakdown cannot tell a human
+    Swiss-Prot instance from a human TrEMBL one, and the whole point of widening
+    `--instance_tier` becomes unmeasurable.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        db, _mapping, proc = run_ingest(tmp, HUMAN_ROWS)
+        conn = sqlite3.connect(db)
+        stored = dict(conn.execute("SELECT uniprot_id, reviewed FROM protein"))
+        taxa = dict(conn.execute("SELECT uniprot_id, taxon_id FROM protein"))
+        conn.close()
+
+    assert stored == {"P11111": "reviewed", "Q22222": "unreviewed"}, stored
+    assert taxa == {"P11111": "9606", "Q22222": "9606"}, taxa
+    # Counted in the log too, so a run whose universe filled no unreviewed stratum
+    # says so rather than looking like a successful widening.
+    assert "proteins_reviewed = 1" in proc.stdout, proc.stdout
+    assert "proteins_unreviewed = 1" in proc.stdout, proc.stdout
 
 
 def test_instance_level_rows():
@@ -164,6 +190,7 @@ def test_a_wider_universe_admits_the_same_instance():
 
 
 if __name__ == "__main__":
+    test_protein_review_status_is_stored()
     test_instance_level_rows()
     test_instance_outside_the_taxon_universe_is_fatal()
     test_a_wider_universe_admits_the_same_instance()

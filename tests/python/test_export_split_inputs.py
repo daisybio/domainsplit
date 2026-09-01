@@ -117,7 +117,7 @@ def test_ddis_are_3did_positives_with_instances_only():
     with tempfile.TemporaryDirectory() as tmp:
         build_db(tmp)
         instances = os.path.join(tmp, "instances.tsv")
-        # PF00001 resolved to no instance -- human_only stranded it -- so the
+        # PF00001 resolved to no instance -- the instance_tier stranded it -- so the
         # 3did DDI touching it must not be offered for splitting.
         write_instances(instances, ["PF00002", "PF00010", "PF00300"])
 

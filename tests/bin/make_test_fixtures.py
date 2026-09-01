@@ -13,7 +13,7 @@ Provenance of the inputs is documented in ``tests/data/README.md``.
 
 Everything keys off one decision: which Pfam families the fixture covers. A
 family is only useful if it has **human** domain instances, because the pipeline
-runs `instance_tier = human_only` and a family with no human instance is dropped
+runs `instance_tier = human_reviewed` and a family with no human instance is dropped
 by PRUNE_UNREPRESENTED_DDIS. So the selection is:
 
 1. build the 3did DDI graph over Pfam accessions (only 3did's `DDI1` and
@@ -51,6 +51,8 @@ import random
 import re
 import sys
 from collections import Counter, defaultdict
+
+import universe_tier_fixtures
 
 # Pfam-A.fasta header: "A0A0A0MRZ7_HUMAN/1-30 A0A0A0MRZ7.1 PF10417.14;..."
 # Same shape ppi-splitting's fetch_domains.py parses, so records copied verbatim
@@ -261,7 +263,7 @@ def scan_pfam_fasta(path, wanted, max_per_family):
     """One pass, collecting up to ``max_per_family`` human records per family.
 
     Returns ``({family: [(header, sequence)]}, {family: n_human_seen})``. Human
-    records only: the pipeline runs `instance_tier = human_only`, so a non-human
+    records only: the pipeline runs `instance_tier = human_reviewed`, so a non-human
     record in the fixture would be dead weight in a 6.3 GB pass that is already
     the slow step.
     """
@@ -332,7 +334,7 @@ def write_interpro_cache(pfam_dir, release, mnemonics, accessions):
             fh.write(f"{mnemonic} E {taxon}: N=Homo sapiens\n")
     with open(os.path.join(cache, "reviewed.list"), "w") as fh:
         # Every accession in the fixture counts as reviewed, so each instance
-        # lands in the `human_reviewed` stratum -- the one `human_only` fills first.
+        # lands in the `human_reviewed` stratum -- the one every tier fills first.
         for acc in sorted(accessions):
             fh.write(f"{acc}\n")
     # Pfam-A.dead is fetched when an accession fails to resolve. Empty is a valid
@@ -575,7 +577,7 @@ def write_enrich_fixtures(out, records, families, swissprot_rows):
     # Pfam-derived accessions carry GO and a sequence, HIPPIE-derived ones carry
     # the Pfam xref the single-domain step looks up -- so the sparser-than-real
     # fixture drives exactly the behaviour it drove before.
-    dat = os.path.join(out, "uniprot_sprot.dat.gz")
+    dat = os.path.join(out, "uniprot_universe.dat.gz")
     hippie_side = {acc: (entry_name, gene, family)
                    for acc, entry_name, gene, family in swissprot_rows}
     with gzip.open(dat, "wt") as fh:
@@ -751,6 +753,15 @@ def main():
 
     write_enrich_fixtures(out, records, families, swissprot_rows)
 
+    # The three entries that make strata 1-3 of ppi-splitting's tier ladder
+    # fillable: everything written above is human and Reviewed, so a test of
+    # `--instance_tier all_species_reviewed` or `human_any_review_status` would
+    # otherwise pass vacuously. Appended last, and to the Pfam-A.regions fixture
+    # too -- which this script still does not generate, see the note in
+    # tests/data/README.md. The default `human_reviewed` run ignores all three.
+    for message in universe_tier_fixtures.apply(out):
+        log(message)
+
     # Placeholders from the old `-stub` fixture set, superseded by the files
     # above, plus prott5.h5 from the retired per-residue protein embeddings.
     stale_prott5 = os.path.join(out, "prott5.h5")
@@ -763,13 +774,13 @@ def main():
             os.remove(path)
             log(f"removed empty placeholder {stale}")
 
-    # Superseded by uniprot_sprot.dat.gz, which PARSE_SWISSPROT splits into all three.
+    # Superseded by uniprot_universe.dat.gz, which PARSE_SWISSPROT splits into all three.
     for stale in ("swissprot_pfam.tsv", "uniprot_go_terms.tsv.gz",
                   "uniprot_sequences.fasta.gz"):
         path = os.path.join(out, stale)
         if os.path.exists(path):
             os.remove(path)
-            log(f"removed {stale} (now carved out of uniprot_sprot.dat.gz)")
+            log(f"removed {stale} (now carved out of uniprot_universe.dat.gz)")
 
     log("done")
 

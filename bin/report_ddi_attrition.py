@@ -3,8 +3,8 @@
 
 ``ppi-splitting``'s own DDI attrition waterfall starts at the CSV
 ``EXPORT_SPLIT_DDIS`` handed it, so it structurally cannot show the DDIs that
-never reached the splitting stage -- and under ``instance_tier = human_only``
-that is the large majority of 3did.  A run where 3did contributes ~20 000 pairs
+never reached the splitting stage -- and under ``instance_tier =
+human_reviewed`` that is the large majority of 3did.  A run where 3did contributes ~20 000 pairs
 and the splitting stage reports ~3 200 input DDIs looks like 17 000 DDIs
 vanished with no accounting anywhere.  They are accounted for, but the counters
 were spread over three ``.command.log`` files that go away with the work
@@ -52,9 +52,138 @@ from ddi_db_utils import split_sources
 
 COLUMNS = ["source", "offered", "in_db", "to_splitting", "pruned", "surviving", "conflict"]
 
+#: The second report: what the widened protein universe actually bought.
+#:
+#: ``--instance_tier`` exists to stop discarding DDIs whose families have no human
+#: Swiss-Prot representative, and the only way to answer "was that worth it" is to
+#: count the survivors by the stratum they rest on. Same four strata as upstream's
+#: ``TIERS``, same order -- reviewed outranks human.
+TIER_COLUMNS = ["scope", "tier", "count"]
+
+TIERS = ("human_reviewed", "other_reviewed", "human_unreviewed", "other_unreviewed")
+
+HUMAN_TAXON = "9606"
+
+#: A family with no instance at all, and a DDI touching one. Should not survive
+#: PRUNE_UNREPRESENTED_DDIS; carried so the report cannot silently lose a row.
+NO_INSTANCE = "no_instance"
+
+#: `protein.reviewed` is NULL on a database written before the column existed.
+UNKNOWN_TIER = "unknown_review_status"
+
 TOTAL_ROW = "ALL_SOURCES"
 
 NA = "NA"
+
+
+def tier_of(taxon_id, reviewed):
+    """Which of upstream's four strata one protein belongs to.
+
+    Mirrors ``fetch_domains.py``'s ``tier_of()`` deliberately: if the two ever
+    disagree, this report would describe a stratification the sampler did not use.
+    """
+    flag = (reviewed or "").strip().lower()
+    if flag not in ("reviewed", "unreviewed"):
+        return UNKNOWN_TIER
+    is_human = (taxon_id or "").strip() == HUMAN_TAXON
+    if flag == "reviewed":
+        return TIERS[0] if is_human else TIERS[1]
+    return TIERS[2] if is_human else TIERS[3]
+
+
+def tier_rank(tier):
+    """Sort key: the four strata in fill order, then the two escape hatches."""
+    return TIERS.index(tier) if tier in TIERS else len(TIERS) + (tier == NO_INSTANCE)
+
+
+def tier_breakdown(conn):
+    """``(rows, best_by_family)``: per-tier instance/protein/family/DDI counts.
+
+    A family's tier is the *best* one any of its instances reaches, and a DDI's is
+    the worse of its two families' -- so ``max(best_a, best_b)``. That is exactly
+    the "would this DDI have survived a narrower universe" question: a DDI above
+    ``human_reviewed`` has at least one family with no human Swiss-Prot instance,
+    which under ``--instance_tier human_reviewed`` would have reached zero
+    instances and taken the DDI with it in PRUNE_UNREPRESENTED_DDIS.
+    """
+    instances = Counter()
+    proteins = {}
+    best_by_family = {}
+    for pfam, uniprot, taxon, reviewed in conn.execute(
+        "SELECT d.pfam_id, p.uniprot_id, p.taxon_id, p.reviewed "
+        "FROM domain_protein_map AS dpm "
+        "JOIN domain AS d ON d.id = dpm.domain_id "
+        "JOIN protein AS p ON p.id = dpm.protein_id "
+        "WHERE dpm.instance_id IS NOT NULL"
+    ):
+        tier = tier_of(taxon, reviewed)
+        instances[tier] += 1
+        proteins[uniprot] = tier
+        if pfam not in best_by_family or tier_rank(tier) < tier_rank(best_by_family[pfam]):
+            best_by_family[pfam] = tier
+
+    ddis = Counter()
+    for pfam_a, pfam_b in conn.execute(
+        "SELECT da.pfam_id, db.pfam_id FROM domain_domain_interaction AS ddi "
+        "JOIN domain AS da ON da.id = ddi.domain_id_a "
+        "JOIN domain AS db ON db.id = ddi.domain_id_b"
+    ):
+        tier_a = best_by_family.get(pfam_a, NO_INSTANCE)
+        tier_b = best_by_family.get(pfam_b, NO_INSTANCE)
+        ddis[tier_a if tier_rank(tier_a) >= tier_rank(tier_b) else tier_b] += 1
+
+    scopes = {
+        "instances": instances,
+        "proteins": Counter(proteins.values()),
+        "families": Counter(best_by_family.values()),
+        "ddis": ddis,
+    }
+    rows = []
+    for scope in ("ddis", "families", "proteins", "instances"):
+        counts = scopes[scope]
+        for tier in sorted(counts, key=tier_rank):
+            rows.append({"scope": scope, "tier": tier, "count": counts[tier]})
+    return rows, ddis
+
+
+def write_tier_report(path, rows, ddis):
+    with open(path, "w", newline="") as fh:
+        for line in TIER_DOC.strip().splitlines():
+            fh.write(f"# {line}".rstrip() + "\n")
+        writer = csv.DictWriter(fh, fieldnames=TIER_COLUMNS, delimiter="\t", lineterminator="\n")
+        writer.writeheader()
+        writer.writerows(rows)
+    beyond = sum(n for tier, n in ddis.items() if tier != TIERS[0])
+    total = sum(ddis.values())
+    print(
+        f"[attrition] tiers: {total} surviving DDIs, {beyond} of them resting on a "
+        "stratum beyond human_reviewed -- those are the DDIs a human-reviewed-only "
+        "universe would have pruned",
+        flush=True,
+    )
+    for row in rows:
+        print("[attrition] tier {scope}/{tier} = {count}".format(**row), flush=True)
+
+
+TIER_DOC = """What the run's protein universe bought, per stratum.
+
+`scope` is what is being counted: `instances` and `proteins` are the domain
+instances and their parent proteins; `families` counts each Pfam family under the
+*best* stratum any of its instances reaches; `ddis` counts each surviving DDI
+under the *worse* of its two families' best strata.
+
+That last one is the number `--instance_tier` exists for. A DDI in any row but
+`human_reviewed` has at least one family with no human Swiss-Prot instance, so a
+`--instance_tier human_reviewed` run would have left that family with zero
+instances and PRUNE_UNREPRESENTED_DDIS would have deleted the DDI.
+
+Strata are upstream's, in fill order -- reviewed outranks human, so a family with
+no human Swiss-Prot member takes a curated non-human sequence before an
+auto-annotated human one.
+
+`no_instance` should not appear: PRUNE_UNREPRESENTED_DDIS deletes those DDIs.
+`unknown_review_status` means `protein.reviewed` is NULL.
+"""
 
 
 def parse_args():
@@ -81,6 +210,7 @@ def parse_args():
         help="the token whose DDIs form the split population (default: 3did)",
     )
     p.add_argument("--out", required=True, help="ddi_source_attrition.tsv")
+    p.add_argument("--tier-out", required=True, help="ddi_tier_breakdown.tsv")
     p.add_argument("--versions", required=True)
     p.add_argument("--process-name", required=True)
     return p.parse_args()
@@ -192,6 +322,7 @@ def main():
 
     conn = sqlite3.connect(f"file:{args.db}?mode=ro", uri=True)
     surviving, surviving_rows = surviving_tokens(conn)
+    tier_rows, tier_ddis = tier_breakdown(conn)
     conn.close()
 
     pruned, pruned_rows = count_tokens(read_tsv_rows(args.pruned_ddis))
@@ -222,6 +353,7 @@ def main():
 
     rows = build_rows(counts)
     write_report(args.out, rows)
+    write_tier_report(args.tier_out, tier_rows, tier_ddis)
 
     if args.splitting_source not in surviving:
         print(

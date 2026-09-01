@@ -18,7 +18,7 @@ Two modes, because the two exports sit on opposite sides of the Pfam fetch:
     holding Pfam accessions in DDI mode), restricted to families that actually
     have an instance in the fetched ``instances.tsv``. That restriction is what
     keeps only 3did in the split population, and it drops the families
-    ``--tier human_only`` stranded before BLAST ever sees them.
+    ``--instance_tier human_reviewed`` stranded before BLAST ever sees them.
     ``PRUNE_UNREPRESENTED_DDIS`` removes the corresponding DDIs from the DB
     later; this only decides what gets split.
 

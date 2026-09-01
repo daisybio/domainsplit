@@ -41,6 +41,7 @@ CREATE TABLE protein (
     uniprot_id,
     sequence,
     taxon_id,
+    reviewed TEXT,
     UNIQUE(uniprot_id)
 );
 CREATE TABLE protein_go_terms(
@@ -95,7 +96,8 @@ def ddi_rows(conn):
     }
 
 
-def add_instance(conn, pfam, uniprot, start, end, taxon="9606", clan=None, sequence="AAA"):
+def add_instance(conn, pfam, uniprot, start, end, taxon="9606", clan=None, sequence="AAA",
+                 reviewed="reviewed"):
     """Insert one domain instance (and its domain/protein rows) and return its instance_id.
 
     Mirrors what INGEST_INSTANCES writes, including the
@@ -107,7 +109,10 @@ def add_instance(conn, pfam, uniprot, start, end, taxon="9606", clan=None, seque
     writer that the real pipeline did not.
     """
     conn.execute("INSERT OR IGNORE INTO domain(pfam_id) VALUES (?)", (pfam,))
-    conn.execute("INSERT OR IGNORE INTO protein(uniprot_id) VALUES (?)", (uniprot,))
+    conn.execute(
+        "INSERT OR IGNORE INTO protein(uniprot_id, taxon_id, reviewed) VALUES (?, ?, ?)",
+        (uniprot, taxon, reviewed),
+    )
     domain_id = conn.execute("SELECT id FROM domain WHERE pfam_id = ?", (pfam,)).fetchone()[0]
     protein_id = conn.execute("SELECT id FROM protein WHERE uniprot_id = ?", (uniprot,)).fetchone()[0]
     instance_id = f"{pfam}_{uniprot}_{start}_{end}"

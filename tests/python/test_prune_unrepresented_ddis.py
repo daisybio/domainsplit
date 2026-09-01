@@ -2,7 +2,7 @@
 """Checks for bin/prune_unrepresented_ddis.py.
 
 The invariant this module owns is "every DDI in the master DB is representable
-as an instance pair". A family can have zero instances -- ``--tier human_only``
+as an instance pair". A family can have zero instances -- a narrow ``--instance_tier``
 drops families whose strata are all non-human, and a dead accession never
 resolves -- and a DDI touching one of those cannot be split, embedded, or tested.
 

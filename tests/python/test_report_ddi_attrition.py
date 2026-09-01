@@ -31,7 +31,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 REPORT = os.path.join(BIN, "report_ddi_attrition.py")
 
-from domainsplit_schema import make_db  # noqa: E402
+from domainsplit_schema import add_instance, make_db  # noqa: E402
 
 ENV = dict(os.environ, PYTHONPATH=BIN + os.pathsep + os.environ.get("PYTHONPATH", ""))
 
@@ -51,7 +51,14 @@ def write_csv(path, header, rows):
 
 
 def build_master(path):
-    """Surviving DDIs: two 3did, one PPIDM contributed under two tokens, one negatome."""
+    """Surviving DDIs: two 3did, one PPIDM contributed under two tokens, one negatome.
+
+    Every family also gets one instance, so the tier breakdown has something to
+    count. The strata are deliberately mixed: PF00003 rests on a non-human
+    reviewed protein and PF00005 on a human TrEMBL one, so the DDIs touching them
+    must land above ``human_reviewed`` -- those are exactly the DDIs a narrower
+    ``--instance_tier`` would have pruned.
+    """
     make_db(path)
     conn = sqlite3.connect(path)
     conn.execute("PRAGMA foreign_keys=ON")
@@ -68,6 +75,19 @@ def build_master(path):
             (ids["PF00004"], ids["PF00006"], 1, "negatome"),
         ],
     )
+    # (family, protein, taxon, reviewed) -> stratum
+    #   PF00001/2/4/6  human   reviewed    -> human_reviewed
+    #   PF00003        mouse   reviewed    -> other_reviewed
+    #   PF00005        human   unreviewed  -> human_unreviewed
+    for pfam, uniprot, taxon, reviewed in [
+        ("PF00001", "P00001", "9606", "reviewed"),
+        ("PF00002", "P00002", "9606", "reviewed"),
+        ("PF00003", "P00003", "10090", "reviewed"),
+        ("PF00004", "P00004", "9606", "reviewed"),
+        ("PF00005", "P00005", "9606", "unreviewed"),
+        ("PF00006", "P00006", "9606", "reviewed"),
+    ]:
+        add_instance(conn, pfam, uniprot, 1, 10, taxon=taxon, reviewed=reviewed)
     conn.commit()
     conn.close()
 
@@ -120,6 +140,7 @@ def run(tmp):
     write_tsv(counts, ["source", "offered", "inserted"], [("3did", 9, 5)])
 
     out = os.path.join(tmp, "ddi_source_attrition.tsv")
+    tier_out = os.path.join(tmp, "ddi_tier_breakdown.tsv")
     subprocess.run(
         [
             sys.executable, REPORT,
@@ -131,6 +152,7 @@ def run(tmp):
             "--offered-counts", counts,
             "--splitting-source", "3did",
             "--out", out,
+            "--tier-out", tier_out,
             "--versions", os.path.join(tmp, "versions.yml"),
             "--process-name", "TEST:REPORT_DDI_ATTRITION",
         ],
@@ -143,12 +165,19 @@ def run(tmp):
     with open(out) as fh:
         body = [line for line in fh if not line.startswith("#")]
     rows = {r["source"]: r for r in csv.DictReader(body, delimiter="\t")}
-    return rows
+
+    with open(tier_out) as fh:
+        tier_body = [line for line in fh if not line.startswith("#")]
+    tiers = {
+        (r["scope"], r["tier"]): int(r["count"])
+        for r in csv.DictReader(tier_body, delimiter="\t")
+    }
+    return rows, tiers
 
 
 def test_report():
     with tempfile.TemporaryDirectory() as tmp:
-        rows = run(tmp)
+        rows, _tiers = run(tmp)
 
     # 3did: 9 offered, 5 inserted (dedup), 3 pruned, 2 surviving, 1 exported.
     assert rows["3did"]["offered"] == "9"
@@ -192,6 +221,39 @@ def test_report():
     assert sum(int(r["surviving"]) for s, r in rows.items() if s != "ALL_SOURCES") > 4
 
 
+def test_tier_breakdown():
+    """The second report: which stratum each surviving DDI actually rests on.
+
+    A DDI is filed under the *worse* of its two families' best strata, which is
+    the "would a narrower --instance_tier have kept this" question. With the
+    fixture's instances:
+
+      PF00001-PF00002  human_reviewed  x human_reviewed    -> human_reviewed
+      PF00001-PF00003  human_reviewed  x other_reviewed    -> other_reviewed
+      PF00004-PF00005  human_reviewed  x human_unreviewed  -> human_unreviewed
+      PF00004-PF00006  human_reviewed  x human_reviewed    -> human_reviewed
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        _rows, tiers = run(tmp)
+
+    assert tiers[("ddis", "human_reviewed")] == 2
+    assert tiers[("ddis", "other_reviewed")] == 1
+    assert tiers[("ddis", "human_unreviewed")] == 1
+    assert ("ddis", "other_unreviewed") not in tiers
+    # Nothing may fall through the cracks: PRUNE_UNREPRESENTED_DDIS guarantees
+    # every surviving DDI has instances on both sides.
+    assert ("ddis", "no_instance") not in tiers
+    assert sum(n for (scope, _t), n in tiers.items() if scope == "ddis") == 4
+
+    # Families and proteins are counted under their own best stratum, one each.
+    assert tiers[("families", "human_reviewed")] == 4
+    assert tiers[("families", "other_reviewed")] == 1
+    assert tiers[("families", "human_unreviewed")] == 1
+    assert tiers[("proteins", "other_reviewed")] == 1
+    assert tiers[("instances", "human_unreviewed")] == 1
+
+
 if __name__ == "__main__":
     test_report()
+    test_tier_breakdown()
     print("ok")

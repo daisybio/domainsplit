@@ -7,8 +7,9 @@ instance id, holding the *domain* sequence, not the parent protein's) -- and
 writes:
 
 * ``domain``   -- one row per Pfam family seen,
-* ``protein``  -- one row per parent UniProt accession (``sequence`` stays NULL;
-  ENRICH_DDI_DATABASE fills it from the UniProt release),
+* ``protein``  -- one row per parent UniProt accession, with its ``taxon_id`` and
+  ``reviewed`` flag (``sequence`` stays NULL; ENRICH_DDI_DATABASE fills it from
+  the UniProt release),
 * ``domain_protein_map`` -- one row per *instance*: ``domain_id, protein_id,
   domain_sequence, start_pos, end_pos, instance_id, clan, taxon_id``.
 
@@ -33,6 +34,12 @@ no GO terms, silently.
 The taxon is *kept*, not just checked: ``protein.taxon_id`` is what makes a
 multi-species database stratifiable, and what tells a reader which proteins went
 unenriched because their species had no STRING file.
+
+So is the review status. ``instances.tsv``'s ``source_db`` column carries the
+per-instance flag ppi-splitting sampled the instance under, and it lands in
+``protein.reviewed``. Without it there is no way to answer "how many DDIs survive
+only because the universe was widened to TrEMBL", which is the question
+``--instance_tier`` exists to let you ask.
 """
 
 import argparse
@@ -93,9 +100,10 @@ def load_instances(path, wanted_taxa):
             f"ERROR: {len(off_universe)} of {stats['read']} instances are outside the "
             f"configured taxon universe ({', '.join(sorted(wanted_taxa))}): {sample}"
             + ("..." if len(off_universe) > 10 else "")
-            + "\n--swissprot_taxon_ids decides which proteins exist and --instance_tier "
-            "decides which of them may be sampled; these two disagree. Either widen "
-            "--swissprot_taxon_ids or set --instance_tier human_only."
+            + "\n--instance_tier derives both which proteins exist (--swissprot_taxon_ids) "
+            "and which of them may be sampled (the upstream tier list); these two "
+            "disagree. Either widen --swissprot_taxon_ids, or pick an --instance_tier "
+            "whose universe covers the sampled species."
         )
     return rows, stats
 
@@ -108,18 +116,23 @@ def ingest(conn, rows, seqs):
     conn.executemany("INSERT OR IGNORE INTO domain(pfam_id) VALUES (?)", [(f,) for f in families])
     stats["families"] = len(families)
 
-    # One taxon per protein by construction -- an accession belongs to one entry --
-    # so first-seen is the only value there is.
-    protein_taxa = {}
+    # One taxon and one review status per protein by construction -- an accession
+    # belongs to one UniProt entry -- so first-seen is the only value there is.
+    protein_meta = {}
     for r in rows:
-        protein_taxa.setdefault(r["protein_id"].strip(), (r["taxon_id"] or "").strip())
-    proteins = sorted(protein_taxa)
+        protein_meta.setdefault(
+            r["protein_id"].strip(),
+            ((r["taxon_id"] or "").strip(), (r["source_db"] or "").strip() or None),
+        )
+    proteins = sorted(protein_meta)
     conn.executemany(
-        "INSERT OR IGNORE INTO protein(uniprot_id, taxon_id) VALUES (?, ?)",
-        [(p, protein_taxa[p]) for p in proteins],
+        "INSERT OR IGNORE INTO protein(uniprot_id, taxon_id, reviewed) VALUES (?, ?, ?)",
+        [(p, protein_meta[p][0], protein_meta[p][1]) for p in proteins],
     )
     stats["proteins"] = len(proteins)
-    stats["taxa"] = len(set(protein_taxa.values()))
+    stats["taxa"] = len({t for t, _r in protein_meta.values()})
+    for _t, flag in protein_meta.values():
+        stats[f"proteins_{flag or 'unknown_review_status'}"] += 1
 
     domain_id = {pfam: did for did, pfam in conn.execute("SELECT id, pfam_id FROM domain")}
     protein_id = {up: pid for pid, up in conn.execute("SELECT id, uniprot_id FROM protein")}
@@ -196,6 +209,9 @@ def main():
     written = write_mapping_csv(args.mapping_out, rows, seqs)
 
     for key in ("families", "proteins", "instances", "no_sequence"):
+        print(f"[ingest] {key} = {stats[key]}", flush=True)
+    # The whole point of a widened universe: how much of it is not human-reviewed.
+    for key in sorted(k for k in stats if k.startswith("proteins_")):
         print(f"[ingest] {key} = {stats[key]}", flush=True)
     print(f"[ingest] mapping_rows = {written}", flush=True)
     if stats["no_sequence"]:

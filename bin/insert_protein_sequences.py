@@ -69,7 +69,29 @@ def main() -> int:
             uniprot_records,
         )
     conn.commit()
+
+    # Fail loudly on the one hole this step can leave. A protein carries a domain
+    # instance only because FETCH_DOMAIN_META found it in the UniProt flat files;
+    # if the FASTA carved out of those same files does not have it, the two inputs
+    # were derived from different universes -- and the symptom otherwise is a NULL
+    # sequence, no GO terms and nothing reporting either. Both now come from the
+    # same `uniprot_dat_urls` list, so this cannot drift; it fails here rather than
+    # being trusted not to.
+    missing = conn.execute(
+        "SELECT COUNT(*), MIN(uniprot_id) FROM protein WHERE sequence IS NULL"
+    ).fetchone()
+    total = conn.execute("SELECT COUNT(*) FROM protein").fetchone()[0]
     conn.close()
+    print(f"[sequences] {total - missing[0]} of {total} proteins have a sequence", flush=True)
+    if missing[0]:
+        raise SystemExit(
+            f"ERROR: {missing[0]} of {total} `protein` rows have no sequence "
+            f"(e.g. {missing[1]}). Every parent protein of a domain instance came out "
+            "of the UniProt flat files, so the FASTA parsed from those same files must "
+            "cover it -- these two were built from different universes. Check that "
+            "PARSE_SWISSPROT and FETCH_DOMAIN_META received the same "
+            "--uniprot_dat_urls."
+        )
 
     with open(args.versions, "w") as f:
         f.write(f'"{args.process_name}":\n')

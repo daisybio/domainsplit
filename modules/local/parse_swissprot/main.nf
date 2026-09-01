@@ -5,7 +5,10 @@ process PARSE_SWISSPROT {
     container "docker.io/konstantinpelz/domainsplit-general:1.0.0"
 
     input:
-    path swissprot_dat
+    // The whole protein universe, one or more UniProt flat files, **Swiss-Prot
+    // first**: a duplicate accession is resolved first-writer-wins, and the
+    // reviewed record is the one to keep.
+    path swissprot_dats
     val taxon_ids
 
     output:
@@ -23,9 +26,13 @@ process PARSE_SWISSPROT {
     // CLI `--swissprot_taxon_ids 9606` arrives as a String while the config
     // default may be a GString -- see the boolean-param note in CLAUDE.md.
     def taxa = taxon_ids.toString().trim()
+    // A single `path` input arrives as one Path, a list of them as a List;
+    // `[swissprot_dats].flatten()` handles both without a branch. Staging order
+    // is the order the caller listed, which is the order the parser relies on.
+    def dat_args = [swissprot_dats].flatten().collect { d -> "--dat ${d}" }.join(' \\\n        ')
     """
     parse_swissprot_dat.py \\
-        --dat ${swissprot_dat} \\
+        ${dat_args} \\
         --go-terms uniprot_go_terms.tsv.gz \\
         --pfam-map swissprot_pfam.tsv.gz \\
         --sequences uniprot_sequences.fasta.gz \\

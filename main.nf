@@ -54,6 +54,7 @@ params {
     // ---- this pipeline's own (declared in nextflow_schema.json) ----
     seed: Integer
     negative_ppi_min_n_tested: Integer
+    string_min_proteins_per_taxon: Integer
     ddi_examples_target: Integer
     ddi_examples_pool_factor: Integer
     embedding_shards: Integer

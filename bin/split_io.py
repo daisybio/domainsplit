@@ -87,8 +87,15 @@ def read_instances_tsv(path):
     Columns: ``instance_id, family, clan, protein_id, start, end, taxon_id,
     source_db`` -- the one table every DDI-mode consumer in ppi-splitting reads,
     kept whole here so the two pipelines cannot end up with two views of it.
+
+    ``source_db`` is required, not optional: it carries the per-instance review
+    status (``reviewed``/``unreviewed``) that ``ingest_instances.py`` stores as
+    ``protein.reviewed``. Leaving it off the required list is how the flag went
+    missing before -- the column existed upstream the whole time and this reader
+    simply never asked for it.
     """
-    columns = ["instance_id", "family", "clan", "protein_id", "start", "end", "taxon_id"]
+    columns = ["instance_id", "family", "clan", "protein_id", "start", "end", "taxon_id",
+               "source_db"]
     with open(path, newline="") as fh:
         reader = csv.DictReader(fh, delimiter="\t")
         missing = [c for c in columns if c not in (reader.fieldnames or [])]

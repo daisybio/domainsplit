@@ -1,6 +1,6 @@
 // The funnel ppi-splitting's own DDI attrition chart cannot show: its waterfall
 // starts at the CSV EXPORT_SPLIT_DDIS handed it, so every DDI dropped *before*
-// the splitting stage -- which under `instance_tier = human_only` is most of
+// the splitting stage -- which under `instance_tier = human_reviewed` is most of
 // 3did -- is outside its frame. The counters existed but only in three
 // `.command.log` files, which go away with the work directory.
 //
@@ -25,6 +25,10 @@ process REPORT_DDI_ATTRITION {
 
     output:
     path "ddi_source_attrition.tsv", emit: report
+    // What the run's protein universe bought: surviving DDIs, families, proteins
+    // and instances per stratum. Without it there is no way to answer "was
+    // widening the universe worth it", which is the point of `instance_tier`.
+    path "ddi_tier_breakdown.tsv",   emit: tier_report
     path "versions.yml",             emit: versions
 
     script:
@@ -41,6 +45,7 @@ process REPORT_DDI_ATTRITION {
         --offered-counts ${offered_counts} \\
         --splitting-source ${splitting_source} \\
         --out ddi_source_attrition.tsv \\
+        --tier-out ddi_tier_breakdown.tsv \\
         --versions versions.yml \\
         --process-name "${task.process}"
     """
