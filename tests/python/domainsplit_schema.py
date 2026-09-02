@@ -51,7 +51,7 @@ CREATE TABLE protein_go_terms(
 CREATE TABLE protein_protein_interaction (
     protein_id_a REFERENCES protein ON DELETE CASCADE,
     protein_id_b REFERENCES protein ON DELETE CASCADE,
-    score,
+    score REAL,
     UNIQUE(protein_id_a, protein_id_b)
 );
 

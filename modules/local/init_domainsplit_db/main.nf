@@ -56,10 +56,19 @@ process INIT_DOMAINSPLIT_DB {
             protein_id REFERENCES protein ON DELETE CASCADE,
             go_accession
         );
+        -- `score` is typed REAL for the same reason start_pos/end_pos below are
+        -- typed INTEGER: declared with no type the column takes BLOB (none)
+        -- affinity, so SQLite stores whatever class the writer binds. INSERT_PPI
+        -- used to bind STRING's combined_score as the raw string it split out of
+        -- the links file, which made every reader see TEXT '400' -- and a
+        -- consumer comparing it to a numeric confidence cutoff ('score >= 400')
+        -- raised instead of filtering. INSERT_PPI parses the score now; the
+        -- affinity is the second guard, so a writer binding '400' is coerced to
+        -- 400.0 and no reader has to guess.
         CREATE TABLE protein_protein_interaction (
             protein_id_a REFERENCES protein ON DELETE CASCADE,
             protein_id_b REFERENCES protein ON DELETE CASCADE,
-            score,
+            score REAL,
             UNIQUE(protein_id_a, protein_id_b)
         );
 

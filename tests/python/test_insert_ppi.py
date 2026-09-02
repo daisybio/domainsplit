@@ -109,8 +109,8 @@ def test_multi_species_links_insert_without_taxon_bookkeeping():
         got = edges(tmp)
 
     assert got == {
-        ("P11111", "P22222", "900"),
-        ("Q33333", "Q44444", "800"),
+        ("P11111", "P22222", 900.0),
+        ("Q33333", "Q44444", 800.0),
     }, got
     assert "3 read, 2 inserted" in proc.stdout, proc.stdout
 
@@ -151,12 +151,48 @@ def test_duplicate_edges_do_not_abort_the_insert():
     ]
     with tempfile.TemporaryDirectory() as tmp:
         run(tmp, rows)
-        assert edges(tmp) == {("P11111", "P22222", "900")}
+        assert edges(tmp) == {("P11111", "P22222", 900.0)}
+
+
+def test_a_non_numeric_score_is_fatal():
+    """`score` reaches consumers as a number or the run stops here.
+
+    It used to reach them as whatever string the links file held: the column is
+    typeless in the schema, INSERT bound `parts[2]` verbatim, and a downstream
+    numeric confidence filter (`score >= 400`) then raised a TypeError deep in a
+    benchmark run instead of failing at ingestion. A third field that is not a
+    number means this is not a STRING links file, so say so here.
+    """
+    rows = [("9606.ENSP00000000001", "9606.ENSP00000000002", "not-a-score")]
+    with tempfile.TemporaryDirectory() as tmp:
+        proc = run(tmp, rows, check=False)
+
+    assert proc.returncode != 0
+    assert "non-numeric combined_score" in proc.stderr, proc.stderr
+
+
+def test_scores_are_stored_as_numbers():
+    """The stored class, not just the value: REAL affinity plus a parsed insert."""
+    rows = [("9606.ENSP00000000001", "9606.ENSP00000000002", "900")]
+    with tempfile.TemporaryDirectory() as tmp:
+        run(tmp, rows)
+        conn = sqlite3.connect(os.path.join(tmp, "domainsplit.sqlite3"))
+        classes = {
+            r[0]
+            for r in conn.execute(
+                "SELECT typeof(score) FROM protein_protein_interaction"
+            )
+        }
+        conn.close()
+
+    assert classes == {"real"}, classes
 
 
 if __name__ == "__main__":
     test_multi_species_links_insert_without_taxon_bookkeeping()
     test_per_taxon_counters_localise_a_broken_join()
     test_a_file_that_resolves_to_nothing_is_fatal()
+    test_a_non_numeric_score_is_fatal()
+    test_scores_are_stored_as_numbers()
     test_duplicate_edges_do_not_abort_the_insert()
     print("ok")

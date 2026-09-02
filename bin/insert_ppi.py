@@ -78,10 +78,32 @@ def stream_edges(path, string_id_mapping, uniprot_to_pid, conn):
             parts = line.split()
             if len(parts) < 3:
                 continue
-            a, b, score = parts[0], parts[1], parts[2]
+            a, b, raw_score = parts[0], parts[1], parts[2]
             taxon = per_taxon[taxon_of(a)]
             totals["read"] += 1
             taxon["read"] += 1
+
+            # Parse, don't pass through. This used to bind `parts[2]` straight
+            # into the INSERT, and with a typeless `score` column SQLite stored
+            # the string verbatim -- so every downstream consumer read TEXT '400'
+            # and any numeric confidence filter (`score >= cutoff`) raised
+            # instead of filtering. The column is REAL now, which would coerce a
+            # bound string anyway; this is the second half of the same fix, and
+            # it is where a genuinely non-numeric third column gets named.
+            # Fatal, not skipped: STRING's links format is
+            # `protein1 protein2 combined_score`, so a third field that is not a
+            # number means this is not that file, and silently dropping the rows
+            # would empty the interactome behind a green run.
+            try:
+                score = float(raw_score)
+            except ValueError:
+                raise SystemExit(
+                    f"ERROR: {path}: edge {a} {b} (row {totals['read']} of the "
+                    f"links file) has a non-numeric combined_score {raw_score!r}. "
+                    "STRING links files are `protein1 protein2 combined_score` -- "
+                    "check that --url_string / FETCH_STRING_LINKS' output is a "
+                    "links file and not a different STRING download."
+                ) from None
 
             uniprot_a = string_id_mapping.get(a)
             uniprot_b = string_id_mapping.get(b)
