@@ -1,0 +1,7 @@
+# TODO: pin to a tag on bionetslab/ppi-splitting-pipeline once domain_split is
+# merged and versioned there. The submodule tag and the Docker image tag in
+# conf/ppi_splitting.config must move together (bin/ is baked into the image).
+[submodule "subworkflows/external/ppi-splitting"]
+	path = subworkflows/external/ppi-splitting
+	url = https://github.com/PelzKo/ppi-splitting-pipeline.git
+	branch = domain_split

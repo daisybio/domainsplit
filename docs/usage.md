@@ -31,8 +31,84 @@ Example `params.yaml`:
 ```yaml
 outdir: "./results"
 url_3did: "https://3did.irbbarcelona.org/download/2022_01/3did.sql.gz"
-url_uniprot_sequences: "https://ftp.uniprot.org/pub/databases/uniprot/current_release/knowledgebase/complete/uniprot_sprot.fasta.gz"
+instance_tier: "human_reviewed"
+cache_dir: "/nfs/scratch/domainsplit_cache"
 ```
+
+### Choosing the protein universe: `--instance_tier`
+
+`instance_tier` is the only protein-universe knob you have to set. Everything else
+follows from it — which UniProt flat files are downloaded (`uniprot_dat_urls`),
+which taxa survive parsing (`swissprot_taxon_ids`) and which strata ppi-splitting
+may sample instances from.
+
+| `--instance_tier`               | universe                         | entries | UniProt download |
+| ------------------------------- | -------------------------------- | ------- | ---------------- |
+| `human_reviewed` (default)      | human Swiss-Prot                 | ~20 k   | 114 MB           |
+| `all_species_reviewed`          | + non-human Swiss-Prot           | ~573 k  | 667 MB           |
+| `human_any_review_status`       | + human TrEMBL                   | ~200 k  | 114 MB + 231 MB  |
+| `all_species_any_review_status` | + all TrEMBL — **unimplemented** | ~250 M  | 110 GB           |
+
+The four are alternatives, not a ladder: exactly one applies per run.
+`all_species_any_review_status` fails before any task is submitted — it needs the
+full TrEMBL flat file, which `FETCH_DOMAIN_META` parses into an in-memory dict
+(see [issue #4](https://github.com/daisybio/domainsplit/issues/4)).
+
+A family with no eligible instance keeps none, and every DDI touching it is
+dropped by `PRUNE_UNREPRESENTED_DDIS`. Widening the universe is how you stop
+discarding those — `reports/ddi_tier_breakdown.tsv` counts the surviving DDIs per
+stratum, and every DDI above `human_reviewed` there is one a narrower universe
+would have pruned.
+
+Two things to know before comparing runs:
+
+- Strata fill in the order `human_reviewed → other_reviewed → human_unreviewed →
+other_unreviewed`. **Reviewed outranks human**: a family with no human
+  Swiss-Prot member takes a curated non-human sequence before an auto-annotated
+  human one.
+- Lower strata fill **freely**, not as a top-up. A family with 3 human Swiss-Prot
+  regions under `all_species_reviewed` keeps those 3 and fills the rest of its
+  pool from non-human reviewed proteins. So widening the universe changes the
+  instance pool of families that were never dropped, and only `human_reviewed`
+  reproduces a previous run's numbers.
+
+To narrow rather than widen — a human+mouse run, say — set `swissprot_taxon_ids`
+explicitly alongside an `all_species_*` tier:
+
+```yaml
+instance_tier: "all_species_reviewed"
+swissprot_taxon_ids: "9606,10090"
+```
+
+The retired values are `human_only` (now `human_reviewed`) and `any` (now
+`all_species_reviewed` — **not** `all_species_any_review_status`, which adds
+TrEMBL). Both are rejected with that mapping rather than silently aliased.
+
+### STRING enrichment
+
+With `url_string` unset (the default), `FETCH_STRING_LINKS` derives the taxon list
+from the STRING ids of the proteins in the database and downloads STRING's
+per-organism links file for each, so every species the universe admits is
+enriched. `reports/string_taxa_report.tsv` records, per taxon, how many proteins
+it contributed, whether STRING had a file for it, and how many edges survived.
+Taxa STRING does not cover are reported, not fatal.
+
+Set `url_string` to pin one explicit links file and skip the fetch entirely.
+
+TrEMBL proteins receive no interactions and no links file changes that: UniProt
+does not cross-reference STRING for unreviewed entries. Both parsers count and
+report those proteins rather than leaving the gap to be re-investigated.
+
+### Caching downloads
+
+`cache_dir` is one directory for every download the pipeline caches — the Pfam and
+UniProt files under `pfam-<release>/`, the per-organism STRING files under
+`string/`. It **must be an absolute path on a filesystem every compute node
+shares**; node-local scratch gives each task its own cold cache. It is a
+convenience only: a cold run produces identical output.
+
+`interpro_cache` is ppi-splitting's own name for the same directory and still
+works as an alias; `cache_dir` wins when both are given.
 
 > [!WARNING]
 > Do not use `-c <file>` to specify parameters as this will result in errors. Custom config files specified with `-c` must only be used for [tuning process resource specifications](https://nf-co.re/docs/running/run-pipelines#configuring-pipelines), other infrastructural tweaks (such as output directories), or module arguments (args).

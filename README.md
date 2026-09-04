@@ -47,7 +47,16 @@ nextflow run daisybio/domainsplit \
 
 ## Output
 
-The main output is the SQLite database file `domainsplit.sqlite3` in the `results` directory, plus per-method, per-split databases under `results/split_databases/<method>/<split>.sqlite3`.
+The main outputs in the `results` directory are:
+
+- `domainsplit.sqlite3` — the master database.
+- `databases/<method>/<split>.sqlite3` — one database per (splitting method, split). With the
+  default `--ppi_splitting_multi_negset true` that is **5 method directories, 18 databases**.
+- `embeddings/<model>_domain_embeddings.h5` — one pooled vector per domain instance per model
+  (`esm3`, `esmc`, `prott5`), keyed `{pfam_id}/{instance_id}`. Embeddings are not stored in
+  the databases.
+- `reports/`, `external_ddis/`, `candidate_network/`, `ppi_splitting/`, `pipeline_info/` —
+  provenance and diagnostics. See [docs/output.md](docs/output.md).
 
 ## Notes
 
@@ -59,9 +68,9 @@ The main output is the SQLite database file `domainsplit.sqlite3` in the `result
 
 Some processes require secrets passed via environment variables. Copy `.env.example` to `.env` and fill in your values — the `.env` file is gitignored.
 
-| Variable   | Required             | Description                                                                                                     |
-| ---------- | -------------------- | --------------------------------------------------------------------------------------------------------------- |
-| `HF_TOKEN` | Yes (ESM embeddings) | HuggingFace access token for downloading ESM model weights. Obtain at <https://huggingface.co/settings/tokens>. |
+| Variable   | Required                     | Description                                                                                                                                                    |
+| ---------- | ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `HF_TOKEN` | Yes (ESM3 / ESMC embeddings) | HuggingFace access token for the gated EvolutionaryScale weights. Not needed for ProtT5, which is ungated. Obtain at <https://huggingface.co/settings/tokens>. |
 
 On a SLURM cluster, export the variable in your job script or pass it as a [Nextflow secret](https://www.nextflow.io/docs/latest/secrets.html):
 

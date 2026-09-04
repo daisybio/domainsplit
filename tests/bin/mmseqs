@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# Test-only stub of the `mmseqs` binary.
+#
+# The nf-test pipeline test (tests/default.nf.test) runs with `-stub` and the
+# `test` profile, which enables no container engine — every process runs on the
+# host. The nf-core MMSEQS_EASYCLUSTER module captures its version via an
+# `eval('mmseqs version')` output directive, which Nextflow executes even in
+# stub mode. Without mmseqs installed that fails with exit 127, so this shim
+# provides a deterministic fake version. It is only ever on PATH for test runs
+# (added via env.PATH in tests/nextflow.config); real runs use the container.
+echo "stub"

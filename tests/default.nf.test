@@ -4,6 +4,17 @@ nextflow_pipeline {
     script "../main.nf"
     tag "pipeline"
 
+    // A real run over the 85-family fixture set in tests/data/ -- every process
+    // executes. It is NOT a laptop test: `generate_domain_embeddings` needs a GPU,
+    // and an HF_TOKEN for the gated ESM3/ESMC weights, so run it as
+    //
+    //     nf-test test tests/default.nf.test --profile test,docker,gpu
+    //
+    // There is no `-stub` variant any more: Nextflow silently runs the real
+    // `script:` block for a process without a `stub:` block, and the imported
+    // ppi-splitting processes have none -- so a stub run would quietly stream
+    // 6.3 GB of Pfam and run BLAST. `nextflow run . -profile test -preview` is the
+    // cheap wiring check.
     test("-profile test") {
 
         when {
@@ -13,20 +24,32 @@ nextflow_pipeline {
         }
 
         then {
-            // stable_path: All files + folders in ${params.outdir}/ with a stable path (including file name)
-            def stable_path = getAllFilesFromDir(params.outdir, relative: true, includeDir: true, ignore: ['pipeline_info/*.{html,json,txt}'])
-            // stable_content: All files in ${params.outdir}/ with stable content
-            def stable_content = getAllFilesFromDir(params.outdir, ignoreFile: 'tests/.nftignore')
-            assert workflow.success
+            // Contents, not paths: the point of the integration is which DDIs end
+            // up in which split database and with which source labels, and a file
+            // listing cannot see any of that. tests/bin/check_test_run.py holds the
+            // assertions; it exits non-zero and prints what failed.
+            def stdout = new StringBuilder()
+            def stderr = new StringBuilder()
+            def check = ["python3", "${projectDir}/tests/bin/check_test_run.py",
+                         "--outdir", "$outputDir"].execute()
+            check.waitForProcessOutput(stdout, stderr)
+
+            // Snapshot the collated software versions with the Nextflow version line
+            // stripped (so the assertion survives Nextflow upgrades). This also
+            // satisfies the nf-core `nf_test_content` lint rule, which requires a
+            // `versions.yml` to be snapshotted by every `*.nf.test`.
+            //
+            // NOTE: `versions.yml` is keyed by process name, so every process rename
+            // in this repo changes it -- and no `tests/default.nf.test.snap` is
+            // committed while CI runs with `--ci`, which refuses to create a missing
+            // snapshot. This assertion cannot be passing today either way; the first
+            // successful cluster run writes the snapshot.
+            def versions_yml = removeNextflowVersion("$outputDir/pipeline_info/nf_core_pipeline_software_mqc_versions.yml")
+
             assertAll(
-                { assert snapshot(
-                    // pipeline versions.yml file for multiqc from which Nextflow version is removed because we test pipelines on multiple Nextflow versions
-                    removeNextflowVersion("$outputDir/pipeline_info/domainsplit_software_mqc_versions.yml"),
-                    // All stable path name, with a relative path
-                    stable_path,
-                    // All files with stable contents
-                    stable_content
-                ).match() }
+                { assert workflow.success },
+                { assert check.exitValue() == 0 : "${stdout}\n${stderr}" },
+                { assert snapshot(versions_yml).match() }
             )
         }
     }

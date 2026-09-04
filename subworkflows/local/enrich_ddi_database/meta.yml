@@ -1,0 +1,46 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/nf-core/modules/master/subworkflows/yaml-schema.json
+name: "enrich_ddi_database"
+description: Sequentially annotate the DDI database with domain GO terms, protein sequences, protein GO terms and STRING PPIs. Embeddings are domain-level and published as HDF5 files by generate_domain_embeddings, not stored here.
+keywords:
+  - ddi
+  - go
+  - ppi
+  - annotation
+components:
+  - insert/domain/go/terms
+  - insert/protein/sequences
+  - insert/protein/go/terms
+  - insert/ppi
+input:
+  - domainsplit_db_in:
+      type: file
+      description: Domainsplit SQLite with ingested splits and external sources.
+      pattern: "*.sqlite3"
+  - input_pfam2go:
+      type: file
+      description: pfam2go mapping of Pfam domains to GO terms.
+  - input_uniprot_sequences:
+      type: file
+      description: UniProt protein sequences.
+      pattern: "*.{fasta,fa,gz}"
+  - protein_domain_map:
+      type: file
+      description: Protein-to-Pfam-domain mapping from INGEST_INSTANCES; only its uniprot_id column is read.
+  - input_uniprot_go_terms:
+      type: file
+      description: UniProt protein-to-GO-term annotations.
+  - input_string:
+      type: file
+      description: STRING protein-protein interaction table.
+  - input_uniprot_id_mapping:
+      type: file
+      description: UniProt ID mapping linking STRING IDs to UniProt accessions.
+output:
+  - domainsplit_db:
+      type: file
+      description: Fully enriched Domainsplit SQLite database.
+      pattern: "*.sqlite3"
+authors:
+  - "@KonstantinPelz"
+maintainers:
+  - "@KonstantinPelz"

@@ -1,0 +1,41 @@
+uniprot_accession_A	uniprot_name_A	entrez_A	uniprot_accession_B	uniprot_name_B	entrez_B	score	info
+P45985	MP2K4_HUMAN	6416	Q14315	FLNC_HUMAN	2318	0.75	experiments:Two-hybrid,affinity chromatography technology,pull down;pmids:9006895;sources:biogrid
+Q86TC9	MYPN_HUMAN	84665	P35609	ACTN2_HUMAN	88	0.63	experiments:Two-hybrid;pmids:11309420;sources:biogrid
+Q04771	ACVR1_HUMAN	90	P49354	FNTA_HUMAN	2339	0.63	experiments:Two-hybrid;pmids:8599089;sources:biogrid
+P23769	GATA2_HUMAN	2624	P29590	PML_HUMAN	5371	0.75	experiments:Two-hybrid,affinity chromatography technology,pull down;pmids:10938104;sources:biogrid
+P15927	RFA2_HUMAN	6118	P40763	STAT3_HUMAN	6774	0.90	experiments:Two-hybrid,affinity chromatography technology,pull down,proximity labelling technology,anti tag coimmunoprecipitation,mammalian protein protein interaction trap;pmids:37827155,25416956,10875894,38884001;sources:biogrid,IntAct
+P84077	ARF1_HUMAN	375	Q9NZ52	GGA3_HUMAN	23163	0.79	experiments:Two-hybrid,pull down;pmids:11950392,11301005,28100775,10747089;sources:biogrid
+P61204	ARF3_HUMAN	377	P53365	ARFP2_HUMAN	23647	0.85	experiments:Two-hybrid,pull down,proximity labelling technology;pmids:9312003,35844135,9038142;sources:biogrid,IntAct
+P61204	ARF3_HUMAN	377	P53367	ARFP1_HUMAN	27236	0.85	experiments:Two-hybrid,pull down,proximity labelling technology;pmids:10413101,35844135,9038142,22981988;sources:biogrid,IntAct
+Q8IZH2	XRN1_HUMAN	54464	P04075	ALDOA_HUMAN	226	0.63	experiments:Two-hybrid;pmids:15231747;sources:biogrid,IntAct
+P05067	A4_HUMAN	351	Q92624	APBP2_HUMAN	10513	0.90	experiments:Two-hybrid,affinity chromatography technology,pull down,validated two hybrid,two hybrid array,two hybrid pooling approach;pmids:9843960,19570594,32814053;sources:biogrid,IntAct
+P51693	APLP1_HUMAN	333	O75553	DAB1_HUMAN	1600	0.81	experiments:Two-hybrid,affinity chromatography technology,pull down;pmids:10460257;sources:biogrid
+Q99967	CITE2_HUMAN	10370	P05549	AP2A_HUMAN	7020	0.84	experiments:Two-hybrid,pull down,far western blotting;pmids:12586840,11744733;sources:biogrid,IntAct
+P05549	AP2A_HUMAN	7020	Q09472	EP300_HUMAN	2033	0.86	experiments:Two-hybrid,affinity chromatography technology,anti tag coimmunoprecipitation;pmids:12586840,25669978;sources:biogrid,IntAct
+P04114	APOB_HUMAN	338	P55157	MTP_HUMAN	4547	0.89	experiments:Two-hybrid,affinity chromatography technology,anti tag coimmunoprecipitation,anti bait coimmunoprecipitation;pmids:26224785,9915855,27487388;sources:biogrid,IntAct
+P32121	ARRB2_HUMAN	409	Q12967	GNDS_HUMAN	5900	0.72	experiments:Two-hybrid,affinity chromatography technology;pmids:12105416;sources:biogrid
+P07333	CSF1R_HUMAN	1436	P62993	GRB2_HUMAN	2885	0.92	experiments:Two-hybrid,affinity chromatography technology,pull down;pmids:10025673,9380408,7597091;sources:biogrid
+P62993	GRB2_HUMAN	2885	P48634	PRC2A_HUMAN	7916	0.73	experiments:Two-hybrid;pmids:21988832,14667819;sources:biogrid,IntAct
+O15116	LSM1_HUMAN	27257	O43776	SYNC_HUMAN	4677	0.63	experiments:Two-hybrid;pmids:15231747;sources:biogrid,IntAct
+P02730	B3AT_HUMAN	6521	Q9BWU0	NADAP_HUMAN	22950	0.68	experiments:Two-hybrid,pull down;pmids:9422766;sources:biogrid
+P20749	BCL3_HUMAN	602	Q99728	BARD1_HUMAN	580	0.68	experiments:Two-hybrid,pull down;pmids:10362352;sources:biogrid
+P08588	ADRB1_HUMAN	153	O14908	GIPC1_HUMAN	10755	0.79	experiments:Two-hybrid,affinity chromatography technology;pmids:12724327;sources:biogrid
+P38398	BRCA1_HUMAN	672	P18846	ATF1_HUMAN	466	0.75	experiments:Two-hybrid,affinity chromatography technology,pull down;pmids:10945975;sources:biogrid
+P38398	BRCA1_HUMAN	672	P43246	MSH2_HUMAN	4436	0.88	experiments:Two-hybrid,affinity chromatography technology,pull down,biochemical;pmids:15886699,10783165,11498787;sources:biogrid
+Q99728	BARD1_HUMAN	580	P38398	BRCA1_HUMAN	672	0.99	experiments:Two-hybrid,affinity chromatography technology,pull down,proximity labelling technology,biochemical,enzymatic study,x-ray crystallography,protein complementation assay,fluorescent resonance energy transfer,imaging technique,anti tag coimmunoprecipitation,anti bait coimmunoprecipitation,tandem affinity purification,proximity-dependent biotin identification,nuclear magnetic resonance,gal4 vp16 complementation;pmids:11927591,25823446,26350354,11278247,20060929,16391231,29367421,21901007,18493658,26490435,33961781,23086937,10635334,12732733,25184681,16403807,11301010,20215511,8944023,12485996,29656893,33589814,9342365,37655321,9738006,11573085,19176389,36347866,24289923,12890688,17873885,37797621,24695549,27977889,27454289,18936166,10026184,34408138,28514442,25634209,31270457,35203293,24981860,28262780,29180510,23416467,15159397,28398198,25252691,14636569,9788437,14638690,22110403,26831064,17525341,25652403,11498787,35487060,14647430,9798686,24085845,17664283,11504724,19369211,15569676,20681793,32347575,16489000,29858377,19766185,12951069,11773071,27239795,32092106,12431996,28948225,19117993,11257228,12700228,12438698,34591612,10477523,11526114,34726323,19916563,29355525,15855157,11925436,23680151;sources:biogrid,UniProt,dip,mint,IntAct
+P38398	BRCA1_HUMAN	672	P52701	MSH6_HUMAN	2956	0.88	experiments:Two-hybrid,affinity chromatography technology,pull down,biochemical;pmids:25184681,10783165,11498787;sources:biogrid
+O00192	ARVC_HUMAN	421	P55291	CAD15_HUMAN	1013	0.75	experiments:Two-hybrid,affinity chromatography technology,pull down;pmids:11058098;sources:biogrid
+P61457	PHS_HUMAN	5092	Q13936	CAC1C_HUMAN	775	0.63	experiments:Two-hybrid;pmids:11461190;sources:biogrid
+P49810	PSN2_HUMAN	5664	P07384	CAN1_HUMAN	823	0.72	experiments:Two-hybrid,affinity chromatography technology;pmids:9852298;sources:biogrid
+P20807	CAN3_HUMAN	825	Q8WZ42	TITIN_HUMAN	7273	0.83	experiments:Two-hybrid,two hybrid fragment pooling approach;pmids:8537379,9642272,23414517,20860623;sources:biogrid,mint,IntAct
+Q14643	ITPR1_HUMAN	3708	P35219	CAH8_HUMAN	767	0.88	experiments:Two-hybrid,affinity chromatography technology,pull down,anti tag coimmunoprecipitation;pmids:33961781,12611586,28514442,26186194;sources:biogrid,IntAct
+Q96QZ7	MAGI1_HUMAN	9223	P35222	CTNB1_HUMAN	1499	0.96	experiments:Two-hybrid,affinity chromatography technology,pull down,proximity labelling technology,holdup assay;pmids:34079125,10772923,27684187,24696483,36115835;sources:biogrid,IntAct
+P06400	RB_HUMAN	5925	Q13948	CASP_HUMAN	1523	0.78	experiments:Two-hybrid,affinity chromatography technology,pull down;pmids:12891711;sources:biogrid
+Q99816	TS101_HUMAN	7251	P38936	CDN1A_HUMAN	1026	0.79	experiments:Two-hybrid,affinity chromatography technology;pmids:11943869;sources:biogrid
+Q13415	ORC1_HUMAN	4998	P49736	MCM2_HUMAN	4171	0.63	experiments:Two-hybrid;pmids:12614612;sources:biogrid
+P49736	MCM2_HUMAN	4171	O43929	ORC4_HUMAN	5000	0.63	experiments:Two-hybrid;pmids:12614612;sources:biogrid
+P49736	MCM2_HUMAN	4171	P33992	MCM5_HUMAN	4174	1.00	experiments:Two-hybrid,affinity chromatography technology,pull down,biochemical,imaging technique,cross-linking study,tandem affinity purification,cosedimentation through density gradient,protein array;pmids:22939629,31067464,23993743,25963833,15232106,12614612,35831314,24207054,11248027,37071682,17296731,22540012,26344197;sources:biogrid,UniProt,mint,IntAct
+P49736	MCM2_HUMAN	4171	O00311	CDC7_HUMAN	8317	0.84	experiments:Two-hybrid,affinity chromatography technology,enzymatic study;pmids:23598722,12614612,16826239,16446360,18286467,10846177,17927916,30392930,22540012,23066029;sources:biogrid
+P49736	MCM2_HUMAN	4171	Q13416	ORC2_HUMAN	4999	0.87	experiments:Two-hybrid,affinity chromatography technology,pull down,protein array;pmids:15232106,12614612;sources:biogrid,IntAct
+P15927	RFA2_HUMAN	6118	P49736	MCM2_HUMAN	4171	0.82	experiments:Two-hybrid,proximity labelling technology;pmids:12614612,37827155;sources:biogrid
+P49736	MCM2_HUMAN	4171	Q9UBU7	DBF4A_HUMAN	10926	0.76	experiments:Two-hybrid,enzymatic study;pmids:12614612,18286467,10846177,22540012;sources:biogrid

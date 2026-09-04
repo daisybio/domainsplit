@@ -1,0 +1,7 @@
+name: fetch_string_links
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - python>=3.10
+  - requests

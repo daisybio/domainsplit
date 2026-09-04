@@ -1,6 +1,0 @@
-name: extract_unique_domains
-channels:
-  - conda-forge
-  - bioconda
-dependencies:
-  - sqlite

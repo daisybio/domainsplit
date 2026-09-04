@@ -15,6 +15,7 @@
                 "input": {
                     "type": "string",
                     "format": "file-path",
+                    "mimetype": "text/csv",
                     "description": "Unused samplesheet placeholder; this pipeline reads inputs from the url_* parameters instead.",
                     "help_text": "Kept for nf-core template compatibility. Source databases are configured via the url_* parameters in nextflow.config.",
                     "fa_icon": "fas fa-file-csv",
@@ -36,40 +37,48 @@
             }
         },
         "source_database_options": {
-            "title": "Source database URLs",
+            "title": "Source databases",
             "type": "object",
             "fa_icon": "fas fa-database",
-            "description": "URLs of the public source databases used to assemble the domainsplit database.",
+            "description": "Public source databases (URLs and local file paths) used to assemble the domainsplit database.",
+            "required": ["hippie_tsv", "ppidm_tsv", "negative_ppi_parquet"],
             "properties": {
                 "url_3did": {
                     "type": "string",
                     "description": "URL of the 3did SQL dump archive.",
-                    "default": "https://3did.irbbarcelona.org/download/2022_01/3did.sql.gz",
+                    "default": "https://3did.irbbarcelona.org/download/current/3did.sql.gz",
                     "fa_icon": "fas fa-link"
                 },
-                "url_uniprot_id_mapping": {
+                "url_pfam_regions": {
                     "type": "string",
-                    "description": "URL of the UniProt id-mapping file (per organism).",
-                    "default": "https://ftp.uniprot.org/pub/databases/uniprot/current_release/knowledgebase/idmapping/by_organism/HUMAN_9606_idmapping.dat.gz",
+                    "description": "URL or path of Pfam-A.regions.tsv.gz, FETCH_DOMAIN_META's instance source: every Pfam region of every reference-proteome protein, with no redundancy reduction. Deliberately not Pfam-A.fasta, which is 90% non-redundant and drops the human member of well-conserved families.",
+                    "default": "https://ftp.ebi.ac.uk/pub/databases/Pfam/current_release/Pfam-A.regions.tsv.gz",
                     "fa_icon": "fas fa-link"
                 },
-                "url_uniprot_embeddings": {
+                "pfam_regions": {
                     "type": "string",
-                    "description": "URL of the per-residue ProtT5 UniProt embeddings HDF5.",
-                    "default": "https://ftp.ebi.ac.uk/pub/contrib/UniProt/embeddings/current_release/UP000005640_9606/per-residue.h5",
+                    "format": "file-path",
+                    "description": "Local Pfam-A.regions.tsv.gz, skipping the ~4.7 GB transfer.",
+                    "fa_icon": "fas fa-file"
+                },
+                "cache_dir": {
+                    "type": "string",
+                    "format": "directory-path",
+                    "description": "One cache root for every download this pipeline caches: ppi-splitting's Pfam/UniProt files under pfam-<release>/ and the per-organism STRING links under string/. Must be an absolute path on a filesystem every compute node shares. A convenience only: a cold run produces identical output.",
+                    "help_text": "ppi-splitting's own param name for this is interpro_cache, which is kept as a legacy alias; passing either works and cache_dir wins.",
+                    "fa_icon": "fas fa-database"
+                },
+                "uniprot_dat_urls": {
+                    "type": "string",
+                    "description": "Comma-separated UniProt flat files (URL or path) that ARE the run's protein universe, Swiss-Prot first. Leave unset: it is derived from instance_tier. PARSE_SWISSPROT reads them once and emits the GO-term TSV, the accession-to-Pfam TSV, the protein FASTA and the STRING-id map; FETCH_DOMAIN_META reads the same list as its protein universe, because Pfam-A.regions carries coordinates only and the domain sequence, taxon and review flag come from here.",
+                    "help_text": "Set explicitly only to pin a release or point at local copies. Swiss-Prot must come first: an accession promoted from TrEMBL to Swiss-Prot between releases exists in both files and both parsers take the first writer, so the reviewed record has to be the one they see. Derived defaults: human_reviewed -> uniprot_sprot_human.dat.gz (114 MB); all_species_reviewed -> uniprot_sprot.dat.gz (667 MB); human_any_review_status -> uniprot_sprot_human.dat.gz + uniprot_trembl_human.dat.gz.",
                     "fa_icon": "fas fa-link"
                 },
-                "url_uniprot_go_terms": {
+                "swissprot_taxon_ids": {
                     "type": "string",
-                    "description": "URL of the UniProt GO terms TSV (REST stream).",
-                    "default": "https://rest.uniprot.org/uniprotkb/stream?compressed=true&fields=accession%2Cgo_id&format=tsv&query=%28%28database%3AGO%29+AND+%28reviewed%3Atrue%29%29",
-                    "fa_icon": "fas fa-link"
-                },
-                "url_uniprot_sequences": {
-                    "type": "string",
-                    "description": "URL of the UniProt-SwissProt FASTA archive.",
-                    "default": "https://ftp.uniprot.org/pub/databases/uniprot/current_release/knowledgebase/complete/uniprot_sprot.fasta.gz",
-                    "fa_icon": "fas fa-link"
+                    "description": "Comma-separated NCBI taxon ids kept while parsing the UniProt flat files; an empty string keeps every species. Leave unset: it is derived from instance_tier ('9606' for the human_* tiers, empty for the all_species_* ones).",
+                    "help_text": "Set explicitly only to narrow further, e.g. '9606,10090' together with --instance_tier all_species_reviewed for a human+mouse run. Note that `--swissprot_taxon_ids \"\"` on the command line is parsed by Nextflow as a bare boolean flag and rejected; use an all_species_* tier, or a -params-file.",
+                    "fa_icon": "fas fa-filter"
                 },
                 "url_negatome": {
                     "type": "string",
@@ -79,9 +88,21 @@
                 },
                 "url_string": {
                     "type": "string",
-                    "description": "URL of the STRING protein-protein links file.",
-                    "default": "https://stringdb-downloads.org/download/protein.links.v12.0/9606.protein.links.v12.0.txt.gz",
+                    "description": "One explicit STRING links file (URL or path). Leave unset: FETCH_STRING_LINKS then derives the taxon list from the STRING ids of the proteins in the database and downloads STRING's per-organism links file for each, so every species the universe admits is enriched. Setting it pins that one file and skips the fetch, which is what -profile test does to stay offline.",
                     "fa_icon": "fas fa-link"
+                },
+                "string_release": {
+                    "type": "string",
+                    "description": "STRING release used to build the per-organism download URL: https://stringdb-downloads.org/download/protein.links.v<rel>/<taxid>.protein.links.v<rel>.txt.gz",
+                    "default": "12.0",
+                    "fa_icon": "fas fa-tag"
+                },
+                "string_min_proteins_per_taxon": {
+                    "type": "integer",
+                    "description": "Skip a taxon contributing fewer than this many proteins, so one stray protein does not cost a 50 MB STRING download. 1 fetches for every taxon present.",
+                    "default": 1,
+                    "minimum": 1,
+                    "fa_icon": "fas fa-filter"
                 },
                 "url_pfam2go": {
                     "type": "string",
@@ -89,105 +110,191 @@
                     "default": "https://current.geneontology.org/ontology/external2go/pfam2go",
                     "fa_icon": "fas fa-link"
                 },
-                "url_pfam_template": {
-                    "type": "string",
-                    "description": "Template URL for downloading per-Pfam alignment archives; `{pfam_id}` is substituted per family.",
-                    "default": "https://www.ebi.ac.uk/interpro/wwwapi//entry/pfam/{pfam_id}/?annotation=alignment:full&download",
-                    "fa_icon": "fas fa-link"
-                },
-                "prott5_per_residue_h5": {
-                    "type": "string",
-                    "description": "Local path to the EBI ProtT5 per-residue HDF5 file. When null or file missing, ProtT5 embeddings are skipped with a warning.",
-                    "default": null,
-                    "fa_icon": "fas fa-file"
-                },
-                "esm_protein_shards": {
-                    "type": "integer",
-                    "description": "Number of FASTA shards for parallel per-residue ESM embedding generation over the protein sequences. Each shard runs as one GPU task; cluster QoS caps concurrency (see slurm.config).",
-                    "default": 4,
-                    "minimum": 1,
-                    "fa_icon": "fas fa-puzzle-piece"
-                },
-                "esm_domain_shards": {
-                    "type": "integer",
-                    "description": "Number of FASTA shards for parallel pooled ESM embedding generation over the domain sequences. ~15k domains comfortably fit in 1 shard.",
-                    "default": 1,
-                    "minimum": 1,
-                    "fa_icon": "fas fa-puzzle-piece"
-                },
-                "esm_batch_size_protein": {
-                    "type": "integer",
-                    "description": "Initial batch size for protein per-residue ESM inference. Halved in-process on torch.OutOfMemoryError and retried.",
-                    "default": 8,
-                    "minimum": 1,
-                    "fa_icon": "fas fa-layer-group"
-                },
-                "esm_batch_size_domain": {
-                    "type": "integer",
-                    "description": "Initial batch size for domain pooled ESM inference. Domains are short, so this can be larger than the protein batch size.",
-                    "default": 32,
-                    "minimum": 1,
-                    "fa_icon": "fas fa-layer-group"
-                },
-                "esm_max_len": {
-                    "type": "integer",
-                    "description": "Maximum sequence length fed to ESM. Longer sequences are skipped (quadratic-attention long tail; would otherwise OOM or stall a chunk).",
-                    "default": 4096,
-                    "minimum": 0,
-                    "fa_icon": "fas fa-ruler-horizontal"
-                },
-                "esm_smoke_test": {
-                    "type": "boolean",
-                    "description": "If true, each ESM chunk processes only the first 100 records. For quick end-to-end wiring tests on the cluster.",
-                    "default": false,
-                    "fa_icon": "fas fa-vial"
-                },
-                "esm_hf_cache_dir": {
-                    "type": "string",
-                    "description": "Shared HF_HOME directory for the ESM chunk tasks (e.g. an NFS path). Avoids parallel chunks each re-downloading the gated ESM3 / ESMC weights. Set empty to use the per-task local cache.",
-                    "default": null,
-                    "fa_icon": "fas fa-folder-open"
-                },
-                "smoke_test_n_ddis": {
-                    "type": ["integer", "null"],
-                    "description": "If set, after DDI collection the domainsplit DB is reduced to this many total interactions — floor(N/2) random positive DDIs and floor(N/2) random negative DDIs. All downstream steps then run on a tiny data set. Leave null (default) to disable the smoke filter.",
-                    "default": null,
-                    "minimum": 2,
-                    "fa_icon": "fas fa-hashtag"
-                },
                 "negative_ppi_parquet": {
-                    "type": ["string", "null"],
+                    "type": ["string"],
                     "format": "file-path",
-                    "description": "Optional path to a Y2H/MS PPI parquet (columns: gene_name_bait, gene_name_prey, n_tested, ...). When set, COLLECT_DDI_DATA derives extra negative DDIs by mapping bait/prey genes to UniProt then Pfam (via UniProt REST API) and inserting the most-frequent Pfam-pair candidates restricted to domains already in positive DDIs. Null (default) disables this source.",
-                    "default": null,
+                    "description": "Required path to a Y2H/MS PPI parquet (columns: gene_name_bait, gene_name_prey, n_tested, ...). BUILD_CANDIDATE_NETWORK maps bait/prey genes to UniProt then Pfam (via UniProt REST API) and emits every tested-but-non-interacting Pfam pair, restricted to families appearing in a 3did DDI, as the pool ppi-splitting's `ilp_candidates` sampler draws from.",
                     "fa_icon": "fas fa-file-import"
                 },
                 "negative_ppi_min_n_tested": {
                     "type": "integer",
-                    "description": "Minimum value of the `n_tested` column required to keep a PPI row when building negative DDIs from negative_ppi_parquet.",
+                    "description": "Minimum value of the `n_tested` column required to keep a PPI row when building the candidate network from negative_ppi_parquet.",
                     "default": 5,
                     "minimum": 1,
                     "fa_icon": "fas fa-filter"
                 },
-                "negative_ppi_source_label": {
+                "negative_ppi_gene_mapping": {
                     "type": "string",
-                    "description": "Value written to the `source` column of domain_domain_interaction for DDIs derived from negative_ppi_parquet.",
-                    "default": "y2h_ms",
-                    "fa_icon": "fas fa-tag"
+                    "format": "file-path",
+                    "description": "Optional `gene_pfam_mapping.json` from an earlier BUILD_CANDIDATE_NETWORK run. Supplied, the gene \u2192 UniProt \u2192 Pfam lookup is read from it instead of the UniProt REST API \u2014 the only way the pipeline runs fully offline. Genes the file does not cover count as unmapped.",
+                    "default": null,
+                    "fa_icon": "fas fa-file-import"
                 },
-                "pfam_download_batch_size": {
+                "seed": {
                     "type": "integer",
-                    "description": "Number of Pfam IDs grouped into a single download job to reduce scheduler overhead.",
-                    "default": 100,
+                    "description": "Master random seed. Passed to ppi-splitting and used by every sampling step on this side, so a run is reproducible from this one number.",
+                    "default": 42,
+                    "fa_icon": "fas fa-dice"
+                },
+                "ddi_examples_target": {
+                    "type": "integer",
+                    "description": "Concrete instance pairs representing one DDI. Passed through to ppi-splitting and used by BUILD_EXTERNAL_TEST, so the external test set is sized like the splits.",
+                    "default": 5,
+                    "minimum": 1,
+                    "fa_icon": "fas fa-clone"
+                },
+                "ddi_examples_pool_factor": {
+                    "type": "integer",
+                    "description": "Instances drawn per Pfam family before instance pairs are formed, as a multiple of ddi_examples_target. Bounds the work, not the result.",
+                    "default": 5,
                     "minimum": 1,
                     "fa_icon": "fas fa-layer-group"
                 },
-                "negative_sampling_strategy": {
+                "instance_tier": {
                     "type": "string",
-                    "description": "Strategy for sampling negative DDIs from the PPI parquet source.",
-                    "default": "degree_matched",
-                    "enum": ["frequency", "degree_matched"],
-                    "fa_icon": "fas fa-random"
+                    "enum": [
+                        "human_reviewed",
+                        "all_species_reviewed",
+                        "human_any_review_status",
+                        "all_species_any_review_status"
+                    ],
+                    "description": "The run's protein universe, and the only one of these four params you have to set: uniprot_dat_urls, swissprot_taxon_ids and ppi-splitting's instance_tiers are all derived from it. Families left with no eligible instance keep none and their DDIs are dropped by PRUNE_UNREPRESENTED_DDIS.",
+                    "help_text": "human_reviewed (~20k entries, default) is human Swiss-Prot. all_species_reviewed (~573k) adds non-human Swiss-Prot. human_any_review_status (~200k) adds human TrEMBL. all_species_any_review_status is NOT IMPLEMENTED and fails before any task is submitted -- it needs the 110 GB TrEMBL flat file, which FETCH_DOMAIN_META cannot hold in memory (daisybio/domainsplit#4). Upstream fills strata in the order human_reviewed -> other_reviewed -> human_unreviewed -> other_unreviewed: reviewed outranks human. Lower strata fill freely rather than as a top-up, so widening the universe reshapes the instance pool of families that were never dropped, not only the ones that were. The retired values are 'human_only' (now human_reviewed) and 'any' (now all_species_reviewed -- NOT all_species_any_review_status).",
+                    "errorMessage": "instance_tier must be one of human_reviewed, all_species_reviewed, human_any_review_status, all_species_any_review_status (unimplemented). The retired values map as: human_only -> human_reviewed, any -> all_species_reviewed.",
+                    "default": "human_reviewed",
+                    "fa_icon": "fas fa-globe"
+                },
+                "ddi_mode": {
+                    "type": "boolean",
+                    "description": "Route the imported ppi-splitting pipeline through DATA_PREP_DDI, so interaction files hold Pfam family accessions and domain instances are split instead of whole protein chains. Always true for this pipeline.",
+                    "default": true,
+                    "hidden": true,
+                    "fa_icon": "fas fa-code-branch"
+                },
+                "split_train_fraction": {
+                    "type": "number",
+                    "description": "Fraction of positive DDIs in the train split, for the `random` and `minimal_leakage` strategies. The `external_test` strategy has no internal test set and uses 1 - split_val_fraction instead.",
+                    "default": 0.7,
+                    "minimum": 0,
+                    "maximum": 1,
+                    "fa_icon": "fas fa-percent"
+                },
+                "split_val_fraction": {
+                    "type": "number",
+                    "description": "Fraction of positive DDIs in the validation split, for every splitting strategy.",
+                    "default": 0.1,
+                    "minimum": 0,
+                    "maximum": 1,
+                    "fa_icon": "fas fa-percent"
+                },
+                "split_test_fraction": {
+                    "type": "number",
+                    "description": "Fraction of positive DDIs in the test splits, for the `random` and `minimal_leakage` strategies. The `external_test` strategy runs with 0 and takes its test set from BUILD_EXTERNAL_TEST.",
+                    "default": 0.2,
+                    "minimum": 0,
+                    "maximum": 1,
+                    "fa_icon": "fas fa-percent"
+                },
+                "ppi_splitting_multi_negset": {
+                    "type": "boolean",
+                    "description": "Ask ppi-splitting for both ILP negative sets per split \u2014 plain `ilp` plus `ilp_candidates`, the same sampler restricted to the candidate network \u2014 which turns 3 method directories into 5 and 11 split databases into 18. On by default: the comma-separated `negative_sampling_method` fan-out it needs is in the pinned submodule. The candidate network must be dense enough that every split can cover itself from it: survival is quadratic in a split's share, because both families of a pair have to land in the same split. Set false for a `--split_only` debug run, which ppi-splitting refuses unless `negative_sampling_method` is exactly \"ilp\".",
+                    "default": true,
+                    "fa_icon": "fas fa-clone"
+                },
+                "hippie_tsv": {
+                    "type": ["string"],
+                    "format": "file-path",
+                    "description": "Required path to a HIPPIE PPI TSV. COLLECT_DDI_DATA adds positive DDIs inferred from PPIs between two single-domain proteins.",
+                    "fa_icon": "fas fa-file-import"
+                },
+                "hippie_min_score": {
+                    "type": "number",
+                    "description": "Minimum HIPPIE confidence score (column 5) required to keep a PPI row when inferring single-domain positive DDIs.",
+                    "default": 0.63,
+                    "minimum": 0,
+                    "maximum": 1,
+                    "fa_icon": "fas fa-filter"
+                },
+                "ppidm_tsv": {
+                    "type": ["string"],
+                    "format": "file-path",
+                    "description": "Required path to a PPIDM predictions TSV (columns: domain_1, domain_2, class). PARSE_PPIDM emits each DDI twice, under the umbrella source 'PPIDM' and under 'PPIDM_<Class>'; both merge onto one database row.",
+                    "fa_icon": "fas fa-file-import"
+                },
+                "ppidm_classes": {
+                    "type": "string",
+                    "description": "Comma-separated PPIDM confidence classes to include.",
+                    "default": "Bronze,Silver,Gold",
+                    "fa_icon": "fas fa-tags"
+                }
+            }
+        },
+        "domain_embedding_options": {
+            "title": "Domain embedding options",
+            "type": "object",
+            "fa_icon": "fas fa-vector-square",
+            "description": "Which models embed the cut domain sequences, and how that inference is sharded.",
+            "help_text": "One pooled vector per domain instance per model, published as `<outdir>/embeddings/<model>_domain_embeddings.h5` keyed `{domain_id}/{instance_id}`. Nothing is written into the database: per-residue protein embeddings are retired, because protein context correlates with the interaction partner and slicing a protein embedding smuggles protein identity into a split that was partitioned on families.",
+            "properties": {
+                "embedding_models_domainbench": {
+                    "type": "string",
+                    "description": "Comma-separated domain-embedding models to run (`esm3`, `esmc`, `prott5`). One GPU task per (model, shard). Set empty to produce no embeddings at all.",
+                    "default": "esm3,esmc,prott5",
+                    "pattern": "^$|^(esm3|esmc|prott5)(,(esm3|esmc|prott5))*$",
+                    "fa_icon": "fas fa-vector-square"
+                },
+                "embedding_shards": {
+                    "type": "integer",
+                    "description": "Number of FASTA shards the domain sequences are split into. Each (model, shard) pair runs as one GPU task; concurrency is capped by maxForks in conf/modules.config.",
+                    "default": 4,
+                    "minimum": 1,
+                    "fa_icon": "fas fa-puzzle-piece"
+                },
+                "embedding_max_len": {
+                    "type": "integer",
+                    "description": "Maximum domain sequence length fed to a model. Longer sequences are skipped (quadratic-attention long tail; would otherwise OOM or stall a chunk).",
+                    "default": 4096,
+                    "minimum": 0,
+                    "fa_icon": "fas fa-ruler-horizontal"
+                },
+                "embedding_batch_size_esm3": {
+                    "type": "integer",
+                    "description": "Initial batch size for esm3 domain inference. Halved in-process on torch.OutOfMemoryError and retried.",
+                    "default": 32,
+                    "minimum": 1,
+                    "fa_icon": "fas fa-layer-group"
+                },
+                "embedding_batch_size_esmc": {
+                    "type": "integer",
+                    "description": "Initial batch size for esmc domain inference. Halved in-process on torch.OutOfMemoryError and retried.",
+                    "default": 32,
+                    "minimum": 1,
+                    "fa_icon": "fas fa-layer-group"
+                },
+                "embedding_batch_size_prott5": {
+                    "type": "integer",
+                    "description": "Initial batch size for prott5 domain inference. Halved in-process on torch.OutOfMemoryError and retried.",
+                    "default": 32,
+                    "minimum": 1,
+                    "fa_icon": "fas fa-layer-group"
+                },
+                "embedding_prott5_model": {
+                    "type": "string",
+                    "description": "HuggingFace id of the ProtT5 encoder. Ungated, so it needs no HF_TOKEN \u2014 unlike ESM3 / ESMC.",
+                    "default": "Rostlab/prot_t5_xl_half_uniref50-enc",
+                    "fa_icon": "fas fa-robot"
+                },
+                "embedding_require_gpu": {
+                    "type": "boolean",
+                    "description": "Abort an embedding chunk task when no GPU is visible instead of falling back to CPU. CPU inference loads a 1.4B model per task and OOM-kills concurrent tasks rather than finishing slowly, so the failure is worth surfacing immediately. Set false only to deliberately accept CPU inference on a tiny input.",
+                    "default": true,
+                    "fa_icon": "fas fa-microchip"
+                },
+                "embedding_hf_cache_dir": {
+                    "type": "string",
+                    "description": "Shared HF_HOME directory for the embedding chunk tasks (e.g. an NFS path). Avoids parallel chunks each re-downloading the gated ESM3 / ESMC weights. Set empty to use the per-task local cache.",
+                    "default": null,
+                    "fa_icon": "fas fa-folder-open"
                 }
             }
         },
@@ -322,6 +429,9 @@
         },
         {
             "$ref": "#/$defs/source_database_options"
+        },
+        {
+            "$ref": "#/$defs/domain_embedding_options"
         },
         {
             "$ref": "#/$defs/institutional_config_options"
