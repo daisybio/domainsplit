@@ -85,6 +85,11 @@ process RANDOM_DDI_SPLIT {
         ''')
 
         conn.execute('''
+            DELETE FROM domain_structure 
+            WHERE ddi_id NOT IN (SELECT id FROM keep_ids)
+        ''')
+
+        conn.execute('''
             DELETE FROM domain WHERE id IN (
                 SELECT d.id FROM domain d
                 LEFT JOIN domain_domain_interaction ddi

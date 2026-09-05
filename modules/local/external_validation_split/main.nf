@@ -60,6 +60,24 @@ process SUBSET_DDIS_BY_SOURCE {
         f"DELETE FROM domain_domain_interaction WHERE source NOT IN ({placeholders})",
         sources,
     )
+    conn.commit()
+
+    conn.execute('''
+        CREATE TEMP TABLE keep_ids(id)
+    ''')
+    conn.executemany(
+        "INSERT OR IGNORE INTO keep_ids VALUES (?)",
+        conn.execute("SELECT id FROM domain_domain_interaction").fetchall()
+    )
+    conn.commit()
+
+    conn.execute('''
+        DELETE FROM domain_structure 
+        WHERE ddi_id NOT IN (SELECT id FROM keep_ids)
+    ''')
+
+    # Drop keep_ids
+    conn.execute('DROP TABLE keep_ids')
 
     conn.execute('''
         DELETE FROM domain WHERE id IN (

@@ -1,6 +1,6 @@
 process DOMAIN_SLICE {
     tag "domain_slice"
-    label 'process_medium'
+    label 'process_high'
 
     conda "${moduleDir}/environment.yml"
     container "docker://konstantinpelz/domainsplit-general:1.0.0"

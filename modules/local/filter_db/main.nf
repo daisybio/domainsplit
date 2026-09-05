@@ -5,7 +5,7 @@ process FILTER_DB {
     container "docker.io/konstantinpelz/domainsplit-general:1.0.0"
 
     input:
-    path domainsplit_db
+    path domainsplit_db, stageAs: "domainsplit.sqlite3"
     path meta_ppi
     path meta_mapping
 
@@ -31,16 +31,17 @@ process FILTER_DB {
 
     # Logging
     ppi_before = con.execute("SELECT COUNT(*) FROM protein_protein_interaction").fetchone()[0]
+    ddi_before = con.execute("SELECT COUNT(*) FROM domain_domain_interaction").fetchone()[0]
     map_before = con.execute("SELECT COUNT(*) FROM domain_protein_map").fetchone()[0]
     dom_before = con.execute("SELECT COUNT(*) FROM domain").fetchone()[0]
     prot_before = con.execute("SELECT COUNT(*) FROM protein").fetchone()[0]
     print(
-        f"filter db: before -> ppi={ppi_before} mapping={map_before} "
+        f"filter db: before -> ppi={ppi_before} mapping={map_before} ddi={ddi_before} "
         f"domain={dom_before} protein={prot_before}",
         flush=True,
     )
 
-    # Load ppi metadata containing uniprot_id_a,uniprot_id_b,model_entity_id,local_tar_name,has_af_model,protein_id_a,protein_id_b,path
+    # Load ppi metadata containing uniprot_id_a,uniprot_id_b,model_entity_id,local_tar_name,has_af_model,protein_id_a,protein_id_b,ordering,path
     ppi_data = pd.read_csv("${meta_ppi}")
     ppi_pairs = sorted(set(
         map(tuple, ppi_data[["uniprot_id_a", "uniprot_id_b"]].values.tolist())
@@ -102,9 +103,21 @@ process FILTER_DB {
     t1 = time.time()
     print(f"Time for PPI and mapping DELETE + cleanup: {t1 - t0:.1f}s", flush=True)
 
+    t2 = time.time()
+    con.execute("CREATE INDEX IF NOT EXISTS idx_ddi_a ON domain_domain_interaction(domain_id_a)")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_ddi_b ON domain_domain_interaction(domain_id_b)")
+
+    # Get domain_ids corresponding to remaining domain_protein_map entries
+    con.execute('''
+        DELETE FROM domain_domain_interaction
+        WHERE domain_id_a NOT IN (SELECT DISTINCT domain_id FROM domain_protein_map)
+        OR domain_id_b NOT IN (SELECT DISTINCT domain_id FROM domain_protein_map)
+    ''')
+    con.commit()
 
     # Clean up, check domain 
-    t2 = time.time()
+    t3 = time.time()
+    print(f"Time for domain_domain_interaction DELETE: {t3 - t2:.1f}s", flush=True)
     con.execute('''
        DELETE FROM domain
         WHERE id NOT IN (
@@ -127,26 +140,27 @@ process FILTER_DB {
         )
     ''')
     con.commit()
-    t3 = time.time()
-    print(f"Time for domain and protein DELETE: {t3 - t2:.1f}s", flush=True)
+    t4 = time.time()
+    print(f"Time for domain and protein DELETE: {t4 - t3:.1f}s", flush=True)
 
     ppi_after = con.execute("SELECT COUNT(*) FROM protein_protein_interaction").fetchone()[0]
     map_after = con.execute("SELECT COUNT(*) FROM domain_protein_map").fetchone()[0]
     dom_after = con.execute("SELECT COUNT(*) FROM domain").fetchone()[0]
     prot_after = con.execute("SELECT COUNT(*) FROM protein").fetchone()[0]
+    ddi_after = con.execute("SELECT COUNT(*) FROM domain_domain_interaction").fetchone()[0]
     print(
-        f"filter db: after  -> ppi={ppi_after} mapping={map_after} "
+        f"filter db: after  -> ppi={ppi_after} mapping={map_after} ddi={ddi_after} "
         f"domain={dom_after} protein={prot_after}",
         flush=True,
     )
     con.close()
 
-    t4 = time.time()
+    t5 = time.time()
     con = sqlite3.connect("domainsplit.filter.sqlite3")
     con.execute("VACUUM")
     con.close()
-    t5 = time.time()
-    print(f"Time for VACUUM: {t5 - t4:.1f}s", flush=True)
+    t6 = time.time()
+    print(f"Time for VACUUM: {t6 - t5:.1f}s", flush=True)
 
     with open("versions.yml", "w") as f:
         f.write('"${task.process}":\\n')

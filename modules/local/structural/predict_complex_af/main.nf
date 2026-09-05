@@ -1,6 +1,6 @@
 process PREDICT_COMPLEX_AF {
     tag "predict_complex_af"
-    label 'process_medium'
+    label 'process_high'
 
     conda "${moduleDir}/environment.yml"
     container "docker://konstantinpelz/domainsplit-general:1.0.0"
@@ -24,6 +24,8 @@ process PREDICT_COMPLEX_AF {
     import zstandard
     import Bio
     from Bio.PDB import MMCIFParser, PDBIO
+    # from concurrent.futures import ProcessPoolExecutor, as_completed
+    # import multiprocessing
 
     OUTDIR = "pdb_files_af"
     os.makedirs(OUTDIR, exist_ok=True)
@@ -39,18 +41,42 @@ process PREDICT_COMPLEX_AF {
             print(f"Error converting {cif_path} to {pdb_path}: {e}", flush=True)
 
     def decompress_zst(src_path: str, dst_path: str) -> None:
-        dctx = zstandard.ZstdDecompressor()
-        with open(src_path, "rb") as fh_in, open(dst_path, "wb") as fh_out:
-            dctx.copy_stream(fh_in, fh_out)
+        try:
+            dctx = zstandard.ZstdDecompressor()
+            with open(src_path, "rb") as fh_in, open(dst_path, "wb") as fh_out:
+                dctx.copy_stream(fh_in, fh_out)
+            return (dst_path, True, None)
+        except Exception as e:
+            return (dst_path, False, str(e))
+
+    
+    def process_one(job):
+        # job: (kind, src_path, pdb_path)
+        kind, src_path, pdb_path = job
+        if kind == "af":
+            return decompress_zst(src_path, pdb_path)
+        else:
+            return convert_cif_to_pdb(src_path, pdb_path)
 
     # Load metadata
-    meta = pd.read_csv("${meta_ppis}")
+    meta = pd.read_csv("${meta_ppis}", sep = ",")
+    n_meta_rows = len(meta)
     meta_index = {}
+    n_missing_ordering = 0
     for _, row in meta.iterrows():
         key_fwd = (row["uniprot_id_a"], row["uniprot_id_b"])
         key_rev = (row["uniprot_id_b"], row["uniprot_id_a"])
         path_to_file = row["path"]
         has_af_model = bool(row["has_af_model"])
+        raw_order = row["ordering"]
+        if pd.isna(raw_order):
+            print(
+                f"WARNING: missing 'ordering' for pair "
+                f"({row['uniprot_id_a']}, {row['uniprot_id_b']}), skipping this metadata row",
+                flush=True,
+            )
+            n_missing_ordering += 1
+            continue
         order = bool(row["ordering"])
         # need to preserve ordering information to know which protein is A and which is B
         # If the order is true and we have forward key, we set true
@@ -64,8 +90,6 @@ process PREDICT_COMPLEX_AF {
             meta_index[key_fwd] = (path_to_file, has_af_model, False)
             meta_index[key_rev] = (path_to_file, has_af_model, True)
 
-        # meta_index[key_fwd] = (path_to_file, has_af_model, )
-        # meta_index[key_rev] = (path_to_file, has_af_model, )
 
     # Get PPIs in database, join to get uniprot ids
     con = sqlite3.connect(f"file:input.dbstruct.sqlite3?mode=ro", uri=True)
@@ -78,15 +102,19 @@ process PREDICT_COMPLEX_AF {
 
     con.close()
 
-    print(f"predict_complex_af: {len(ppi_rows)} PPIs to resolve", flush=True)
+    print(f"predict_complex_af: {len(ppi_rows)} PPIs to resolve, {n_meta_rows} metadata rows", flush=True)
 
     n_ok = 0
     n_missing_meta = 0
     n_missing_file = 0
     n_ambiguous = 0
+    n_duplicate = 0
 
+    jobs = []
+    pdbs = set()
     for uniprot_id_a, uniprot_id_b, protein_id_a, protein_id_b in ppi_rows:
         path, has_af_model, order = meta_index.get((uniprot_id_a, uniprot_id_b), (None, None, None))
+
         if path is None:
             print(f"WARNING: no metadata for pair ({uniprot_id_a}, {uniprot_id_b})", flush=True)
             n_missing_meta += 1
@@ -98,11 +126,13 @@ process PREDICT_COMPLEX_AF {
             # Ensure first protein is chain A
             protein_id_a, protein_id_b = protein_id_b, protein_id_a
         pdb_path = os.path.join(OUTDIR, f"{protein_id_a}_{protein_id_b}.pdb")
+        if pdb_path in pdbs:
+            n_duplicate += 1
+            continue
+        pdbs.add(pdb_path)
 
-        if bool(has_af_model):
-            candidates = glob.glob(os.path.join(path, "*.pdb.zst"))
-        else:
-            candidates = glob.glob(os.path.join(path, "*.cif"))
+        pattern = "*.pdb.zst" if has_af_model else "*.cif"
+        candidates = glob.glob(os.path.join(path, pattern))
 
         if len(candidates) == 0:
             print(
@@ -121,6 +151,9 @@ process PREDICT_COMPLEX_AF {
 
         src_path = candidates[0]
 
+        # kind = "af" if has_af_model else "cif"
+        # jobs.append((kind, src_path, pdb_path))
+
         if bool(has_af_model):
             decompress_zst(src_path, pdb_path)
         else:
@@ -130,7 +163,7 @@ process PREDICT_COMPLEX_AF {
 
     print(
         f"predict_complex_af: done -> ok={n_ok} missing_meta={n_missing_meta} "
-        f"missing_file={n_missing_file} ambiguous={n_ambiguous}",
+        f"missing_file={n_missing_file} ambiguous={n_ambiguous} duplicate={n_duplicate}",
         flush=True,
     )
 

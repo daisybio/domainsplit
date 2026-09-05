@@ -158,8 +158,8 @@ def main():
     conn = utils_struct.connect_db(args.db_in)
 
     ppis = utils_struct.get_ppis(conn)
-    limited_ppis = subset_ppis(conn, ppis, limit=2)  # Limit to 2 PPIs per DDI for testing
-    ppis = limited_ppis
+    # limited_ppis = subset_ppis(conn, ppis, limit=2)  # Limit to 2 PPIs per DDI for testing
+    # ppis = limited_ppis
     conn.close()
 
     print(f"[predict_complex_af] {len(ppis)} PPIs to process", flush=True)

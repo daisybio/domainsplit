@@ -324,6 +324,7 @@ def get_domain_structures(db_path, source = None):
         WHERE negative = 0
     """).fetchall()
 
+
     # Add chain information from complex_chain_map and pdb_gz from domain_structure
     domain_structures = []
     for ddi_id in ddis_positive:
