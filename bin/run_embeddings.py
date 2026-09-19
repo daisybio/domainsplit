@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Generate pooled domain embeddings for one model over one FASTA shard.
 
-One model per invocation (`--model esm3|esmc|prott5`). The previous script loaded
-ESM3 *and* ESMC in a single task; splitting them gives independent retries, a
-per-model batch size, and a shard's failure costs one model instead of two.
+One model per invocation (`--model esm3|esmc|prott5|esm3_structure`). The
+previous script loaded ESM3 *and* ESMC in a single task; splitting them gives
+independent retries, a per-model batch size, and a shard's failure costs one
+model instead of two.
 
 There is only one output mode. Per-residue embeddings are gone: this pipeline
 embeds the *cut domain sequence*, once per domain instance, because a DDI model
@@ -21,24 +22,36 @@ subgroup would be dead weight):
 (`fetch_domains.py`), so nothing here reconstructs a key.
 EXPORT_DOMAIN_EMBEDDINGS re-keys these chunks to `{domain_id}/{instance_id}`.
 
-Pooling is a masked mean, and the two model families deliberately differ in what
+Pooling is a masked mean, and the model families deliberately differ in what
 the mask covers:
 
-  - **ESM3 / ESMC**: mean over all `(BOS + seq + EOS)` tokens. Unchanged from the
-    previous implementation, and deliberate -- ESM's terminal tokens carry
-    sequence-level signal the model was trained to put there.
+  - **ESM3 / ESMC / ESM3-structure**: mean over all `(BOS + seq + EOS)` tokens.
+    Unchanged from the previous implementation, and deliberate -- ESM's
+    terminal tokens carry sequence-level signal the model was trained to put
+    there.
   - **ProtT5**: mean over the real residues only. T5 appends `</s>` and nothing
     else, and that position is a separator, not a summary; ProtBert/ProtT5's own
     embedding recipe drops it. Hence `attention_mask.sum(1) - 1`.
 
-Performance (all inherited unchanged from the ESM-only version):
-  - Batched forward; bf16 autocast around it (autocast, NOT `model.bfloat16()`,
-    since some ESM3 sub-modules are not bf16-safe).
-  - Length bucketing: sort all records by length, batch contiguous groups.
-  - On torch.OutOfMemoryError: halve the batch size and retry the same group;
-    at batch size 1 the record is skipped.
-  - `--max-len` drops the long-tail quadratic-attention sequences entirely.
-  - Storage dtype is float16.
+Structure embeddings (`--model esm3_structure`):
+  - A separate model rather than a flag on `esm3`: structure conditioning only
+    exists for ESM3 (ESMC / ProtT5 have no structure track), so keeping it a
+    distinct `--model` value preserves "one model per task, one task per
+    shard" instead of smuggling a second code path into the `esm3` branch.
+  - Requires `--structures-mapping`, a CSV of `uniprot_id,pdb_id` (as written
+    by `fetch_pdb_structures.py`). For each domain instance, the structure for
+    its parent UniProt ID is fetched once via the ESM SDK
+    (`ProteinChain.from_rcsb`) and cached, since many domain instances share a
+    protein -- fetching per-domain would re-hit RCSB for the same chain
+    repeatedly.
+  - Alignment is best-effort: `fetch_pdb_structures.py` only supplies a
+    `pdb_id`, not a UniProt-aligned residue map, so a domain's
+    `start_pos`/`end_pos` (parsed from its instance id) are matched directly
+    against the fetched chain's own `residue_index` numbers. A domain is only
+    embedded with structure if every one of its residues resolves to a
+    coordinate; anything else is skipped (absent from this model's H5, same
+    as any other missing entry) and falls back to being covered by the
+    plain `esm3` embedding instead.
 """
 
 import argparse
@@ -48,7 +61,7 @@ import os
 import re
 import sys
 
-MODELS = ("esm3", "esmc", "prott5")
+MODELS = ("esm3", "esmc", "prott5", "esm3_structure")
 
 # ---------------------------------------------------------------------------
 # Torch-free helpers. Deliberately importable without torch, h5py or any model
@@ -163,14 +176,95 @@ def _load_records(fasta_path: str, max_len: int):
 
 
 # ---------------------------------------------------------------------------
-# ESM (esm3 / esmc)
+# Structure (esm3_structure only)
 # ---------------------------------------------------------------------------
 
 
-def _encode_one(client, sequence: str):
+def _parse_domain_id(seq_id: str):
+    """'{family}_{accession}_{start}_{end}' -> (uniprot_id, start, end) or None.
+
+    Splits from the right so `family` may itself contain underscores.
+    start/end are 1-based inclusive UniProt residue positions.
+    """
+    parts = seq_id.rsplit("_", 3)
+    if len(parts) != 4:
+        return None
+    _family, uniprot_id, start_s, end_s = parts
+    try:
+        return uniprot_id, int(start_s), int(end_s)
+    except ValueError:
+        return None
+
+
+def _load_structures_mapping(path: str) -> dict:
+    """CSV of uniprot_id,pdb_id (as written by fetch_pdb_structures.py) -> dict."""
+    import csv
+    mapping = {}
+    with open(path, "r") as f:
+        for row in csv.DictReader(f):
+            if row.get("pdb_id"):
+                mapping[row["uniprot_id"]] = row["pdb_id"]
+    return mapping
+
+
+def _fetch_chain_coords(pdb_id: str):
+    """Fetch one PDB chain and return {residue_number: (3,3 -> 37,3) coord row}.
+
+    Keyed by the chain's own `residue_index` (not necessarily UniProt-numbered
+    -- see module docstring), so lookups below are a direct dict access rather
+    than an offset slice.
+    """
+    from esm.sdk.api import ESMProtein
+    from esm.utils.structure.protein_chain import ProteinChain
+
+    protein_chain = ProteinChain.from_rcsb(pdb_id.lower(), chain_id="detect")
+    protein = ESMProtein.from_protein_chain(protein_chain)
+    residue_numbers = protein_chain.residue_index.tolist()
+    return {res_num: protein.coordinates[i] for i, res_num in enumerate(residue_numbers)}
+
+
+class _StructureCache:
+    """Per-uniprot_id chain cache so domains sharing a protein hit RCSB once."""
+
+    def __init__(self, structure_mapping: dict):
+        self._pdb_by_uniprot = structure_mapping
+        self._chains = {}  # uniprot_id -> {residue_number: coord row} | None (failed)
+
+    def coords_for_domain(self, uniprot_id: str, start_pos: int, end_pos: int):
+        """Stacked (end-start+1, 37, 3) coords for a domain, or None if any
+        residue in [start_pos, end_pos] is unresolved."""
+        import numpy as np
+
+        if uniprot_id not in self._chains:
+            pdb_id = self._pdb_by_uniprot.get(uniprot_id)
+            if not pdb_id:
+                self._chains[uniprot_id] = None
+            else:
+                try:
+                    self._chains[uniprot_id] = _fetch_chain_coords(pdb_id)
+                except Exception as exc:
+                    print(f"warn: could not fetch structure for {uniprot_id} (pdb {pdb_id}): {exc}", flush=True)
+                    self._chains[uniprot_id] = None
+
+        chain = self._chains[uniprot_id]
+        if chain is None:
+            return None
+        rows = [chain.get(pos) for pos in range(start_pos, end_pos + 1)]
+        if any(row is None for row in rows):
+            return None
+        import torch
+        return torch.from_numpy(np.stack(rows).astype(np.float32))
+
+
+# ---------------------------------------------------------------------------
+# ESM (esm3 / esmc / esm3_structure)
+# ---------------------------------------------------------------------------
+
+
+def _encode_one(client, sequence: str, coordinates=None):
     """Tokenize a single sequence -> ESMProteinTensor (CPU-cheap)."""
     from esm.sdk.api import ESMProtein
-    return client.encode(ESMProtein(sequence=sequence))
+    return client.encode(ESMProtein(sequence=sequence, coordinates=coordinates))
 
 
 def _move_batch_to_device(bt, device):
@@ -208,21 +302,41 @@ def _stack_batch(tensors, device):
     """Stack a list of ESMProteinTensor into a _BatchedESMProteinTensor on `device`."""
     import esm.sdk.api  # noqa: F401  prime to avoid circular import in esm 3.1.x
     from esm.utils.sampling import _BatchedESMProteinTensor
+    from esm.utils.constants import esm3 as C
     import torch
     if len(tensors) == 1:
         bt = _BatchedESMProteinTensor.from_protein_tensor(tensors[0])
         return _move_batch_to_device(bt, device)
     max_len = max(t.sequence.shape[0] for t in tensors)
-    pad_id = 0
-    padded = torch.full(
-        (len(tensors), max_len), pad_id,
-        dtype=tensors[0].sequence.dtype, device=device,
-    )
-    for i, t in enumerate(tensors):
-        src = t.sequence.to(device, non_blocking=True)
-        padded[i, : src.shape[0]] = src
     bt = _BatchedESMProteinTensor.from_protein_tensor(tensors[0])
-    bt.sequence = padded
+
+    # Pad EVERY present per-position track to max_len, not just `sequence`.
+    # forward() indexes sequence against structure/secondary_structure/sasa
+    # token-for-token (e.g. `sequence_tokens == C.SEQUENCE_BOS_TOKEN` is used
+    # to masked_fill the structure track), so if only `sequence` is padded
+    # while `structure` etc. keep tensors[0]'s original (shorter) length, you
+    # get "size of tensor a (max_len) must match size of tensor b (orig_len)".
+    track_pad_tokens = {
+        "sequence": getattr(C, "SEQUENCE_PAD_TOKEN", 0),
+        "structure": getattr(C, "STRUCTURE_PAD_TOKEN", 0),
+        "secondary_structure": getattr(C, "SS8_PAD_TOKEN", 0),
+        "sasa": getattr(C, "SASA_PAD_TOKEN", 0),
+    }
+    for name, pad_id in track_pad_tokens.items():
+        if getattr(tensors[0], name, None) is None:
+            continue
+        padded = torch.full(
+            (len(tensors), max_len), pad_id,
+            dtype=tensors[0].sequence.dtype, device=device,
+        )
+        for i, t in enumerate(tensors):
+            v = getattr(t, name, None)
+            if v is None:
+                continue
+            src = v.to(device, non_blocking=True)
+            padded[i, : src.shape[0]] = src
+        setattr(bt, name, padded)
+
     return _move_batch_to_device(bt, device)
 
 
@@ -269,12 +383,18 @@ def _write_pooled(out_h5, ids, pooled):
         out_h5.create_dataset(sid, data=arr[i])
 
 
-def _process_esm_batch(client, seqs, ids, out_h5, device):
-    """Encode + forward one ESM batch and write the pooled vectors."""
+def _process_esm_batch(client, seqs, ids, out_h5, device, coords_list=None):
+    """Encode + forward one ESM batch and write the pooled vectors.
+
+    `coords_list`, if given, is a per-record (L,37,3) array or None, parallel
+    to `seqs`/`ids` -- used only by `--model esm3_structure`.
+    """
     import torch
     from esm.sdk.api import LogitsConfig
 
-    tensors = [_encode_one(client, s) for s in seqs]
+    if coords_list is None:
+        coords_list = [None] * len(seqs)
+    tensors = [_encode_one(client, s, c) for s, c in zip(seqs, coords_list)]
     batched = _stack_batch(tensors, device)
     # Per-item tokenized length, BOS+seq+EOS -- see the docstring for why the
     # terminal tokens stay in the ESM mean.
@@ -386,7 +506,7 @@ def _write_versions(versions_path: str, process_name: str, model: str) -> None:
         f.write(f"    python: {sys.version.split()[0]}\n")
         f.write(f"    torch: {torch.__version__}\n")
         f.write(f"    h5py: {h5py.__version__}\n")
-        if model in ("esm3", "esmc"):
+        if model in ("esm3", "esmc", "esm3_structure"):
             import esm
             f.write(f"    esm: {esm.__version__}\n")
         else:
@@ -433,9 +553,16 @@ def main() -> int:
     parser.add_argument("--max-len", type=int, default=0, help="0 = no cap")
     parser.add_argument("--require-gpu", action="store_true",
                         help="abort instead of falling back to CPU when no GPU is visible")
+    parser.add_argument(
+        "--structures-mapping", default=None,
+        help="CSV of uniprot_id,pdb_id (from fetch_pdb_structures.py). Required for --model esm3_structure.",
+    )
     args = parser.parse_args()
 
-    _setup_hf_cache(require_token=args.model in ("esm3", "esmc"))
+    if args.model == "esm3_structure" and not args.structures_mapping:
+        parser.error("--model esm3_structure requires --structures-mapping")
+
+    _setup_hf_cache(require_token=args.model in ("esm3", "esmc", "esm3_structure"))
 
     import h5py
     import torch
@@ -447,6 +574,30 @@ def main() -> int:
 
     records = _load_records(args.input_fasta, args.max_len)
     print(f"loaded {len(records)} records from {args.input_fasta}", flush=True)
+
+    coords_by_id = None
+    if args.model == "esm3_structure":
+        structure_mapping = _load_structures_mapping(args.structures_mapping)
+        cache = _StructureCache(structure_mapping)
+        coords_by_id = {}
+        kept = []
+        for sid, seq in records:
+            parsed = _parse_domain_id(sid)
+            if parsed is None:
+                print(f"skip {sid}: instance id doesn't parse as {{family}}_{{accession}}_{{start}}_{{end}}", flush=True)
+                continue
+            uniprot_id, start_pos, end_pos = parsed
+            if end_pos - start_pos + 1 != len(seq):
+                print(f"skip {sid}: domain span {start_pos}-{end_pos} doesn't match seq len {len(seq)}", flush=True)
+                continue
+            coords = cache.coords_for_domain(uniprot_id, start_pos, end_pos)
+            if coords is None:
+                continue
+            coords_by_id[sid] = coords
+            kept.append((sid, seq))
+        print(f"{len(kept)}/{len(records)} domains have usable structure coordinates", flush=True)
+        records = kept
+
     if not records:
         # Still write an empty H5 + versions so the export step doesn't crash.
         with h5py.File(args.output_h5, "w"):
@@ -460,6 +611,13 @@ def main() -> int:
             from esm.models.esm3 import ESM3
             client = ESM3.from_pretrained("esm3-open", device=device).to(device).eval()
             process = lambda seqs, ids: _process_esm_batch(client, seqs, ids, out_h5, device)  # noqa: E731
+        elif args.model == "esm3_structure":
+            from esm.models.esm3 import ESM3
+            client = ESM3.from_pretrained("esm3-open", device=device).to(device).eval()
+            process = lambda seqs, ids: _process_esm_batch(  # noqa: E731
+                client, seqs, ids, out_h5, device,
+                coords_list=[coords_by_id[i] for i in ids],
+            )
         elif args.model == "esmc":
             from esm.models.esmc import ESMC
             client = ESMC.from_pretrained("esmc_600m", device=device).to(device).eval()

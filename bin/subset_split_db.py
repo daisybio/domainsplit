@@ -66,6 +66,7 @@ FILTERS = {
         "AND protein_id_b IN (SELECT id FROM keep_protein)"
     ),
     "ddi_split_membership": "method = :method AND split = :split",
+    "ddi_interaction_confirmed": "ddi_id IN (SELECT id FROM keep_ddi) AND method = :method",
 }
 
 # Reported before/after, in the order the old version printed them.

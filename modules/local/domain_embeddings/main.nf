@@ -27,6 +27,12 @@
     bin/export_domain_embeddings.py. The published key is the Pfam accession,
     deliberately not `domain.id`: that surrogate differs between runs, so a file
     keyed on it read the wrong domain's vectors rather than failing.
+  - `esm3_structure` is a model like any other in `--embedding_models_domainbench`,
+    not a flag on `esm3`: ESMC/ProtT5 have no structure track, so keeping it a
+    separate model name preserves one-model-per-task. It additionally needs
+    `structures_mapping` (uniprot_id -> pdb_id, from fetch_pdb_structures.py),
+    passed to every shard task as a value channel (`.first()`) since it's a
+    single upstream file reused across every (model, shard) combination.
 */
 
 include { SHARD_FASTA } from '../util/main.nf'
@@ -57,6 +63,7 @@ process GENERATE_DOMAIN_EMBEDDINGS_CHUNK {
 
     input:
     tuple val(model), path(input_fasta)
+    path structures_mapping
 
     output:
     tuple val(model), path("${input_fasta.simpleName}.${model}.h5"), emit: chunk
@@ -71,6 +78,11 @@ process GENERATE_DOMAIN_EMBEDDINGS_CHUNK {
     def require_gpu = params.embedding_require_gpu.toString().toBoolean() ? '--require-gpu' : ''
     def hf_cache    = params.embedding_hf_cache_dir ?: ''
     def batch_size  = params["embedding_batch_size_${model}"]
+    // Only esm3_structure needs a structure mapping; passing it to the other
+    // three models would be a silent no-op in the script but is left off here
+    // so an accidentally-missing/staged file can only ever break the model
+    // that actually reads it.
+    def struct_flag = model == 'esm3_structure' ? "--structures-mapping \"${structures_mapping}\"" : ''
     """
     if [ -n "${hf_cache}" ]; then
         mkdir -p "${hf_cache}"
@@ -87,7 +99,8 @@ process GENERATE_DOMAIN_EMBEDDINGS_CHUNK {
         --prott5-model "${params.embedding_prott5_model}" \\
         --batch-size ${batch_size} \\
         --max-len ${params.embedding_max_len} \\
-        ${require_gpu}
+        ${require_gpu} \\
+        ${struct_flag}
     """
 }
 
@@ -117,17 +130,60 @@ process EXPORT_DOMAIN_EMBEDDINGS {
     """
 }
 
+// Resolves one experimental PDB structure per UniProt ID referenced by the
+// domain FASTA, for esm3_structure's --structures-mapping. Runs once,
+// upstream of generate_domain_embeddings, regardless of shard count.
+process FETCH_DOMAIN_STRUCTURES {
+    tag { domain_sequences.simpleName }
+    label 'process_medium'
+    conda "${moduleDir}/environment.yml"
+    container "docker.io/konstantinpelz/domainsplit-general:1.0.0"
+
+    input:
+    path domain_sequences  // keyed by {family}_{uniprot_id}_{start}_{end}
+
+    output:
+    path "protein_pdb_mapping.csv", emit: mapping
+    path "structure_report.csv", emit: report
+    path "versions.yml", emit: versions
+
+    script:
+    """
+    extract_domain_uniprot_ids.py \\
+        --input-fasta ${domain_sequences} \\
+        --output-fasta uniprot_ids.fasta
+
+    fetch_pdb_structures.py \\
+        --input-fasta uniprot_ids.fasta \\
+        --output-mapping protein_pdb_mapping.csv \\
+        --report-csv structure_report.csv \\
+        --versions versions.yml \\
+        --process-name "${task.process}"
+    """
+
+    stub:
+    """
+    touch protein_pdb_mapping.csv structure_report.csv
+    echo '"${task.process}":' > versions.yml
+    echo '    stub: "true"' >> versions.yml
+    """
+}
+
 workflow generate_domain_embeddings {
     take:
-    domain_sequences   // ppi-splitting's sequences.fasta, keyed by instance id
-    domainsplit_db     // the pruned master; supplies the instance -> Pfam family map
+    domain_sequences    // ppi-splitting's sequences.fasta, keyed by instance id
+    domainsplit_db      // the pruned master; supplies the instance -> Pfam family map
+    structures_mapping  // uniprot_id -> pdb_id CSV from fetch_pdb_structures.py;
+                         // only read when 'esm3_structure' is requested, but always
+                         // required as an input so the workflow signature doesn't
+                         // change based on which models are selected at runtime
 
     main:
     // Validated here rather than in the schema: nf-schema can check the string's
     // shape but not that a name has a `embedding_batch_size_<model>` param behind
     // it, and an unknown name would otherwise reach the task as a null batch size.
     def models = params.embedding_models_domainbench.toString().tokenize(',')*.trim().findAll { m -> m }
-    def known = ['esm3', 'esmc', 'prott5']
+    def known = ['esm3', 'esmc', 'prott5', 'esm3_structure']
     def unknown = models.findAll { m -> !(m in known) }
     if (unknown) {
         error("--embedding_models_domainbench names unknown model(s) ${unknown.join(', ')} (known: ${known.join(', ')}).")
@@ -150,7 +206,15 @@ workflow generate_domain_embeddings {
             params.embedding_shards,
         ).shards.flatten()
 
-        chunks = GENERATE_DOMAIN_EMBEDDINGS_CHUNK(channel.fromList(models).combine(shards))
+        // .first(): structures_mapping is a single upstream file (one run of
+        // FETCH_PROTEIN_STRUCTURES), but it's paired against every (model,
+        // shard) combination below. Without .first() it stays a queue channel
+        // that only pairs with the first combination and silently starves the
+        // rest -- same trap as GENERATE_PROTEIN_ESM_EMBEDDINGS_CHUNK in main.nf.
+        chunks = GENERATE_DOMAIN_EMBEDDINGS_CHUNK(
+            channel.fromList(models).combine(shards),
+            structures_mapping.first(),
+        )
 
         // No `size:` on the groupTuple: shard_fasta.py emits min(num_shards,
         // records) shards, so a fixture smaller than `embedding_shards` would hang

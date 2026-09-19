@@ -225,3 +225,8 @@ test-eval-env/*
 tests/data/pfam/interpro_cache/*/instances-*.tsv
 tests/data/pfam/interpro_cache/*/sequences-*.fasta
 tests/data/pfam/interpro_cache/*/Pfam-A.fasta.gz
+gurobi.lic
+dag.mmd
+nxf-tmp.lAM7oj
+af_metadata.csv
+daisybio.config
