@@ -30,7 +30,7 @@ def apply_scores(conn, tsv_path):
                 "UPDATE ddi_split_membership SET z_score = ? "
                 "WHERE ddi_id = ? AND method = ? AND split = ? "
                 "AND instance_id_a = ? AND instance_id_b = ?",
-                (float(z_score), ddi_id, method, split, ia, ib),
+                (float(z_score), int(ddi_id), method, split, ia, ib),
             )
             n += 1
     return n
@@ -61,9 +61,12 @@ def main():
     conn.commit()
 
     unscored = conn.execute("SELECT COUNT(*) FROM ddi_split_membership WHERE z_score IS NULL").fetchone()[0]
+    scored = conn.execute("SELECT COUNT(*) FROM ddi_split_membership WHERE z_score IS NOT NULL").fetchone()[0]
     if unscored:
         print(f"[merge_scores] WARNING: {unscored} ddi_split_membership rows still unscored", flush=True)
 
+    print(f"[merge_scores] {scored} ddi_split_membership rows scored", flush=True)
+    
     conn.close()
     print(f"[merge_scores] done -> {total_scores} z_scores merged, {total_confirmed} confirmed rows merged", flush=True)
 

@@ -3,7 +3,7 @@ process BUILD_SCORING_MATRIX {
     tag "$method"
     label 'process_medium'
     conda "${moduleDir}/environment.yml"
-    container "docker://konstantinpelz/domainsplit-general:1.0.0"
+    container "docker.io/konstantinpelz/domainsplit-general:1.0.0"
 
     input:
     tuple val(method), path(dbstruct, stageAs: 'input.dbstruct.sqlite3'), path(structures_h5)

@@ -15,6 +15,13 @@ Produces, per method:
     <method>.c_ab_matrix.csv — 20x20 contact counts (aaA, aaB, count)
     <method>.db_freq.csv     — train-set surface AA frequencies (aa, frequency)
     <method>.t_db.txt        — total contact count T_DB
+
+PERFORMANCE NOTE (vs. original):
+  - Contact detection (residues_contact) is vectorized with NumPy/cdist
+    instead of a Python double-loop over every atom pair per residue pair.
+    Only existence of a qualifying atom pair is needed here (not the
+    closest one, or its mc/sc type, as in score_ddi.py), so this is a
+    lighter version of the same fix.
 """
 import argparse
 import csv
@@ -25,14 +32,31 @@ from pathlib import Path
 import Bio
 import h5py
 import numpy as np
+import scipy
+from scipy.spatial.distance import cdist
 from Bio.PDB.PDBParser import PDBParser
 
 from utils_struct import (
-    AA_3, bytes_to_tempfile, extract_domain_residues,
-    get_positive_train_structures, get_structure_bytes, residues_contact,
+    AA_3, bytes_to_tempfile, calculate_rsa_residue_level,
+    extract_domain_residues, get_positive_train_structures,
+    get_structure_bytes,
 )
 
+CC_VDW = 5.0   # vdW:        C-C distance <= 5.0 Å
+NO_SB  = 5.5   # Salt bridge: N-O distance <= 5.5 Å
+
 CHAIN_A, CHAIN_B = "A", "B"
+# Relative solvent accessibility of the unbound protein must be >= 10% to
+# count a residue as surface (excludes buried side-chains, per Sprinzak &
+# Margalit 2001). Applied to both the contact matrix and DB_FREQ, since
+# both are meant to reflect surface, not buried, residues.
+RSA_THRESHOLD = 0.1
+
+
+def check_rsa(domain, chain_id, threshold=RSA_THRESHOLD):
+    """Residue ids with relative solvent accessibility >= threshold."""
+    rsa = calculate_rsa_residue_level(domain, chain_id=chain_id)
+    return {rid for rid, v in rsa.items() if v is not None and v >= threshold}
 
 
 def parse_args():
@@ -46,6 +70,68 @@ def parse_args():
     p.add_argument("--versions", required=True)
     p.add_argument("--process_name", required=True)
     return p.parse_args()
+
+
+def _residue_atom_arrays(residues, checked_ids):
+    """
+    Flatten C/N/O atoms of the given residues (restricted to those in
+    checked_ids, i.e. RSA-passing / surface residues) into parallel NumPy
+    arrays:
+        coords  (n_atoms, 3) float
+        elems   (n_atoms,)   'C'/'N'/'O'
+        res_idx (n_atoms,)   int index into `residues`
+    Only C/N/O atoms are kept since those are the only elements the
+    contact definition (C-C vdW, N-O salt bridge) ever uses.
+    """
+    coords, elems, res_idx = [], [], []
+    for i, r in enumerate(residues):
+        if r.get_id() not in checked_ids:
+            continue
+        for atom in r.get_atoms():
+            el = (atom.element or "").strip().upper()
+            if el not in ("C", "N", "O"):
+                continue
+            coords.append(atom.coord)
+            elems.append(el)
+            res_idx.append(i)
+    return (
+        np.asarray(coords, dtype=float).reshape(-1, 3),
+        np.asarray(elems),
+        np.asarray(res_idx, dtype=int),
+    )
+
+
+def find_contact_pairs_vectorized(res_a, res_b, checked_a, checked_b):
+    """
+    Vectorized replacement for the residues_contact() double-loop.
+    Returns the set of unique (i, j) residue-index pairs (into res_a,
+    res_b respectively) that have at least one qualifying atom contact,
+    matching the original 3did contact definition (C-C vdW or N-O salt
+    bridge), restricted to residues with RSA >= RSA_THRESHOLD on each
+    side. Distance/order beyond "does a qualifying contact exist" is
+    irrelevant here, unlike in score_ddi.py.
+    """
+    coords_a, elems_a, ridx_a = _residue_atom_arrays(res_a, checked_a)
+    coords_b, elems_b, ridx_b = _residue_atom_arrays(res_b, checked_b)
+
+    if len(coords_a) == 0 or len(coords_b) == 0:
+        return set()
+
+    dist = cdist(coords_a, coords_b)
+
+    cc_mask = (elems_a[:, None] == "C") & (elems_b[None, :] == "C") & (dist <= CC_VDW)
+    no_mask = (
+        ((elems_a[:, None] == "N") & (elems_b[None, :] == "O")) |
+        ((elems_a[:, None] == "O") & (elems_b[None, :] == "N"))
+    ) & (dist <= NO_SB)
+    hit = cc_mask | no_mask
+    if not hit.any():
+        return set()
+
+    ai, bi = np.where(hit)
+    ra = ridx_a[ai]
+    rb = ridx_b[bi]
+    return set(zip(ra.tolist(), rb.tolist()))
 
 
 def build_matrix(args):
@@ -83,21 +169,26 @@ def build_matrix(args):
                 n_skipped += 1
                 continue
 
-            for r in res_a:
-                surface_counts[r.get_resname()] += 1
-            for r in res_b:
-                surface_counts[r.get_resname()] += 1
+            # RSA of the unbound domain must be >= 10% to count as surface
+            # (excludes buried side-chains); applied to both the surface
+            # frequency counts and the contact matrix.
+            checked_a = check_rsa(structure, chain_id=CHAIN_A)
+            checked_b = check_rsa(structure, chain_id=CHAIN_B)
 
-            found_any = False
-            for rA in res_a:
-                aaA = rA.get_resname()
-                for rB in res_b:
-                    aaB = rB.get_resname()
-                    if residues_contact(rA, rB):
-                        C_ab[aaA][aaB] += 1
-                        C_ab[aaB][aaA] += 1
-                        found_any = True
-            if not found_any:
+            for r in res_a:
+                if r.get_id() in checked_a:
+                    surface_counts[r.get_resname()] += 1
+            for r in res_b:
+                if r.get_id() in checked_b:
+                    surface_counts[r.get_resname()] += 1
+
+            contact_pairs = find_contact_pairs_vectorized(res_a, res_b, checked_a, checked_b)
+            for i, j in contact_pairs:
+                aaA = res_a[i].get_resname()
+                aaB = res_b[j].get_resname()
+                C_ab[aaA][aaB] += 1
+                C_ab[aaB][aaA] += 1
+            if not contact_pairs:
                 n_no_contact += 1
             if n_instances % 500 == 0:
                 print(f"  Processed {n_instances} DDIs...", flush=True)
@@ -147,6 +238,7 @@ def write_versions(path, process_name):
         f.write(f"    python: {sys.version.split()[0]}\n")
         f.write(f"    biopython: {Bio.__version__}\n")
         f.write(f"    numpy: {np.__version__}\n")
+        f.write(f"    scipy: {scipy.__version__}\n")
         f.write(f"    h5py: {h5py.__version__}\n")
 
 
