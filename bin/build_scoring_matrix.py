@@ -11,10 +11,20 @@ Deliberately per-method: score_ddi.py scores every DDI under this method
 but this method's own train split, a test-time DDI would be scored against
 a background that had already seen it.
 
-Produces, per method:
+SHARDING: when --n_shards > 1, this script processes only its slice of
+the method's train structures and writes RAW, UN-normalized counts:
+    <method>.<shard_id>.c_ab_counts.csv     — 20x20 contact counts (summable)
+    <method>.<shard_id>.surface_counts.csv  — surface AA counts (summable)
+This is a reduction (sums), so any split across shards is safe -- unlike
+score_ddi.py, no grouping is needed here. Run merge_scoring_matrix.py
+once all shards for a method are done to sum these and produce the final,
+normalized:
     <method>.c_ab_matrix.csv — 20x20 contact counts (aaA, aaB, count)
     <method>.db_freq.csv     — train-set surface AA frequencies (aa, frequency)
     <method>.t_db.txt        — total contact count T_DB
+which score_ddi.py consumes unchanged. With --n_shards=1 (default), a
+single "merge" of one shard still runs, so behaviour/output is identical
+to before, just via the two-step shard+merge path.
 
 PERFORMANCE NOTE (vs. original):
   - Contact detection (residues_contact) is vectorized with NumPy/cdist
@@ -22,6 +32,8 @@ PERFORMANCE NOTE (vs. original):
     Only existence of a qualifying atom pair is needed here (not the
     closest one, or its mc/sc type, as in score_ddi.py), so this is a
     lighter version of the same fix.
+  - PDB parsing reads structures from an in-memory buffer instead of a
+    temp file on disk (see utils_struct.bytes_to_stringio).
 """
 import argparse
 import csv
@@ -37,7 +49,7 @@ from scipy.spatial.distance import cdist
 from Bio.PDB.PDBParser import PDBParser
 
 from utils_struct import (
-    AA_3, bytes_to_tempfile, calculate_rsa_residue_level,
+    AA_3, bytes_to_stringio, calculate_rsa_residue_level,
     extract_domain_residues, get_positive_train_structures,
     get_structure_bytes,
 )
@@ -64,12 +76,20 @@ def parse_args():
     p.add_argument("--db_in", required=True)
     p.add_argument("--structures_h5", required=True)
     p.add_argument("--method", required=True)
-    p.add_argument("--c_ab_matrix", required=True)
-    p.add_argument("--db_freq", required=True)
-    p.add_argument("--t_db", required=True)
+    p.add_argument("--c_ab_counts_out", required=True,
+                    help="raw (un-normalized) 20x20 contact-count output for this shard")
+    p.add_argument("--surface_counts_out", required=True,
+                    help="raw (un-normalized) surface AA count output for this shard")
     p.add_argument("--versions", required=True)
     p.add_argument("--process_name", required=True)
-    return p.parse_args()
+    p.add_argument("--shard_id", type=int, default=0,
+                    help="0-based index of this shard (default 0 = no sharding)")
+    p.add_argument("--n_shards", type=int, default=1,
+                    help="total number of shards this method's train structures are split into")
+    args = p.parse_args()
+    if not (0 <= args.shard_id < args.n_shards):
+        p.error(f"--shard_id ({args.shard_id}) must be in [0, --n_shards={args.n_shards})")
+    return args
 
 
 def _residue_atom_arrays(residues, checked_ids):
@@ -135,13 +155,21 @@ def find_contact_pairs_vectorized(res_a, res_b, checked_a, checked_b):
 
 
 def build_matrix(args):
-    C_ab = defaultdict(lambda: defaultdict(float))
+    C_ab = defaultdict(lambda: defaultdict(int))
     surface_counts = defaultdict(int)
     n_instances = n_skipped = n_no_contact = n_missing_bytes = 0
 
     train_structures = get_positive_train_structures(args.db_in, args.method)
     print(f"[build_scoring_matrix] method={args.method}: {len(train_structures)} "
-          f"train-split positive-DDI structures", flush=True)
+          f"train-split positive-DDI structures total", flush=True)
+
+    if args.n_shards > 1:
+        # A pure reduction over independent structures -- any split is
+        # safe to sum back together later, unlike score_ddi.py's per-ddi_id
+        # aggregation. Simple round-robin by structure index is fine here.
+        train_structures = train_structures[args.shard_id::args.n_shards]
+        print(f"[build_scoring_matrix] method={args.method}: shard {args.shard_id}/{args.n_shards} "
+              f"-> {len(train_structures)} structures", flush=True)
 
     with h5py.File(args.structures_h5, "r") as h5file:
         for (ddi_id, instance_id_a, instance_id_b) in train_structures:
@@ -153,10 +181,9 @@ def build_matrix(args):
                 n_missing_bytes += 1
                 continue
 
-            path_to_tmp_pdb = bytes_to_tempfile(pdb_gz)
             structure = None
             try:
-                structure = PDBParser(QUIET=True).get_structure(f"ddi_{ddi_id}", path_to_tmp_pdb)
+                structure = PDBParser(QUIET=True).get_structure(f"ddi_{ddi_id}", bytes_to_stringio(pdb_gz))
             except Exception as e:
                 print(f"WARNING: Failed to parse PDB for DDI {ddi_id}: {e}", file=sys.stderr)
             if structure is None:
@@ -198,38 +225,28 @@ def build_matrix(args):
     return C_ab, surface_counts
 
 
-def write_c_ab_matrix(C_ab, path):
+def write_c_ab_counts(C_ab, path):
+    """Raw (un-normalized) contact counts for this shard -- summable across
+    shards by merge_scoring_matrix.py. Same format as the old final
+    c_ab_matrix.csv, since it was already raw counts, not frequencies."""
     with open(path, "w", newline="") as f:
         writer = csv.writer(f)
         writer.writerow(["aaA", "aaB", "count"])
         for aaA in AA_3:
             for aaB in AA_3:
                 writer.writerow([aaA, aaB, C_ab[aaA][aaB]])
-    print(f"Written C_ab matrix to {path}", flush=True)
+    print(f"Written raw C_ab counts to {path}", flush=True)
 
 
-def write_db_freq(surface_counts, path):
-    total = sum(surface_counts.values())
-    if total == 0:
-        print("WARNING: no surface residues accumulated — DB_FREQ will be zeros", file=sys.stderr)
-        total = 1
+def write_surface_counts(surface_counts, path):
+    """Raw (un-normalized) surface AA counts for this shard -- summable
+    across shards. merge_scoring_matrix.py normalizes into db_freq.csv."""
     with open(path, "w", newline="") as f:
         writer = csv.writer(f)
-        writer.writerow(["aa", "frequency"])
+        writer.writerow(["aa", "count"])
         for aa in AA_3:
-            writer.writerow([aa, surface_counts.get(aa, 0) / total])
-    print(f"Written DB_FREQ to {path}", flush=True)
-
-
-def write_t_db(C_ab, path):
-    t_db_diag = int(sum(C_ab[aaA][aaA] for aaA in AA_3))
-    t_db_offdiag = int(sum(
-        C_ab[aaA][aaB] for i, aaA in enumerate(AA_3) for j, aaB in enumerate(AA_3) if j > i
-    ))
-    t_db = t_db_diag + 2 * t_db_offdiag
-    Path(path).write_text(str(t_db) + "\n")
-    print(f"T_DB = {t_db}, written to {path}", flush=True)
-    return t_db
+            writer.writerow([aa, surface_counts.get(aa, 0)])
+    print(f"Written raw surface counts to {path}", flush=True)
 
 
 def write_versions(path, process_name):
@@ -244,13 +261,13 @@ def write_versions(path, process_name):
 
 def main():
     args = parse_args()
-    print(f"[build_scoring_matrix] method={args.method}: building train-set scoring matrix", flush=True)
+    print(f"[build_scoring_matrix] method={args.method}: "
+          f"building shard {args.shard_id}/{args.n_shards} of the train-set scoring matrix", flush=True)
     C_ab, surface_counts = build_matrix(args)
-    write_c_ab_matrix(C_ab, args.c_ab_matrix)
-    write_db_freq(surface_counts, args.db_freq)
-    t_db = write_t_db(C_ab, args.t_db)
+    write_c_ab_counts(C_ab, args.c_ab_counts_out)
+    write_surface_counts(surface_counts, args.surface_counts_out)
     write_versions(args.versions, args.process_name)
-    print(f"[build_scoring_matrix] method={args.method}: done, T_DB={t_db}", flush=True)
+    print(f"[build_scoring_matrix] method={args.method}: shard {args.shard_id}/{args.n_shards} done", flush=True)
 
 
 if __name__ == "__main__":

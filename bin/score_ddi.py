@@ -45,7 +45,7 @@ from scipy.spatial.distance import cdist
 from Bio.PDB.PDBParser import PDBParser
 
 from utils_struct import (
-    bytes_to_tempfile, BACKBONE_ATOMS, CC_VDW, NO_SB, AA_3, AA_SET,
+    bytes_to_stringio, BACKBONE_ATOMS, CC_VDW, NO_SB, AA_3, AA_SET,
     calculate_rsa_residue_level, extract_domain_residues,
     get_structure_bytes, get_structures_for_method,
 )
@@ -72,7 +72,6 @@ ITYPE_INDEX = {t: i for i, t in enumerate(ITYPES)}
 AA_INDEX = {aa: i for i, aa in enumerate(AA_3)}
 
 # Populated once in main() after C_AB_MATRIX / DB_FREQ / T_DB are loaded.
-global SCORE_LOOKUP
 SCORE_LOOKUP = np.array([])  # shape (20, 20, 3), see build_score_lookup()
 
 
@@ -88,7 +87,14 @@ def parse_args():
     p.add_argument("--confirmed_out", required=True)
     p.add_argument("--versions", required=True)
     p.add_argument("--process_name", required=True)
-    return p.parse_args()
+    p.add_argument("--shard_id", type=int, default=0,
+                    help="0-based index of this shard (default 0 = no sharding)")
+    p.add_argument("--n_shards", type=int, default=1,
+                    help="total number of shards this method's structures are split into")
+    args = p.parse_args()
+    if not (0 <= args.shard_id < args.n_shards):
+        p.error(f"--shard_id ({args.shard_id}) must be in [0, --n_shards={args.n_shards})")
+    return args
 
 
 def load_c_ab_matrix(path):
@@ -342,7 +348,21 @@ def main():
     print("  Built global (20,20,3) score lookup table", flush=True)
 
     method_structures = get_structures_for_method(args.db_in, args.method)
-    print(f"[score_ddi] method={args.method}: {len(method_structures)} structures to score", flush=True)
+    print(f"[score_ddi] method={args.method}: {len(method_structures)} structures total", flush=True)
+
+    if args.n_shards > 1:
+        # Shard by ddi_id, NOT by flat structure index. aggregate_scores()
+        # needs every instance of one ddi_id in the same shard to compute
+        # a correct majority/mean confirmed vote -- splitting one ddi_id's
+        # instances across shards would silently produce a wrong partial
+        # vote in each. Round-robin over the *unique ddi_ids* keeps each
+        # ddi_id's instances together while still balancing shards.
+        unique_ddi_ids = sorted({row[0] for row in method_structures})
+        shard_ddi_ids = set(unique_ddi_ids[args.shard_id::args.n_shards])
+        method_structures = [row for row in method_structures if row[0] in shard_ddi_ids]
+        print(f"[score_ddi] method={args.method}: shard {args.shard_id}/{args.n_shards} "
+              f"-> {len(shard_ddi_ids)}/{len(unique_ddi_ids)} DDIs, "
+              f"{len(method_structures)} structures to score", flush=True)
 
     if not method_structures:
         print(f"[score_ddi] WARNING: no structures for method={args.method}, writing empty outputs", flush=True)
@@ -359,10 +379,9 @@ def main():
                 print(f"WARNING: no structure bytes for ddi {ddi_id} ({instance_id_a}, {instance_id_b})", file=sys.stderr)
                 continue
 
-            path_to_tmp_pdb = bytes_to_tempfile(pdb_gz)
             structure = None
             try:
-                structure = PDBParser(QUIET=True).get_structure(f"ddi_{ddi_id}", path_to_tmp_pdb)
+                structure = PDBParser(QUIET=True).get_structure(f"ddi_{ddi_id}", bytes_to_stringio(pdb_gz))
             except Exception as e:
                 print(f"WARNING: Failed to parse PDB for DDI {ddi_id}: {e}", file=sys.stderr)
             if structure is None:
@@ -387,8 +406,8 @@ def main():
             z_score = compute_z_score(real_score, random_scores)
             confirmed = int(z_score >= ZSCORE_THRESHOLD)
 
-            # print(f"DDI {ddi_id}: n_interacting={n_interacting}, "
-            #       f"score={real_score:.3f}, z={z_score:.3f}, confirmed={confirmed}", flush=True)
+            print(f"DDI {ddi_id}: n_interacting={n_interacting}, "
+                  f"score={real_score:.3f}, z={z_score:.3f}, confirmed={confirmed}", flush=True)
 
             score_rows.append((ddi_id, split, instance_id_a, instance_id_b, z_score))
             scores.setdefault(ddi_id, []).append((z_score, confirmed))

@@ -112,12 +112,13 @@ process INIT_DOMAINSPLIT_DB {
         -- `instance_id_*` reference domain_protein_map.instance_id rather than
         -- protein.id: a protein carrying two copies of one family gives two
         -- instances, and the split is defined on instances, not proteins.
+        -- is_mock is 1 for a mock slice (missing data) and 0 for a real slice.
         --  CREATE TABLE domain_structure (
         --    id INTEGER PRIMARY KEY,
         --    ddi_id REFERENCES domain_domain_interaction ON DELETE CASCADE,
         --    instance_id_a,
         --    instance_id_b,
-        --    is_mock INTEGER DEFAULT 0,
+        --    is_mock INTEGER DEFAULT 1,
         --    UNIQUE(ddi_id, instance_id_a, instance_id_b)
         --);
 

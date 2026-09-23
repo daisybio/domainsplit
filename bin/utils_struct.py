@@ -141,6 +141,18 @@ def bytes_to_tempfile(blob: bytes) -> str:
     return path
 
 
+def bytes_to_stringio(blob: bytes) -> io.StringIO:
+    """
+    Decompress gzip-compressed PDB bytes into an in-memory text stream.
+    PDBParser.get_structure() accepts a file-like object directly, so this
+    avoids the mkstemp -> write -> open -> read disk round-trip that
+    bytes_to_tempfile() requires. Preferred for the hot path in
+    build_scoring_matrix.py / score_ddi.py, which do this once per
+    structure (hundreds of thousands of times at full scale).
+    """
+    return io.StringIO(gzip.decompress(blob).decode("utf-8"))
+
+
 class DdiPairSelect(Select):
 
     def __init__(self, chain_id_a: str, start_a: int, end_a: int, chain_id_b: str, start_b: int, end_b: int) -> None:
