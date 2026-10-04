@@ -22,7 +22,8 @@ process ENRICH_STRUCTURAL_AF {
         --af_metadata ${af_metaddata} \\
         --structures_h5 structures.h5 \\
         --versions versions.yml \\
-        --process_name "${task.process}"
+        --process_name "${task.process}" \\
+        --cpus ${task.cpus}
     """
 
     stub:

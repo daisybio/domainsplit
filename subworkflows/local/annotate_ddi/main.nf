@@ -10,8 +10,8 @@ include { MERGE_SCORES         } from '../../../modules/local/structural/merge_s
 // scores every DDI the method places in any split -- they don't need the
 // same degree of parallelism. Override in nextflow.config / -params-file;
 // these are just starting points to tune against your trace.
-params.build_scoring_matrix_shards = 2
-params.score_ddi_shards            = 4
+params.build_scoring_matrix_shards = 6
+params.score_ddi_shards            = 12
 
 workflow ANNOTATE_DDI {
     take:

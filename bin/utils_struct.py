@@ -174,34 +174,42 @@ class DdiPairSelect(Select):
         return 0
  
  
-def ddi_pair_to_bytes(pdb_file: str, chain_id_a: str, start_a: int, end_a: int, chain_id_b: str, start_b: int, end_b: int) -> bytes:
+def ddi_pair_to_bytes(pdb_file: str, chain_id_a: str, start_a: int, end_a: int,
+                      chain_id_b: str, start_b: int, end_b: int) -> bytes:
     """
     Slice out a single interacting domain pair (both domains of one DDI
-    instance) from a full predicted complex PDB, keeping their original
-    chain IDs.  Returns gzip-compressed PDB text bytes for storage in
-    ddi_structure.pdb_gz.
- 
-    Unlike domain_to_bytes (single domain, single chain), this keeps two
-    disjoint chain/residue windows in the same output structure so the
-    pairwise contact geometry used in scoring (which residue pair on
-    chain A contacts which on chain B) is preserved.
+    instance) from a full predicted complex PDB.
 
-    NOTE: the returned bytes are already gzip-compressed. Callers storing
-    this in structures.h5 should use compression=None on the dataset --
-    wrapping already-compressed bytes in the h5 gzip filter burns CPU on
-    write for no size benefit (and can even grow the payload slightly).
+    The output is NORMALIZED: the domain given as (chain_id_a, start_a, end_a)
+    is always written as chain "A", and the domain given as
+    (chain_id_b, start_b, end_b) is always written as chain "B", regardless of
+    which chains they came from in the source file. Downstream code can
+    therefore always assume chain A == instance_id_a and chain B == instance_id_b.
+
+    Returns gzip-compressed PDB text bytes. Callers storing this in
+    structures.h5 should use compression=None on the dataset.
     """
     parser    = PDBParser(QUIET=True)
     structure = parser.get_structure("ddi_pair", pdb_file)
- 
+    model     = structure[0]  # pyright: ignore[reportOptionalSubscript] # 
+
+    # Two-step rename via temporary IDs: Biopython's Entity.id setter raises if
+    # the new id already exists in the parent, so a direct A<->B swap would fail.
+    chain_a = model[chain_id_a]
+    chain_b = model[chain_id_b]
+    chain_a.id = "X"
+    chain_b.id = "Y"
+    chain_a.id = "A"
+    chain_b.id = "B"
+
     buf    = io.StringIO()
     io_obj = PDBIO()
     io_obj.set_structure(structure)
     io_obj.save(
         buf,
-        DdiPairSelect(chain_id_a, start_a, end_a, chain_id_b, start_b, end_b),
+        DdiPairSelect("A", start_a, end_a, "B", start_b, end_b),
     )
- 
+
     return gzip.compress(buf.getvalue().encode("utf-8"))
 
 
