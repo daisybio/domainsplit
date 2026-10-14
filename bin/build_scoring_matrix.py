@@ -2,7 +2,7 @@
 """
 build_scoring_matrix.py
 ------------------------
-Phase 1 of DDI scoring: derive ONE splitting method's empirical potential
+Phase 1 of DDI scoring: derive one splitting method's empirical potential
 from that method's own TRAIN-split positive-DDI structures (real AF3
 predictions only -- mocked placeholders excluded).
 
@@ -26,20 +26,11 @@ which score_ddi.py consumes unchanged. With --n_shards=1 (default), a
 single "merge" of one shard still runs, so behaviour/output is identical
 to before, just via the two-step shard+merge path.
 
-PERFORMANCE NOTE (vs. original):
-  - Contact detection (residues_contact) is vectorized with NumPy/cdist
-    instead of a Python double-loop over every atom pair per residue pair.
-    Only existence of a qualifying atom pair is needed here (not the
-    closest one, or its mc/sc type, as in score_ddi.py), so this is a
-    lighter version of the same fix.
-  - PDB parsing reads structures from an in-memory buffer instead of a
-    temp file on disk (see utils_struct.bytes_to_stringio).
 """
 import argparse
 import csv
 import sys
 from collections import defaultdict
-from pathlib import Path
 
 import Bio
 import h5py
@@ -51,7 +42,7 @@ from Bio.PDB.PDBParser import PDBParser
 from utils_struct import (
     AA_3, bytes_to_stringio, calculate_rsa_residue_level,
     extract_domain_residues, get_positive_train_structures,
-    get_structure_bytes,
+    get_structure_bytes
 )
 
 CC_VDW = 5.0   # vdW:        C-C distance <= 5.0 Å
@@ -123,7 +114,6 @@ def _residue_atom_arrays(residues, checked_ids):
 
 def find_contact_pairs_vectorized(res_a, res_b, checked_a, checked_b):
     """
-    Vectorized replacement for the residues_contact() double-loop.
     Returns the set of unique (i, j) residue-index pairs (into res_a,
     res_b respectively) that have at least one qualifying atom contact,
     matching the original 3did contact definition (C-C vdW or N-O salt

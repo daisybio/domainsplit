@@ -1,4 +1,3 @@
-// modules/local/structural/score_ddi/main.nf
 process SCORE_DDI {
     tag "$method-$shard_id"
     label 'process_medium'

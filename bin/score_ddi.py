@@ -19,19 +19,6 @@ Scoring methodology (Sprinzak & Margalit 2001, PNAS):
     z     = (score - mean_random) / std_random   over 1000 random trials
 A domain pair is only scored if it has >= 5 interacting residue pairs.
 
-PERFORMANCE NOTE (vs. original):
-  - Contact detection (which residue pairs interact, and at what mc/sc
-    type) is vectorized with NumPy/cdist instead of a Python double-loop
-    over every atom pair. This is normally >90% of the per-structure
-    runtime.
-  - The 1000 random trials no longer re-scan the full n_a x n_b matrix in
-    Python each time. A global (20,20,3) score lookup table is built once,
-    and all 1000 trials are sampled and scored via vectorized NumPy
-    indexing in one shot.
-  - Semantics are preserved exactly: for each trial a single random AA is
-    drawn per residue *position* (not per contact), matching the original
-    sample_sequence() behaviour where a residue's identity is shared
-    across all of its contacts within one trial.
 """
 import argparse
 import csv
@@ -45,7 +32,7 @@ from scipy.spatial.distance import cdist
 from Bio.PDB.PDBParser import PDBParser
 
 from utils_struct import (
-    bytes_to_stringio, BACKBONE_ATOMS, CC_VDW, NO_SB, AA_3, AA_SET,
+    bytes_to_stringio, BACKBONE_ATOMS, CC_VDW, NO_SB, AA_3,
     calculate_rsa_residue_level, extract_domain_residues,
     get_structure_bytes, get_structures_for_method,
 )
@@ -185,8 +172,10 @@ def _residue_atom_arrays(residues, checked_ids):
 
 def find_contacts_vectorized(res_a, res_b, structure):
     """
-    Vectorized replacement for find_interacting_residues/check_for_interaction.
-
+    Vectorized contact detection for all residue pairs in res_a x res_b, returning the
+    residue indices and contact types of the closest qualifying atom pair for each
+    residue pair.
+    
     Returns (ra_arr, rb_arr, itype_idx_arr, n_interacting):
       - ra_arr, rb_arr: residue indices (into res_a / res_b) for each
         contacting residue pair
@@ -260,8 +249,8 @@ def compute_real_score_vectorized(res_a, res_b, ra_arr, rb_arr, itype_arr):
 
 def run_random_trials_vectorized(n_a, n_b, ra_arr, rb_arr, itype_arr, n_trials):
     """
-    Vectorized replacement for run_random_trials/compute_empirical_potential.
-
+    Run a vectorized simulation of random trials to compute a null distribution
+    of contact scores.
     A random AA identity is drawn per residue *position* (length n_a and
     n_b respectively) for each of n_trials trials -- exactly matching the
     original sample_sequence() semantics, where a residue's random

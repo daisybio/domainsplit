@@ -9,8 +9,6 @@ Sums the raw, per-shard outputs of build_scoring_matrix.py (run with
     <method>.db_freq.csv     — train-set surface AA frequencies (aa, frequency)
     <method>.t_db.txt        — total contact count T_DB
 
-Output format is identical to the original (pre-sharding)
-build_scoring_matrix.py, so score_ddi.py needs no changes to consume it.
 
 Run once per method, after all of that method's build_scoring_matrix.py
 shards have completed -- including the trivial --n_shards=1 case, so the

@@ -226,6 +226,12 @@
                     "description": "Comma-separated PPIDM confidence classes to include.",
                     "default": "Bronze,Silver,Gold",
                     "fa_icon": "fas fa-tags"
+                },
+                "af_metadata": {
+                    "type": ["string"],
+                    "format": "file-path",
+                    "description": "Optional AlphaFold DB metadata TSV (columns: uniprot_id_a,uniprot_id_b,path,source), source is either downloaded or inferred.",
+                    "fa_icon": "fas fa-file-import"
                 }
             }
         },

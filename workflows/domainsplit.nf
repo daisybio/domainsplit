@@ -572,15 +572,10 @@ Use all_species_reviewed or human_any_review_status.""")
     enriched_db = ENRICH_DDI_DATABASE.out.domainsplit_db
 
     // Structural enrichment, on the master database, before any subsetting
+    // Processes structures and stores them in a hd5 file
     ENRICH_STRUCTURAL(enriched_db, ch_af_metadata)
-    // Check if structural output exists, if not, log a warning and continue
-    //enriched_structural = ENRICH_STRUCTURAL.out.domainsplit_db.exists() ? ENRICH_STRUCTURAL.out : null
-    // if (enriched_structural == null) {
-    //     log.warn "Structural enrichment output does not exist. Continuing without structural enrichment."
-    // }
-    // log.info "Structural enrichment output exists: ${enriched_structural != null}"
-    // log.info "Structural enrichment output path: ${ENRICH_STRUCTURAL.out.domainsplit_db.toString()}"
-    // log.info "Structural enrichment output size: ${ENRICH_STRUCTURAL.out.domainsplit_db.size()} bytes"
+
+    // Annotate & score the DDI database using structural information
     ANNOTATE_DDI(ENRICH_STRUCTURAL.out.domainsplit_db, ENRICH_STRUCTURAL.out.structures)
     scored_db = ANNOTATE_DDI.out.domainsplit_db
 

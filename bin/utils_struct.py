@@ -2,12 +2,9 @@
 
 import gzip
 import io
-import os
-import tempfile
 import sqlite3
 
-from Bio.PDB.PDBParser import PDBParser
-from Bio.PDB.PDBIO import PDBIO, Select
+from Bio.PDB.PDBIO import Select
 from Bio.PDB.SASA import ShrakeRupley
 
 
@@ -41,6 +38,58 @@ def get_structure_bytes(h5file, instance_id_a: str, instance_id_b: str):
     return grp[dset_key][()].tobytes()
 
 
+
+# ---------------------------------------------------------------------------
+# Structure Helpers
+# ---------------------------------------------------------------------------
+
+
+def bytes_to_stringio(blob: bytes) -> io.StringIO:
+    """
+    Decompress gzip-compressed PDB bytes into an in-memory text stream.
+    PDBParser.get_structure() accepts a file-like object directly.
+    """
+    return io.StringIO(gzip.decompress(blob).decode("utf-8"))
+
+
+class DdiPairSelect(Select):
+
+    def __init__(self, chain_id_a: str, start_a: int, end_a: int, chain_id_b: str, start_b: int, end_b: int) -> None:
+        self.window_a = (chain_id_a, start_a, end_a)
+        self.window_b = (chain_id_b, start_b, end_b)
+ 
+    def _in_window(self, residue, window) -> bool:
+        chain_id, start, end = window
+        return (
+            residue.get_parent().id == chain_id
+            and start <= residue.id[1] <= end
+        )
+ 
+    def accept_residue(self, residue):
+        if self._in_window(residue, self.window_a):
+            return 1
+        if self._in_window(residue, self.window_b):
+            return 1
+        return 0
+ 
+
+
+#---------------------------------------------------------------------------
+# Scoring Helpers
+#---------------------------------------------------------------------------
+
+
+AA_3 = [
+    'ALA', 'ARG', 'ASN', 'ASP', 'CYS', 'GLN', 'GLU', 'GLY', 'HIS', 'ILE',
+    'LEU', 'LYS', 'MET', 'PHE', 'PRO', 'SER', 'THR', 'TRP', 'TYR', 'VAL'
+]
+AA_SET = set(AA_3)
+
+BACKBONE_ATOMS = {"N", "CA", "C", "O", "OXT"}
+
+NO_HB  = 3.5   # H-bond:     N-O distance <= 3.5 Å
+NO_SB  = 5.5   # Salt bridge: N-O distance <= 5.5 Å
+CC_VDW = 5.0   # vdW:        C-C distance <= 5.0 Å
 
 
 
@@ -80,226 +129,6 @@ def calculate_rsa_residue_level(domain, chain_id):
     return rsa_residue
 
 
-# ---------------------------------------------------------------------------
-# Select domain coordinates class
-# ---------------------------------------------------------------------------
-
-class DomainSelect(Select):
-    """Accept only residues in [start_residue, end_residue] on chain_id."""
-
-    def __init__(self, chain_id: str, start_residue: int, end_residue: int):
-        self.chain_id      = chain_id
-        self.start_residue = start_residue
-        self.end_residue   = end_residue
-
-    def accept_residue(self, residue):
-        if residue.get_parent().id == self.chain_id:
-            if self.start_residue <= residue.id[1] <= self.end_residue:
-                return 1
-        return 0
-
-
-# ---------------------------------------------------------------------------
-# PDB Helpers
-# ---------------------------------------------------------------------------
-
-# def extract_domain_pdb(pdb_file: str, chain_id: str, start_residue: int, end_residue: int, output_file: str) -> None:
-#     """Write domain slice to *output_file* in PDB-format"""
-#     parser    = PDBParser(QUIET=True)
-#     structure = parser.get_structure("protein", pdb_file)
-#     io_obj    = PDBIO()
-#     io_obj.set_structure(structure)
-#     io_obj.save(output_file, DomainSelect(chain_id, start_residue, end_residue))
-
-
-
-def domain_to_bytes(pdb_file: str, chain_id: str, start_residue: int, end_residue: int) -> bytes:
-    """
-    Extract the domain slice and return it as gzip-compressed PDB.
-    -> stored in domain_structure.pdb_gz
-    """
-    parser    = PDBParser(QUIET=True)
-    structure = parser.get_structure("domain", pdb_file)
-
-    buf    = io.StringIO()
-    io_obj = PDBIO()
-    io_obj.set_structure(structure)
-    io_obj.save(buf, DomainSelect(chain_id, start_residue, end_residue))
-
-    raw = buf.getvalue().encode("utf-8")
-    return gzip.compress(raw)
-
-
-def bytes_to_tempfile(blob: bytes) -> str:
-    """
-    Decompress gzip-compressed and write it to temporary file.
-    """
-    pdb_text = gzip.decompress(blob).decode("utf-8")
-    fd, path = tempfile.mkstemp(suffix=".pdb")
-    with os.fdopen(fd, "w") as fh:
-        fh.write(pdb_text)
-    return path
-
-
-def bytes_to_stringio(blob: bytes) -> io.StringIO:
-    """
-    Decompress gzip-compressed PDB bytes into an in-memory text stream.
-    PDBParser.get_structure() accepts a file-like object directly, so this
-    avoids the mkstemp -> write -> open -> read disk round-trip that
-    bytes_to_tempfile() requires. Preferred for the hot path in
-    build_scoring_matrix.py / score_ddi.py, which do this once per
-    structure (hundreds of thousands of times at full scale).
-    """
-    return io.StringIO(gzip.decompress(blob).decode("utf-8"))
-
-
-class DdiPairSelect(Select):
-
-    def __init__(self, chain_id_a: str, start_a: int, end_a: int, chain_id_b: str, start_b: int, end_b: int) -> None:
-        self.window_a = (chain_id_a, start_a, end_a)
-        self.window_b = (chain_id_b, start_b, end_b)
- 
-    def _in_window(self, residue, window) -> bool:
-        chain_id, start, end = window
-        return (
-            residue.get_parent().id == chain_id
-            and start <= residue.id[1] <= end
-        )
- 
-    def accept_residue(self, residue):
-        if self._in_window(residue, self.window_a):
-            return 1
-        if self._in_window(residue, self.window_b):
-            return 1
-        return 0
- 
- 
-def ddi_pair_to_bytes(pdb_file: str, chain_id_a: str, start_a: int, end_a: int,
-                      chain_id_b: str, start_b: int, end_b: int) -> bytes:
-    """
-    Slice out a single interacting domain pair (both domains of one DDI
-    instance) from a full predicted complex PDB.
-
-    The output is NORMALIZED: the domain given as (chain_id_a, start_a, end_a)
-    is always written as chain "A", and the domain given as
-    (chain_id_b, start_b, end_b) is always written as chain "B", regardless of
-    which chains they came from in the source file. Downstream code can
-    therefore always assume chain A == instance_id_a and chain B == instance_id_b.
-
-    Returns gzip-compressed PDB text bytes. Callers storing this in
-    structures.h5 should use compression=None on the dataset.
-    """
-    parser    = PDBParser(QUIET=True)
-    structure = parser.get_structure("ddi_pair", pdb_file)
-    model     = structure[0]  # pyright: ignore[reportOptionalSubscript] # 
-
-    # Two-step rename via temporary IDs: Biopython's Entity.id setter raises if
-    # the new id already exists in the parent, so a direct A<->B swap would fail.
-    chain_a = model[chain_id_a]
-    chain_b = model[chain_id_b]
-    chain_a.id = "X"
-    chain_b.id = "Y"
-    chain_a.id = "A"
-    chain_b.id = "B"
-
-    buf    = io.StringIO()
-    io_obj = PDBIO()
-    io_obj.set_structure(structure)
-    io_obj.save(
-        buf,
-        DdiPairSelect("A", start_a, end_a, "B", start_b, end_b),
-    )
-
-    return gzip.compress(buf.getvalue().encode("utf-8"))
-
-
-
-# ---------------------------------------------------------------------------
-# Database helpers
-# ---------------------------------------------------------------------------
-
-# def connect_db(db_path: str):
-#     conn = sqlite3.connect(db_path)
-#     conn.execute("PRAGMA foreign_keys = ON")
-#     conn.execute("PRAGMA synchronous  = OFF")
-#     conn.execute("PRAGMA journal_mode = MEMORY")
-#     return conn
-
-
-
-# def get_ppis(conn):
-#     """Return all PPIs as (protein_id_a, uniprot_id_a, sequence_a,
-#                            protein_id_b, uniprot_id_b, sequence_b)."""
-#     return conn.execute("""
-#         SELECT
-#             p1.id         AS protein_id_a,
-#             p1.uniprot_id AS uniprot_id_a,
-#             p1.sequence   AS sequence_a,
-#             p2.id         AS protein_id_b,
-#             p2.uniprot_id AS uniprot_id_b,
-#             p2.sequence   AS sequence_b
-#         FROM protein_protein_interaction ppi
-#         JOIN protein p1 ON ppi.protein_id_a = p1.id
-#         JOIN protein p2 ON ppi.protein_id_b = p2.id
-#     """).fetchall()
-
-
-# def get_domain_mapping(conn, protein_id: int):
-#     """Return [(domain_id, start_pos, end_pos)] for a protein."""
-#     return conn.execute("""
-#         SELECT domain_id, start_pos, end_pos
-#         FROM domain_protein_map
-#         WHERE protein_id = ?
-#     """, (protein_id,)).fetchall()
-
-
-
-# def store_domain_slice(conn, ddi_id: int, domain_id_1: int, domain_id_2: int, protein_id_1: int, protein_id_2: int, pdb_gz: bytes, source_model: str) -> None:
-#     return conn.execute("""
-#         INSERT OR REPLACE INTO domain_structure
-#             (ddi_id, domain1, domain2, protein1, protein2, source, pdb_gz, z_score)
-#         VALUES (?, ?, ?, ?, ?, ?, ?, NULL)
-#     """, (ddi_id, domain_id_1, domain_id_2, protein_id_1, protein_id_2, source_model, pdb_gz))
-
-
-
-# def check_ddi_exists(conn, domain_id_a: int, domain_id_b: int):
-#     """Return the ID of the DDI if it exists for this domain pair, otherwise None."""
-#     row = conn.execute("""
-#         SELECT id
-#         FROM domain_domain_interaction ddi
-#         WHERE ddi.domain_id_a = ? AND ddi.domain_id_b = ?
-#     """, (domain_id_a, domain_id_b)).fetchone()
-#     row_rev = conn.execute("""
-#         SELECT id
-#         FROM domain_domain_interaction ddi
-#         WHERE ddi.domain_id_a = ? AND ddi.domain_id_b = ?
-#     """, (domain_id_b, domain_id_a)).fetchone()
-
-#     id = row[0] if row else (row_rev[0] if row_rev else None)
-    
-#     return id
-
-
-
-#---------------------------------------------------------------------------
-# Scoring Helper Functions
-#---------------------------------------------------------------------------
-
-
-
-AA_3 = [
-    'ALA', 'ARG', 'ASN', 'ASP', 'CYS', 'GLN', 'GLU', 'GLY', 'HIS', 'ILE',
-    'LEU', 'LYS', 'MET', 'PHE', 'PRO', 'SER', 'THR', 'TRP', 'TYR', 'VAL'
-]
-AA_SET = set(AA_3)
-
-BACKBONE_ATOMS = {"N", "CA", "C", "O", "OXT"}
-
-NO_HB  = 3.5   # H-bond:     N-O distance <= 3.5 Å
-NO_SB  = 5.5   # Salt bridge: N-O distance <= 5.5 Å
-CC_VDW = 5.0   # vdW:        C-C distance <= 5.0 Å
-
 
 def extract_domain_residues(structure, chain_id):
     """
@@ -314,23 +143,6 @@ def extract_domain_residues(structure, chain_id):
         r for r in chain.get_residues()
         if r.get_resname() in AA_SET
     ]
-
-def residues_contact(resA, resB):
-    """
-    Return True if any atom pair between resA and resB satisfies the
-    3did contact definition (H-bond, salt bridge, or vdW).
-    """
-    for atomA in resA.get_atoms():
-        elemA = atomA.element.strip().upper() if atomA.element else ""
-        for atomB in resB.get_atoms():
-            elemB = atomB.element.strip().upper() if atomB.element else ""
-            dist = atomA - atomB
-            pair = tuple(sorted([elemA, elemB]))
-            if pair == ('C', 'C') and dist <= CC_VDW:
-                return True
-            if pair == ('N', 'O') and dist <= NO_SB:
-                return True
-    return False
 
 
 
@@ -374,91 +186,4 @@ def get_structures_for_method(db_path, method):
     """, (method,)).fetchall()
     conn.close()
     return rows
-
-
-#----------------------------------------------------------------------------
-# Random PDB generation for creating AlphaFold Mock structures for missing pairs.  This is a temporary
-# solution until we can get the AlphaFold pipeline running on our own data. 
-# The mock structures are used to fill in the gaps where the actual AlphaFold models are not yet available.
-#----------------------------------------------------------------------------
-
-_BACKBONE_ATOMS = ["N", "CA", "C", "O"]
-_BACKBONE_OFFSETS = {  # offsets (A) from the residue's CA, idealised geometry
-    "N":  (-0.5, 1.4, 0.0),
-    "CA": (0.0, 0.0, 0.0),
-    "C":  (1.4, -0.5, 0.0),
-    "O":  (2.0, -1.5, 0.0),
-}
- 
-_THREE_LETTER = {
-    'A': 'ALA', 'R': 'ARG', 'N': 'ASN', 'D': 'ASP', 'C': 'CYS',
-    'Q': 'GLN', 'E': 'GLU', 'G': 'GLY', 'H': 'HIS', 'I': 'ILE',
-    'L': 'LEU', 'K': 'LYS', 'M': 'MET', 'F': 'PHE', 'P': 'PRO',
-    'S': 'SER', 'T': 'THR', 'W': 'TRP', 'Y': 'TYR', 'V': 'VAL',
-}
- 
-
-def _write_mock_chain_atoms(lines: list, chain_id: str, sequence: str,
-                             atom_serial: list, x_offset: float) -> None:
-    """Append PDB ATOM lines for one chain with a simple backbone-only
-    random-walk trace, starting at x_offset along the X axis."""
-    import random
-    rng = random.Random(f"{chain_id}-{sequence[:8]}-{len(sequence)}")
-    x, y, z = x_offset, 0.0, 0.0
-    rise = 3.8  # approx CA-CA spacing along the synthetic chain
- 
-    for res_idx, aa in enumerate(sequence, start=1):
-        resname = _THREE_LETTER.get(aa.upper(), "GLY")
- 
-        # small random perpendicular jitter so the structure isn't a
-        # perfectly straight (degenerate) line
-        jitter_y = rng.uniform(-1.0, 1.0)
-        jitter_z = rng.uniform(-1.0, 1.0)
-        cx, cy, cz = x, y + jitter_y, z + jitter_z
- 
-        for atom_name in _BACKBONE_ATOMS:
-            dx, dy, dz = _BACKBONE_OFFSETS[atom_name]
-            ax, ay, az = cx + dx, cy + dy, cz + dz
-            element = atom_name[0]
-            atom_serial[0] += 1
-            lines.append(
-                f"ATOM  {atom_serial[0]:5d}  {atom_name:<3s}{resname:>3s} "
-                f"{chain_id}{res_idx:4d}    "
-                f"{ax:8.3f}{ay:8.3f}{az:8.3f}{1.00:6.2f}{0.00:6.2f}"
-                f"          {element:>2s}\n"
-            )
- 
-        x += rise
-
-
-
-def mock_predict_complex(sequence_a: str, sequence_b: str, out_cif_dir: str,
-                          basename: str) -> str:
-    """
-    Generate a synthetic 'model_0' PDB structure for two sequences placed
-    on chains A and B, mimicking the file an AF3 run would eventually
-    produce (minus the CIF step -- this writes PDB directly).
- 
-    This is NOT a real structure prediction. Coordinates are a randomised
-    backbone-only trace with no physical relevance -- it exists purely so
-    downstream code (domain slicing, contact geometry, scoring) can be
-    exercised before AF3 is wired up.
- 
-    Returns the path to the written PDB file:
-        {out_cif_dir}/{basename}_model_0.pdb
-    """
-    pdb_path = os.path.join(out_cif_dir, f"{basename}_model_0.pdb")
- 
-    lines = ["HEADER    MOCK AF3 PREDICTION (SYNTHETIC, FOR TESTING ONLY)\n"]
-    atom_serial = [0]
-    _write_mock_chain_atoms(lines, "A", sequence_a, atom_serial, x_offset=0.0)
-    lines.append("TER\n")
-    _write_mock_chain_atoms(lines, "B", sequence_b, atom_serial, x_offset=20.0)
-    lines.append("TER\n")
-    lines.append("END\n")
- 
-    with open(pdb_path, "w") as fh:
-        fh.writelines(lines)
- 
-    return pdb_path
 

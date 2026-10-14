@@ -1,0 +1,13 @@
+name: enrich_structural_af
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - python>=3.10
+  - pandas
+  - biopython
+  - numpy
+  - h5py
+  - sqlite3
+  - pip:
+      - zstandard

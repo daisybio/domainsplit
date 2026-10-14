@@ -1,0 +1,30 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/nf-core/modules/master/subworkflows/yaml-schema.json
+name: "enrich_structural"
+description: Processes AF-derived structures and stores them in a HDF5 file, for later use in DDI scoring. Function is a wrapper around the ENRICH_STRUCTURAL_AF module, which does the actual work.
+keywords:
+  - structural
+  - annotation
+  - af
+components:
+  - enrich/structural/af
+input:
+  - domainsplit_db_in:
+      type: file
+      description: Enriched Domainsplit SQLite.
+      pattern: "*.sqlite3"
+  - af_metaddata:
+      type: file
+      description: metadata file containing paths to AF structures.
+output:
+  - domainsplit_db:
+      type: file
+      description: Structurally enriched Domainsplit SQLite database.
+      pattern: "*.sqlite3"
+  - structures:
+      type: file
+      description: HDF5 file containing processed AF structures.
+      pattern: "*.hdf5"
+authors:
+  - "@ChiaraThomas"
+maintainers:
+  - "@KonstantinPelz"

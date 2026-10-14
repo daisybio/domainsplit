@@ -1,8 +1,3 @@
-// modules/local/structural/merge_scoring_matrix/main.nf
-//
-// A true reduction (sum), unlike MERGE_SCORE_SHARDS -- can't just
-// concatenate shard c_ab_counts.csv / surface_counts.csv, the counts need
-// to be summed entrywise and db_freq.csv only normalized once, at the end.
 process MERGE_SCORING_MATRIX {
     tag "$method"
     label 'process_low'

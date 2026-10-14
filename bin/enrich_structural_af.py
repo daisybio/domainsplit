@@ -10,28 +10,9 @@ worth slicing. Grouped by UNORDERED protein pair so a complex predicted once
 is loaded/parsed exactly once, even when it realizes several DDIs and even
 when the pair shows up as (A, B) for some DDIs and (B, A) for others.
 
-Only the 'random' and 'minimal_leakage' methods get structural analysis
-downstream, so fetch_relevant_instances restricts to those methods in SQL --
-the other methods are what made the instance count explode (~1M -> ~250k),
-and this way rows for methods that will never be scored are never even
-pulled into pandas.
-
 When af_metadata has no entry for a pair, or the referenced file is missing
 or unreadable (e.g. the AF3 run for it hasn't finished yet), the pair is
-marked is_mock=1 and no structure is written to structures.h5 -- 90%+ of
-pairs currently fall into this bucket, so mock rows are handled as a pure
-metadata/DB write with no PDB parsing, slicing, or h5 I/O at all. Mock rows
-are excluded from both build_scoring_matrix.py and score_ddi.py -- they
-exist purely so the rest of the pipeline (H5 writing, DB inserts,
-SUBSET_SPLIT_DB, etc.) can be exercised without waiting on every prediction
-to land.
-
-Parallelization: the expensive part (decompress/parse the complex once, then
-slice + gzip every instance pair) runs in a pool of worker processes, one
-task per protein pair. The main process is the only one that touches
-structures.h5 and the sqlite DB (neither is safe for concurrent writers) and
-consumes results as they arrive, with a bounded number of tasks in flight so
-memory stays flat.
+marked is_mock=1 and no structure is written to structures.h5.
 """
 import argparse as ap
 import gzip
@@ -139,9 +120,7 @@ def load_structure(path: str, source: str):
 
 def slice_pair(structure, chain_a: str, start_a: int, end_a: int,
                chain_b: str, start_b: int, end_b: int) -> bytes:
-    """Same output as utils_struct.ddi_pair_to_bytes, but works on an
-    already-parsed structure so the complex is parsed once per protein pair
-    instead of once per instance pair. The domain from `chain_a` is written
+    """Slicing a pair of domains from a structure. The domain from `chain_a` is written
     as chain A and the one from `chain_b` as chain B; the chain ids are
     restored afterwards so the structure can be reused for the next slice."""
     model = structure[0]
@@ -162,9 +141,7 @@ def slice_pair(structure, chain_a: str, start_a: int, end_a: int,
 
 
 def process_pair(task):
-    """One protein pair: load the complex once, slice every instance pair.
-    Never raises for data problems -- returns them so the main process can
-    record them."""
+    """One protein pair: load the complex once, slice every instance pair."""
     path, source, file_uniprot_a, rows = task
     try:
         structure = load_structure(path, source)
@@ -221,15 +198,6 @@ def run_tasks(tasks, n_workers: int):
                     pending.add(ex.submit(process_pair, nxt))
 
 
-def make_mock_structure(uniprot_a, uniprot_b, protein_seqs, scratch_dir):
-    seq_a, seq_b = protein_seqs.get(uniprot_a), protein_seqs.get(uniprot_b)
-    if not seq_a or not seq_b:
-        print(f"WARNING: no sequence on file for ({uniprot_a}, {uniprot_b}) -- "
-              f"cannot even mock a structure, skipping", flush=True)
-        return None
-    return utils_struct.mock_predict_complex(seq_a, seq_b, scratch_dir, f"{uniprot_a}_{uniprot_b}")
-
-
 def fetch_relevant_instances(conn) -> pd.DataFrame:
     """Every (ddi_id, instance_id_a, instance_id_b) triple used by the
     structural methods in any split, deduplicated, with pfam/uniprot/
@@ -237,8 +205,7 @@ def fetch_relevant_instances(conn) -> pd.DataFrame:
 
     The method filter happens in SQL (idx_ddi_split_membership_method_split
     covers it) so rows for methods that never reach structural scoring are
-    never pulled across into pandas at all -- this is what took the run from
-    ~1M to ~250k candidate rows."""
+    never pulled across into pandas at all."""
     placeholders = ",".join("?" for _ in STRUCTURAL_METHODS)
     df = pd.read_sql_query(
         "SELECT DISTINCT ddi_id, instance_id_a, instance_id_b FROM ddi_split_membership "
@@ -270,8 +237,7 @@ def fetch_protein_sequences(conn) -> dict:
 class BatchedInserter:
     """Buffers is_mock updates and flushes them with executemany() + a single
     commit per batch, instead of one UPDATE (and one commit per protein pair)
-    per row. With ~90% of rows being mock (no PDB work at all), per-row
-    round-trips to sqlite were themselves a meaningful share of the runtime."""
+    per row."""
 
     def __init__(self, conn: sqlite3.Connection, batch_size: int = INSERT_BATCH_SIZE):
         self.conn = conn
@@ -301,10 +267,6 @@ def main():
 
     shutil.copy(args.db_in, args.db_out)
     conn = sqlite3.connect(args.db_out)
-    # WAL + NORMAL synchronous: safe for a single-writer batch job like this
-    # one (db_out is a fresh copy, nothing else touches it concurrently) and
-    # noticeably faster than the default rollback-journal/FULL combo across
-    # many small writes.
     conn.execute("PRAGMA journal_mode = WAL")
     conn.execute("PRAGMA synchronous = NORMAL")
     conn.execute(f"CREATE INDEX IF NOT EXISTS {TMP_INDEX} "
@@ -370,8 +332,7 @@ def main():
             for (group_key, dset_key), pdb_gz in res["slices"].items():
                 grp = h5file.require_group(group_key)
                 if dset_key not in grp:
-                    # pdb_gz is already gzip-compressed (see
-                    # utils_struct.ddi_pair_to_bytes) -- no h5 compression
+                    # pdb_gz is already gzip-compressed -- no h5 compression
                     # filter here, or we'd be gzipping gzip for no benefit.
                     grp.create_dataset(dset_key, data=np.frombuffer(pdb_gz, dtype="uint8"),
                                        compression=None)

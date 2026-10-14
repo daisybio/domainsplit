@@ -1,4 +1,3 @@
-// modules/local/structural/merge_score_shards/main.nf
 process MERGE_SCORE_SHARDS {
     tag "$method"
     label 'process_low'
@@ -8,10 +7,6 @@ process MERGE_SCORE_SHARDS {
 
     output:
     tuple val(method), path("${method}.scores.tsv"), path("${method}.confirmed.tsv"), emit: merged
-
-    // Plain concatenation is correct here: SCORE_DDI shards by ddi_id (see
-    // score_ddi.py), so ddi_ids never repeat across shards -- no shard's
-    // confirmed.tsv needs re-aggregating against another shard's rows.
 
     script:
     """
