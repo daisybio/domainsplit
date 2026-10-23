@@ -50,6 +50,12 @@ CONFLICT_COLUMNS = ["pfam_a", "pfam_b", "source", "negative", "action"]
 
 ACTION_DROPPED = "dropped_label_conflict"
 ACTION_DELETED = "deleted_existing_label_conflict"
+#: An external contribution whose label contradicts the protected row that owns
+#: the pair. The protected row stands -- it is still dropped like any other
+#: contribution to a protected pair -- but unlike an agreeing one it is reported:
+#: e.g. a PPIDM Gold positive on a pair ppi-splitting sampled as a negative is
+#: label noise in a training split, and should be countable.
+ACTION_PROTECTED = "dropped_protected_label_conflict"
 
 
 def pfam_sort_key(pfam):
@@ -58,10 +64,12 @@ def pfam_sort_key(pfam):
     Used to canonicalise DDI pairs so the stored column order depends only on the
     Pfam accessions, never on the internal ``domain.id`` insertion order.  Strips
     everything but digits; accessions without any digit fall back to a lexical key
-    that sorts deterministically after all numbered ones.
+    that sorts deterministically after all numbered ones.  The accession itself
+    breaks a tie on the number (``PB00001`` vs ``PF00001``), which otherwise left
+    the order to the input and stored one unordered pair under two orientations.
     """
     digits = "".join(c for c in pfam if c.isdigit())
-    return (0, int(digits)) if digits else (1, pfam)
+    return (0, int(digits), pfam) if digits else (1, 0, pfam)
 
 
 def canonical_pair(pfam_a, pfam_b):
@@ -187,6 +195,7 @@ def merge_external_ddis(conn, rows):
         "inserted": 0,
         "merged": 0,
         "dropped_protected": 0,
+        "protected_label_conflicts": 0,
         "conflict_pairs": 0,
         "sources_dropped": 0,
     }
@@ -200,10 +209,18 @@ def merge_external_ddis(conn, rows):
             continue
         prior = existing.get(pair)
 
-        # A protected source owns the pair; every incoming row is dropped without
-        # a report line -- this is the ordinary, expected case, not an anomaly.
+        # A protected source owns the pair and every incoming row is dropped. When
+        # the labels agree that is the ordinary, expected case and leaves no report
+        # line; a contradicting label is reported (ACTION_PROTECTED), because the
+        # protected row it contradicts may sit in a training split.
         if prior is not None and is_protected(prior[2]):
             stats["dropped_protected"] += 1
+            contradicting = [label for label in sorted(by_label) if label != prior[1]]
+            if contradicting:
+                stats["protected_label_conflicts"] += 1
+            for label in contradicting:
+                for source in dedup_sources(by_label[label]):
+                    conflicts.append((pfam_a, pfam_b, source, label, ACTION_PROTECTED))
             continue
 
         labels = sorted(by_label)
