@@ -46,7 +46,7 @@ PROTEINS = [
 ]
 
 
-def build(tmp, links_rows, proteins=PROTEINS):
+def build(tmp, links_rows, proteins=PROTEINS, extra_map=()):
     db = os.path.join(tmp, "in.sqlite3")
     make_db(db)
     conn = sqlite3.connect(db)
@@ -61,6 +61,9 @@ def build(tmp, links_rows, proteins=PROTEINS):
     with gzip.open(mapping, "wt") as fh:
         for acc, _taxon, sid in proteins:
             fh.write(f"{acc}\tSTRING\t{sid}\n")
+        # Mapping rows for accessions that are *not* in the database.
+        for acc, sid in extra_map:
+            fh.write(f"{acc}\tSTRING\t{sid}\n")
 
     links = os.path.join(tmp, "links.txt.gz")
     with gzip.open(links, "wt") as fh:
@@ -70,8 +73,8 @@ def build(tmp, links_rows, proteins=PROTEINS):
     return db, mapping, links
 
 
-def run(tmp, links_rows, proteins=PROTEINS, check=True, min_score=None):
-    db, mapping, links = build(tmp, links_rows, proteins)
+def run(tmp, links_rows, proteins=PROTEINS, check=True, min_score=None, extra_map=()):
+    db, mapping, links = build(tmp, links_rows, proteins, extra_map)
     proc = subprocess.run(
         [sys.executable, INSERT_PPI, "--db-in", db, "--string-ppi", links,
          "--uniprot-id-mapping", mapping,
@@ -247,6 +250,28 @@ def test_min_score_filters_low_confidence_edges():
         assert "1 below --min-score" in proc.stdout, proc.stdout
 
 
+def test_shared_string_id_resolves_to_the_protein_in_the_database():
+    """A STRING id two UniProt entries cross-reference maps to the one in the DB.
+
+    The later mapping row (P99999, not in the database) used to win, and the
+    edge was counted not_in_db although FETCH_STRING_LINKS had kept it.
+    """
+    rows = [("9606.ENSP00000000001", "9606.ENSP00000000002", "900")]
+    with tempfile.TemporaryDirectory() as tmp:
+        run(tmp, rows, extra_map=[("P99999", "9606.ENSP00000000001")])
+        assert edges(tmp) == {("P11111", "P22222", 900.0)}
+
+
+def test_min_score_dropping_everything_names_the_cutoff():
+    """The fatal "nothing inserted" error must blame the cutoff, not the species."""
+    rows = [("9606.ENSP00000000001", "9606.ENSP00000000002", "300")]
+    with tempfile.TemporaryDirectory() as tmp:
+        proc = run(tmp, rows, check=False, min_score=400)
+    assert proc.returncode != 0
+    assert "--string_min_score" in proc.stderr, proc.stderr
+    assert "different species" not in proc.stderr, proc.stderr
+
+
 if __name__ == "__main__":
     test_multi_species_links_insert_without_taxon_bookkeeping()
     test_per_taxon_counters_localise_a_broken_join()
@@ -257,4 +282,6 @@ if __name__ == "__main__":
     test_symmetric_links_file_yields_one_row_per_edge()
     test_pairs_are_ordered_by_uniprot_accession()
     test_min_score_filters_low_confidence_edges()
+    test_shared_string_id_resolves_to_the_protein_in_the_database()
+    test_min_score_dropping_everything_names_the_cutoff()
     print("ok")

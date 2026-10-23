@@ -51,13 +51,29 @@ INSERT_SQL = (
 )
 
 
-def load_uniprot_id_mapping(mapping_path: str, key_name: str) -> Dict[str, str]:
+def load_uniprot_id_mapping(mapping_path: str, key_name: str, prefer=None) -> Dict[str, str]:
+    """``{symbol: uniprot}`` for the ``key_name`` rows.
+
+    UniProt can cross-reference one STRING id from two entries. Last-writer-wins
+    then resolved the id to whichever came later -- and when that was an entry
+    with no domain instance (so not in ``protein``), every edge of the id was
+    counted ``not_in_db`` here, although FETCH_STRING_LINKS, which resolves ids
+    only among proteins in the database, had kept them. An accession in
+    ``prefer`` (the database's proteins) therefore wins over one that is not.
+    Ids no database protein claims still map, so ``not_in_db`` and ``unmapped``
+    keep their meaning in the report.
+    """
     mapping: Dict[str, str] = {}
     with gzip.open(mapping_path, "rt") as f:
         for line in f:
             uniprot_id, id_type, symbol_name = line.strip().split("\t")
-            if id_type.strip() == key_name:
-                mapping[symbol_name.strip()] = uniprot_id.strip()
+            if id_type.strip() != key_name:
+                continue
+            symbol, uniprot_id = symbol_name.strip(), uniprot_id.strip()
+            held = mapping.get(symbol)
+            if held is not None and prefer is not None and held in prefer and uniprot_id not in prefer:
+                continue
+            mapping[symbol] = uniprot_id
     return mapping
 
 
@@ -231,7 +247,7 @@ def main() -> int:
     uniprot_to_pid = dict(conn.execute("SELECT uniprot_id, id FROM protein").fetchall())
     print(f"Loaded {len(uniprot_to_pid)} protein ID mappings", flush=True)
 
-    string_id_mapping = load_uniprot_id_mapping(args.uniprot_id_mapping, "STRING")
+    string_id_mapping = load_uniprot_id_mapping(args.uniprot_id_mapping, "STRING", prefer=uniprot_to_pid)
     print(f"Loaded {len(string_id_mapping)} STRING -> UniProt mappings", flush=True)
 
     totals, per_taxon = stream_edges(
@@ -242,6 +258,13 @@ def main() -> int:
 
     report(totals, per_taxon)
 
+    if totals["read"] and not totals["inserted"] and totals["below_score"]:
+        raise SystemExit(
+            f"ERROR: none of {totals['read']} STRING edges could be inserted; "
+            f"{totals['below_score']} resolved to proteins in the database but scored below "
+            f"--min-score {args.min_score} ({totals['unmapped']} unmapped, "
+            f"{totals['not_in_db']} absent from the database). Lower --string_min_score."
+        )
     if totals["read"] and not totals["inserted"]:
         raise SystemExit(
             f"ERROR: none of {totals['read']} STRING edges could be inserted "

@@ -47,7 +47,9 @@
 
     The nf-core boilerplate flags (--help, --version, --monochrome_logs, ...) are
     deliberately absent: they are used as bare flags, and `help` is a
-    string-or-boolean union that a type here would break.
+    string-or-boolean union that a type here would break. `validate_params` is
+    the exception: it is an off-switch, used as `--validate_params false`, and
+    untyped that String is truthy, so validation stayed on.
 ----------------------------------------------------------------------------------------
 */
 params {
@@ -63,12 +65,14 @@ params {
     embedding_batch_size_esmc: Integer
     embedding_batch_size_prott5: Integer
     hippie_min_score: Float
+    string_min_score: Float
     split_train_fraction: Float
     split_val_fraction: Float
     split_test_fraction: Float
     ddi_mode: Boolean
     embedding_require_gpu: Boolean
     ppi_splitting_multi_negset: Boolean
+    validate_params: Boolean
 
     // ---- imported from ppi-splitting via
     //      `includeConfig 'subworkflows/external/ppi-splitting/conf/params.config'`.
