@@ -12,6 +12,16 @@ ids carry their own taxon prefix (``9606.ENSP…``) and are globally unique, so 
 multi-species mapping and a multi-species links file join correctly with no
 taxon bookkeeping at all.
 
+**One row per edge.** STRING's per-organism links files list every pair in both
+orientations, and ``protein_protein_interaction`` is ``UNIQUE(protein_id_a,
+protein_id_b)`` with no ordering constraint -- so binding the file's order stored
+each edge twice and doubled every degree computed downstream (measured on the
+2026-09 run: 16,010,848 rows over 8,005,424 unordered pairs). Pairs are therefore
+canonicalised **by UniProt accession, ascending**, which also gives consumers an
+exact lookup: sort the two accessions, resolve their ids, read
+``(protein_id_a, protein_id_b)``. A query that enumerates one protein's
+neighbourhood still needs ``protein_id_a = ? OR protein_id_b = ?``.
+
 **Streamed, not loaded.** The links file used to be one ``pd.read_csv`` -- fine
 for the 9606 file, impossible for FETCH_STRING_LINKS' concatenation of every
 taxon in the run. This reads it line by line and inserts in batches, so peak
@@ -61,11 +71,14 @@ def taxon_of(string_id: str) -> str:
     return string_id.split(".", 1)[0] if "." in string_id else "unknown"
 
 
-def stream_edges(path, string_id_mapping, uniprot_to_pid, conn):
+def stream_edges(path, string_id_mapping, uniprot_to_pid, conn, min_score=0.0):
     """Insert every edge whose two endpoints resolve to a protein in the database.
 
+    Pairs are stored canonicalised by UniProt accession (ascending), so each edge
+    occupies exactly one row however many orientations the links file lists it in.
+
     Returns ``(totals, per_taxon)``; ``per_taxon`` maps a STRING taxid to its own
-    ``read``/``inserted``/``unmapped``/``not_in_db`` counter.
+    ``read``/``inserted``/``unmapped``/``not_in_db``/``below_score`` counter.
     """
     totals = Counter()
     per_taxon = defaultdict(Counter)
@@ -118,7 +131,25 @@ def stream_edges(path, string_id_mapping, uniprot_to_pid, conn):
                 taxon["not_in_db"] += 1
                 continue
 
-            batch.append((pid_a, pid_b, score))
+            if score < min_score:
+                totals["below_score"] += 1
+                taxon["below_score"] += 1
+                continue
+
+            # Canonicalised by UniProt accession, ascending: protein_id_a is the
+            # endpoint whose accession sorts first. STRING's per-organism links
+            # files list every edge in BOTH orientations, and the table is
+            # UNIQUE(protein_id_a, protein_id_b) with no ordering constraint, so
+            # binding the file's order stored each edge twice -- measured on the
+            # 2026-09 run: 16,010,848 rows over 8,005,424 unordered pairs, exactly
+            # 2.00x, which doubles every degree a consumer computes.
+            #
+            # On the accession rather than on protein.id: a consumer holding two
+            # accessions sorts them, resolves both ids and looks the edge up as
+            # (protein_id_a, protein_id_b) directly. The surrogate id would force
+            # `= ? OR = ?` on every reader and is not stable across runs.
+            lo_acc, hi_acc = (uniprot_a, uniprot_b) if uniprot_a <= uniprot_b else (uniprot_b, uniprot_a)
+            batch.append((uniprot_to_pid[lo_acc], uniprot_to_pid[hi_acc], score))
             totals["inserted"] += 1
             taxon["inserted"] += 1
             if len(batch) >= BATCH:
@@ -149,7 +180,9 @@ def report(totals, per_taxon):
     print(
         f"STRING edges: {totals['read']} read, {totals['inserted']} inserted, "
         f"{totals['unmapped']} with an unmapped STRING id, {totals['not_in_db']} whose "
-        "proteins are not in this database",
+        f"proteins are not in this database, {totals['below_score']} below --min-score. "
+        "`inserted` counts rows offered, and a links file lists each edge in both "
+        "orientations, so the stored row count is about half of it.",
         flush=True,
     )
     rows = sorted(per_taxon.items(), key=lambda kv: (-kv[1]["inserted"], kv[0]))
@@ -176,6 +209,13 @@ def main() -> int:
     parser.add_argument("--db-in", required=True)
     parser.add_argument("--string-ppi", required=True)
     parser.add_argument("--uniprot-id-mapping", required=True)
+    parser.add_argument(
+        "--min-score", type=float, default=0.0,
+        help="Drop edges whose STRING combined_score is below this. Default 0.0 keeps every "
+             "edge, which is the historical behaviour: the file already starts at STRING's "
+             "own floor of 150, so the network includes text-mining, co-expression and "
+             "predicted channels. STRING's published cutoffs are 400 (medium) and 700 (high).",
+    )
     parser.add_argument("--versions", required=True)
     parser.add_argument("--process-name", required=True)
     args = parser.parse_args()
@@ -194,7 +234,9 @@ def main() -> int:
     string_id_mapping = load_uniprot_id_mapping(args.uniprot_id_mapping, "STRING")
     print(f"Loaded {len(string_id_mapping)} STRING -> UniProt mappings", flush=True)
 
-    totals, per_taxon = stream_edges(args.string_ppi, string_id_mapping, uniprot_to_pid, conn)
+    totals, per_taxon = stream_edges(
+        args.string_ppi, string_id_mapping, uniprot_to_pid, conn, min_score=args.min_score
+    )
     conn.commit()
     conn.close()
 

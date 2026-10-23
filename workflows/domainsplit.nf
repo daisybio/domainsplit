@@ -96,11 +96,17 @@ def activeNegsets(row) {
     return multi ? row.negsets.keySet() as List : [row.negsets.keySet().first()]
 }
 
-// ppi-splitting labels its splits train/val/test_balanced/test_realistic and
-// the ingest scripts rename val -> validation. A row with no internal test set
-// contributes train/validation here and gets its `test` from BUILD_EXTERNAL_TEST.
+// ppi-splitting labels its splits train/val/test_balanced/test_realistic; the
+// ingest scripts rename them at that boundary (bin/split_io.py's SPLIT_RENAME:
+// val -> validation, test_balanced -> test_matched_1_1, test_realistic ->
+// test_uniform_1_10 -- the last two because the two test sets come from
+// *different samplers*, not from one sampler at two ratios; see the comment on
+// SPLIT_RENAME and DATASET_AUDIT.md F1). These are the published names, so they
+// must be the renamed ones: SUBSET_SPLIT_DB selects `ddi_split_membership` rows
+// by them. A row with no internal test set contributes train/validation here and
+// gets its `test` from BUILD_EXTERNAL_TEST.
 def splitsOf(row) {
-    return row.internal_test ? ['train', 'validation', 'test_balanced', 'test_realistic'] : ['train', 'validation']
+    return row.internal_test ? ['train', 'validation', 'test_matched_1_1', 'test_uniform_1_10'] : ['train', 'validation']
 }
 
 // Every per-dataset override ppi-splitting reads out of `meta`. Mirrors

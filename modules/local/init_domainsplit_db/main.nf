@@ -65,6 +65,19 @@ process INIT_DOMAINSPLIT_DB {
         -- raised instead of filtering. INSERT_PPI parses the score now; the
         -- affinity is the second guard, so a writer binding '400' is coerced to
         -- 400.0 and no reader has to guess.
+        --
+        -- Pair order is an invariant, not an accident: `protein_id_a` is the
+        -- endpoint whose *UniProt accession* sorts first (INSERT_PPI enforces it).
+        -- Without it, STRING's per-organism links files -- which list every edge
+        -- in both orientations -- satisfy the UNIQUE below twice and every edge is
+        -- stored as two rows, doubling every degree computed downstream. That is
+        -- what the 2026-09 run did: 16,010,848 rows over 8,005,424 unordered
+        -- pairs. SQLite cannot express the rule as a CHECK (it spans `protein`),
+        -- so tests/python/test_insert_ppi.py is the enforcement.
+        --
+        -- Consumers: sort your two accessions, resolve their ids, look up
+        -- (protein_id_a, protein_id_b). Enumerating one protein's neighbourhood
+        -- still needs `protein_id_a = ? OR protein_id_b = ?`.
         CREATE TABLE protein_protein_interaction (
             protein_id_a REFERENCES protein ON DELETE CASCADE,
             protein_id_b REFERENCES protein ON DELETE CASCADE,

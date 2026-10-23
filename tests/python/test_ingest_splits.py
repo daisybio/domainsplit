@@ -9,7 +9,10 @@ Covers the three properties the ingest boundary has to hold:
   * running before INSERT_EXTERNAL_SOURCES is not a suggestion -- if an external
     source already holds a sampled-negative pair, the insertion order that makes
     the external test set unseen has been broken, and the script must say so
-    rather than carry on.
+    rather than carry on;
+  * a sampled negative that 3did already holds as a POSITIVE is dropped rather
+    than republished as a positive of the split that drew it as a negative
+    (DATASET_AUDIT.md F3 -- 177 such rows in the 2026-09 run).
 
 Run directly (`python3 tests/python/test_ingest_splits.py`) or via pytest.
 """
@@ -80,6 +83,8 @@ def run(script, db, specs, extra=(), check=True):
     args = [sys.executable, script, "--db", db]
     for spec in specs:
         args += ["--split", spec]
+    if script == NEGATIVES and not any(a == "--collisions-out" for a in extra):
+        args += ["--collisions-out", db + ".collisions.tsv"]
     args += list(extra)
     args += ["--versions", db + ".versions.yml", "--process-name", "TEST"]
     return subprocess.run(args, check=check, env=ENV, capture_output=True, text=True)
@@ -163,7 +168,55 @@ def test_external_source_before_negatives_is_fatal():
         assert "already held by an external source" in proc.stderr, proc.stderr
 
 
+def test_negative_colliding_with_3did_positive_is_dropped():
+    """A label=0 row on a pair 3did holds as a positive must not be published.
+
+    Reproduces the measured case exactly: PF08716-PF08716 was sampled as a
+    negative of minimal_leakage/test_balanced while 3did holds it as a positive
+    self-DDI the ILP had discarded from the split's positives. Before the fix the
+    membership row was recorded and the pair appeared in the published split
+    database as a POSITIVE; now it is dropped and reported, and the 3did positive
+    itself is untouched.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        db = os.path.join(tmp, "domainsplit.sqlite3")
+        make_db(db)
+        conn = sqlite3.connect(db)
+        conn.execute("PRAGMA foreign_keys=ON")
+        ensure_domains(conn, {"PF08716"})
+        insert_ddis(conn, [("PF08716", "PF08716")], negative=False, source="3did")
+        inst_a = add_instance(conn, "PF08716", "P00001", 10, 60)
+        inst_b = add_instance(conn, "PF08716", "P00002", 15, 70)
+        conn.commit()
+        conn.close()
+
+        fam = os.path.join(tmp, "test_balanced.csv")
+        write_family_csv(fam, [("PF08716", "PF08716", 0)])
+        collisions = os.path.join(tmp, "collisions.tsv")
+        proc = run(NEGATIVES, db, [f"minimal_leakage:test_balanced:{fam}"],
+                   extra=["--collisions-out", collisions])
+        assert proc.returncode == 0, proc.stderr
+        with open(collisions) as fh:
+            assert "PF08716\tPF08716\t3did" in fh.read(), "collision not reported"
+
+        inst = os.path.join(tmp, "test_balanced_instances.csv")
+        write_instance_csv(inst, [(inst_a, inst_b, 0, "PF08716", "PF08716")])
+        unresolved = os.path.join(tmp, "unresolved.tsv")
+        run(MEMBERSHIP, db, [f"minimal_leakage:test_balanced:{inst}"],
+            extra=["--unresolved-out", unresolved])
+
+        conn = sqlite3.connect(db)
+        # dropped, not recorded
+        assert conn.execute("SELECT COUNT(*) FROM ddi_split_membership").fetchone()[0] == 0
+        # the 3did positive survives untouched -- the sampler erred, not 3did
+        assert ddi_rows(conn) == {("PF08716", "PF08716"): (0, "3did")}
+        conn.close()
+        with open(unresolved) as fh:
+            assert "label_mismatch" in fh.read()
+
+
 if __name__ == "__main__":
     test_sampled_negatives_dedup_and_rename()
     test_external_source_before_negatives_is_fatal()
-    print("OK: sampled negatives dedup, val->validation rename, insertion order enforced")
+    test_negative_colliding_with_3did_positive_is_dropped()
+    print("OK: dedup, val->validation rename, insertion order, 3did-collision drop")

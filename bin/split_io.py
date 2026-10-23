@@ -27,7 +27,22 @@ keeps ``val`` internally.
 import csv
 
 #: ppi-splitting's split label -> the name domainsplit publishes it under.
-SPLIT_RENAME = {"val": "validation"}
+#:
+#: ``test_balanced`` and ``test_realistic`` are renamed because those names claim
+#: something untrue: they read as one test set at two class ratios, and ROC-AUC
+#: would then have to agree between them for a fixed predictor. They are not.
+#: Upstream samples them with **different samplers** -- ``test_balanced`` per
+#: negative set through the bias-matched ILP, ``test_realistic`` once through the
+#: uniform sampler at 1:10 (its ``subworkflows/sample_negatives.nf`` lines 58-76,
+#: 86) -- so their negative distributions differ, not just their ratios. Measured
+#: on the 2026-09 run: 8,616 of 8,625 balanced negatives are absent from the
+#: realistic pool. The names now say which sampler produced which set, so nobody
+#: reads a cross-ratio AUC difference as a modelling result. DATASET_AUDIT.md F1.
+SPLIT_RENAME = {
+    "val": "validation",
+    "test_balanced": "test_matched_1_1",
+    "test_realistic": "test_uniform_1_10",
+}
 
 FAMILY_COLUMNS = ["protein1", "protein2", "label"]
 INSTANCE_COLUMNS = ["protein1", "protein2", "label", "family1", "family2"]

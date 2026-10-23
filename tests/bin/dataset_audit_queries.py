@@ -15,7 +15,7 @@ What each section decides, keyed to DATASET_AUDIT.md:
 
   F3  exact count of split rows whose CSV label contradicts the published
       ``domain_domain_interaction.negative`` -- the mislabel this audit predicts
-  F1  is ``test_balanced``'s negative set a subset of ``test_realistic``'s, and
+  F1  is the 1:1 test set's negative set a subset of the 1:10 one's, and
       are the positives identical
   F2  are the ``_hcni`` and non-``_hcni`` test sets identical, per ratio
   F4  external_test label composition by source; contamination count (expect 0);
@@ -37,7 +37,20 @@ from collections import Counter, defaultdict
 
 MASTER = "domainsplit.sqlite3"
 INTERNAL = ["random", "minimal_leakage", "minimal_leakage_hcni"]
-RATIOS = ["test_balanced", "test_realistic"]
+# (matched-1:1, uniform-1:10) under both naming schemes: runs before the
+# SPLIT_RENAME change publish test_balanced/test_realistic, later ones publish
+# test_matched_1_1/test_uniform_1_10. resolve_ratios() picks whichever exists so
+# one script audits both.
+RATIO_NAMES = [("test_matched_1_1", "test_uniform_1_10"), ("test_balanced", "test_realistic")]
+
+
+def resolve_ratios(results, method):
+    """(balanced_path, realistic_path) for `method`, or None if neither scheme is there."""
+    for bal, real in RATIO_NAMES:
+        paths = [os.path.join(results, "databases", method, f"{s}.sqlite3") for s in (bal, real)]
+        if all(os.path.exists(p) for p in paths):
+            return paths
+    return None
 
 
 def ro(path):
@@ -183,11 +196,11 @@ def pair_sets(db_path):
 
 
 def check_f1(rep, results):
-    rep.head("F1 -- is test_balanced a subset of test_realistic, and are positives equal")
+    rep.head("F1 -- is the 1:1 test set a subset of the 1:10 one, and are positives equal")
     rep.line("  method | bal_neg | real_neg | bal_neg_not_in_real | bal_pos | real_pos | pos_equal")
     for method in INTERNAL:
-        paths = [os.path.join(results, "databases", method, f"{s}.sqlite3") for s in RATIOS]
-        if not all(os.path.exists(p) for p in paths):
+        paths = resolve_ratios(results, method)
+        if paths is None:
             rep.line(f"  {method}: missing split DB(s) -- skipped")
             continue
         (bp, bn), (rp, rn) = pair_sets(paths[0]), pair_sets(paths[1])
@@ -198,16 +211,16 @@ def check_f1(rep, results):
 
 def check_f2(rep, results):
     rep.head("F2 -- are the _hcni and non-_hcni test sets identical")
-    for split in RATIOS:
-        a = os.path.join(results, "databases", "minimal_leakage", f"{split}.sqlite3")
-        b = os.path.join(results, "databases", "minimal_leakage_hcni", f"{split}.sqlite3")
-        if not (os.path.exists(a) and os.path.exists(b)):
-            rep.line(f"  {split}: missing DB -- skipped")
-            continue
+    plain = resolve_ratios(results, "minimal_leakage")
+    hcni = resolve_ratios(results, "minimal_leakage_hcni")
+    if plain is None or hcni is None:
+        rep.line("  missing DB(s) -- skipped")
+        return
+    for split, a, b in zip(("balanced 1:1", "uniform 1:10"), plain, hcni):
         (ap, an), (bp, bn) = pair_sets(a), pair_sets(b)
         rep.line(f"  {split}: positives identical = {ap == bp}; negatives identical = {an == bn}; "
                  f"negatives differing = {len(an ^ bn)}")
-    rep.line("  Expected today: test_realistic identical, test_balanced differing (the F2 bug).")
+    rep.line("  Expected before the F2 fix: the 1:10 set identical, the 1:1 set differing.")
 
 
 # --------------------------------------------------------------------------- F4
@@ -265,9 +278,10 @@ def check_f4(rep, master):
 def check_f5(rep, results):
     rep.head("F5 -- true prevalence of the test domain universe")
     for method in INTERNAL:
-        path = os.path.join(results, "databases", method, "test_realistic.sqlite3")
-        if not os.path.exists(path):
+        paths = resolve_ratios(results, method)
+        if paths is None:
             continue
+        path = paths[1]
         con = ro(path)
         domains = con.execute("SELECT COUNT(*) FROM domain").fetchone()[0]
         pos = con.execute(
@@ -305,8 +319,11 @@ def check_f7(rep, results):
     rep.head("F7 -- protein node / PPI edge overlap between splits")
     for method in INTERNAL:
         d = os.path.join(results, "databases", method)
-        tr, te = os.path.join(d, "train.sqlite3"), os.path.join(d, "test_balanced.sqlite3")
-        if not (os.path.exists(tr) and os.path.exists(te)):
+        paths = resolve_ratios(results, method)
+        if paths is None:
+            continue
+        tr, te = os.path.join(d, "train.sqlite3"), paths[0]
+        if not os.path.exists(tr):
             continue
         con = ro(tr)
         attach_ro(con, te, "te")

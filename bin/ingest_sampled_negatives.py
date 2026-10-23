@@ -7,22 +7,46 @@ split, of any negative set, becomes one row with ``negative=1`` and
 or negative sets produced it; which split it belongs to is recorded separately by
 INGEST_SPLIT_MEMBERSHIP.
 
-``sampled_negative`` is a *protected* source (see ``ddi_db_utils``): it cannot
-collide with ``3did`` by construction -- ppi-splitting samples negatives from
-pairs that are not positives -- and it owns its pairs against every external
-source.  That only holds if this step runs **before** INSERT_EXTERNAL_SOURCES, so
-the script counts pairs it had to skip because an external row already held them
-and fails if there are any: a non-zero count means the insertion order
-``3did -> sampled_negative -> external`` was broken, and the external test set
-would no longer be strictly unseen.
+``sampled_negative`` is a *protected* source (see ``ddi_db_utils``): it owns its
+pairs against every external source.  That only holds if this step runs **before**
+INSERT_EXTERNAL_SOURCES, so the script counts pairs it had to skip because an
+external row already held them and fails if there are any: a non-zero count means
+the insertion order ``3did -> sampled_negative -> external`` was broken, and the
+external test set would no longer be strictly unseen.
+
+Collisions with ``3did`` are a different matter and are **not** impossible, which
+this script used to claim.  ppi-splitting's samplers exclude only the *current
+split's* positives (``bin/sample_negatives.py``'s ``_positive_set(rows)``, and
+``sample_negatives_ilp.py``'s ``--positives``), never the global 3did edge set.
+So a pair that is a positive of *another* split -- under ``split_method=random``,
+where families are not split-exclusive -- or one the ILP / CD-HIT discarded from
+the positives altogether, can be drawn as a negative.  ``INSERT OR IGNORE`` then
+leaves the 3did row (``negative=0``) in place, and because the published split
+databases carry no label column of their own -- a pair is positive iff
+``ddi.negative = 0`` -- that pair would be republished as a *positive* of the very
+split that sampled it as a negative.  Measured on the 2026-09 run: 177 instance
+rows over 35 family pairs, including 4 in a test set.
+
+Those pairs are listed here (``--collisions-out``) and their membership rows are
+dropped in INGEST_SPLIT_MEMBERSHIP.  The 3did positive itself is kept: the sampler
+erred, not 3did, and deleting positives would re-balance splits the ILP already
+optimised.  See DATASET_AUDIT.md F3.
 """
 
 import argparse
+import csv
 import sqlite3
 import sys
 from collections import Counter
 
-from ddi_db_utils import canonical_pair, count_source, ensure_domains, insert_ddis, is_protected
+from ddi_db_utils import (
+    canonical_pair,
+    count_source,
+    ensure_domains,
+    insert_ddis,
+    is_protected,
+    split_sources,
+)
 from split_io import parse_split_spec, read_family_csv
 
 SOURCE = "sampled_negative"
@@ -33,6 +57,9 @@ def parse_args():
     p.add_argument("--db", required=True, help="domainsplit SQLite (modified in place)")
     p.add_argument("--split", required=True, action="append", metavar="METHOD:SPLIT:PATH",
                    help="family-level split CSV, repeatable")
+    p.add_argument("--collisions-out", required=True,
+                   help="TSV of sampled-negative pairs a protected POSITIVE source already holds; "
+                        "their membership rows are dropped in INGEST_SPLIT_MEMBERSHIP")
     p.add_argument("--versions", required=True)
     p.add_argument("--process-name", required=True)
     return p.parse_args()
@@ -82,6 +109,12 @@ def main():
 
     prior = existing_owners(conn, pairs)
     protected_prior = {p: s for p, s in prior.items() if is_protected(s)}
+    # The subset of those that a protected *positive* holds. `INSERT OR IGNORE`
+    # below leaves that row untouched, so without the drop in
+    # INGEST_SPLIT_MEMBERSHIP the pair reaches the published split database as a
+    # positive of the split that drew it as a negative -- see this module's
+    # docstring and DATASET_AUDIT.md F3.
+    positive_prior = {p: s for p, s in protected_prior.items() if "3did" in split_sources(s)}
     external_prior = {p: s for p, s in prior.items() if not is_protected(s)}
 
     ensure_domains(conn, {pfam for pair in pairs for pfam in pair})
@@ -90,8 +123,26 @@ def main():
 
     print(f"[negatives] offered = {offered}", flush=True)
     print(f"[negatives] already_held_by_protected = {len(protected_prior)}", flush=True)
+    print(f"[negatives] already_held_by_protected_positive = {len(positive_prior)}", flush=True)
     print(f"[negatives] n_ddis_sampled_negative = {count_source(conn, SOURCE)}", flush=True)
     conn.close()
+
+    # Published, not just printed: the work directory of a successful run does not
+    # survive, so a counter that exists only in .command.log cannot be checked
+    # afterwards -- which is exactly why this collision went unnoticed.
+    with open(args.collisions_out, "w", newline="") as fh:
+        writer = csv.writer(fh, delimiter="\t", lineterminator="\n")
+        writer.writerow(["pfam_a", "pfam_b", "existing_source"])
+        writer.writerows((a, b, s) for (a, b), s in sorted(positive_prior.items()))
+    if positive_prior:
+        print(
+            f"[negatives] WARNING: {len(positive_prior)} sampled-negative pairs are already "
+            f"positive DDIs of a protected source (see {args.collisions_out}). ppi-splitting's "
+            "samplers exclude only their own split's positives, so a pair that is a positive of "
+            "another split -- or one the ILP/CD-HIT discarded -- can be drawn. Their membership "
+            "rows are dropped in INGEST_SPLIT_MEMBERSHIP; the positive rows are kept.",
+            flush=True,
+        )
 
     if external_prior:
         sample = ", ".join(f"{a}/{b} ({s})" for (a, b), s in sorted(external_prior.items())[:10])

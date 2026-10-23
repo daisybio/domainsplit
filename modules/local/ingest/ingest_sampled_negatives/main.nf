@@ -16,8 +16,12 @@ process INGEST_SAMPLED_NEGATIVES {
     path split_csvs, stageAs: '?/*'
 
     output:
-    path "domainsplit.sqlite3", emit: domainsplit_db
-    path "versions.yml",        emit: versions
+    path "domainsplit.sqlite3",                  emit: domainsplit_db
+    // Sampled-negative pairs a protected POSITIVE source already held. Published,
+    // not merely logged: a successful run's work directory is deleted, so a
+    // counter that lives only in .command.log cannot be checked afterwards.
+    path "negative_positive_collisions.tsv",     emit: collisions
+    path "versions.yml",                         emit: versions
 
     script:
     // `.name` on a staged input already carries the `?/*` subdirectory
@@ -37,6 +41,7 @@ process INGEST_SAMPLED_NEGATIVES {
     ingest_sampled_negatives.py \\
         --db domainsplit.sqlite3 \\
         ${split_args} \\
+        --collisions-out negative_positive_collisions.tsv \\
         --versions versions.yml \\
         --process-name "${task.process}"
     """

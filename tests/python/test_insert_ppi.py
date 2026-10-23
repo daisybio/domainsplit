@@ -70,11 +70,12 @@ def build(tmp, links_rows, proteins=PROTEINS):
     return db, mapping, links
 
 
-def run(tmp, links_rows, proteins=PROTEINS, check=True):
+def run(tmp, links_rows, proteins=PROTEINS, check=True, min_score=None):
     db, mapping, links = build(tmp, links_rows, proteins)
     proc = subprocess.run(
         [sys.executable, INSERT_PPI, "--db-in", db, "--string-ppi", links,
          "--uniprot-id-mapping", mapping,
+         *(["--min-score", str(min_score)] if min_score is not None else []),
          "--versions", os.path.join(tmp, "versions.yml"),
          "--process-name", "TEST:INSERT_PPI"],
         cwd=tmp, check=check, env=ENV, capture_output=True, text=True,
@@ -188,6 +189,64 @@ def test_scores_are_stored_as_numbers():
     assert classes == {"real"}, classes
 
 
+def test_symmetric_links_file_yields_one_row_per_edge():
+    """STRING lists every edge in both orientations; the table must hold it once.
+
+    Before pair canonicalisation this stored two rows -- ``UNIQUE(protein_id_a,
+    protein_id_b)`` does not constrain the order, so (A,B) and (B,A) both fit --
+    and every degree computed downstream was doubled. Measured on the 2026-09 run:
+    16,010,848 rows over 8,005,424 unordered pairs, exactly 2.00x
+    (DATASET_AUDIT.md F8).
+    """
+    rows = [
+        ("9606.ENSP00000000001", "9606.ENSP00000000002", "900"),
+        ("9606.ENSP00000000002", "9606.ENSP00000000001", "900"),
+        ("10090.ENSMUSP00000000002", "10090.ENSMUSP00000000001", "800"),
+        ("10090.ENSMUSP00000000001", "10090.ENSMUSP00000000002", "800"),
+    ]
+    with tempfile.TemporaryDirectory() as tmp:
+        run(tmp, rows)
+        conn = sqlite3.connect(os.path.join(tmp, "domainsplit.sqlite3"))
+        n = conn.execute("SELECT COUNT(*) FROM protein_protein_interaction").fetchone()[0]
+        conn.close()
+        assert n == 2, n
+        assert edges(tmp) == {("P11111", "P22222", 900.0), ("Q33333", "Q44444", 800.0)}
+
+
+def test_pairs_are_ordered_by_uniprot_accession():
+    """protein_id_a is the alphabetically-first accession, whatever the file's order.
+
+    Ordering on the accession rather than on the surrogate protein.id is what lets
+    a consumer sort its two accessions, resolve them and look the edge up as
+    (protein_id_a, protein_id_b) directly.
+    """
+    rows = [
+        # both written high-accession-first
+        ("9606.ENSP00000000002", "9606.ENSP00000000001", "900"),
+        ("10090.ENSMUSP00000000002", "10090.ENSMUSP00000000001", "800"),
+    ]
+    with tempfile.TemporaryDirectory() as tmp:
+        run(tmp, rows)
+        got = {(a, b) for a, b, _ in edges(tmp)}
+    assert got == {("P11111", "P22222"), ("Q33333", "Q44444")}, got
+    assert all(a < b for a, b in got), got
+
+
+def test_min_score_filters_low_confidence_edges():
+    """Opt-in only: the default keeps every edge, so no existing run changes."""
+    rows = [
+        ("9606.ENSP00000000001", "9606.ENSP00000000002", "900"),
+        ("10090.ENSMUSP00000000001", "10090.ENSMUSP00000000002", "150"),
+    ]
+    with tempfile.TemporaryDirectory() as tmp:
+        run(tmp, rows)
+        assert len(edges(tmp)) == 2
+    with tempfile.TemporaryDirectory() as tmp:
+        proc = run(tmp, rows, min_score=400)
+        assert {(a, b) for a, b, _ in edges(tmp)} == {("P11111", "P22222")}
+        assert "1 below --min-score" in proc.stdout, proc.stdout
+
+
 if __name__ == "__main__":
     test_multi_species_links_insert_without_taxon_bookkeeping()
     test_per_taxon_counters_localise_a_broken_join()
@@ -195,4 +254,7 @@ if __name__ == "__main__":
     test_a_non_numeric_score_is_fatal()
     test_scores_are_stored_as_numbers()
     test_duplicate_edges_do_not_abort_the_insert()
+    test_symmetric_links_file_yields_one_row_per_edge()
+    test_pairs_are_ordered_by_uniprot_accession()
+    test_min_score_filters_low_confidence_edges()
     print("ok")

@@ -13,6 +13,14 @@ already has a row in ``domain_domain_interaction`` by the time this runs, so a
 row that fails to resolve is a wiring error, not data.  Unresolved rows are
 counted and written to a report rather than dropped silently.
 
+``ddi.negative`` **is** the published label -- a split database carries no label
+column, so a pair is positive there iff ``ddi.negative = 0``.  A CSV row whose
+label contradicts it would therefore be published as the opposite class, which is
+reachable whenever ppi-splitting's samplers draw a pair that 3did already holds as
+a positive (they exclude only the current split's positives; see
+``ingest_sampled_negatives.py``).  Such rows are dropped with
+``reason=label_mismatch`` rather than recorded.  DATASET_AUDIT.md F3.
+
 The ``val`` -> ``validation`` rename happens here (see ``split_io``).
 """
 
@@ -40,11 +48,15 @@ def parse_args():
 
 
 def ddi_ids_by_pair(conn):
-    """``{(pfam_a, pfam_b): ddi_id}`` keyed by canonicalised pair."""
+    """``{(pfam_a, pfam_b): (ddi_id, negative)}`` keyed by canonicalised pair.
+
+    ``negative`` rides along because it is the label this row will be published
+    under, and it has to be checked against the CSV's own label.
+    """
     return {
-        canonical_pair(a, b): ddi_id
-        for ddi_id, a, b in conn.execute(
-            "SELECT ddi.id, da.pfam_id, db.pfam_id "
+        canonical_pair(a, b): (ddi_id, negative)
+        for ddi_id, a, b, negative in conn.execute(
+            "SELECT ddi.id, da.pfam_id, db.pfam_id, ddi.negative "
             "FROM domain_domain_interaction AS ddi "
             "JOIN domain AS da ON da.id = ddi.domain_id_a "
             "JOIN domain AS db ON db.id = ddi.domain_id_b"
@@ -70,10 +82,20 @@ def collect(specs, ddi_id_of, instances):
         n = 0
         for inst_a, inst_b, label, fam_a, fam_b in read_instance_csv(path):
             stats["rows"] += 1
-            ddi_id = ddi_id_of.get(canonical_pair(fam_a, fam_b))
-            if ddi_id is None:
+            found = ddi_id_of.get(canonical_pair(fam_a, fam_b))
+            if found is None:
                 unresolved.append((method, split, fam_a, fam_b, inst_a, inst_b, label, "no_ddi_row"))
                 stats["no_ddi_row"] += 1
+                continue
+            ddi_id, negative = found
+            # `continue` IS the drop: the row never reaches ddi_split_membership,
+            # so the split loses that pair instead of publishing it as the class
+            # opposite to the one it was sampled as.
+            if int(negative) != (1 - int(label)):
+                unresolved.append(
+                    (method, split, fam_a, fam_b, inst_a, inst_b, label, "label_mismatch")
+                )
+                stats["label_mismatch"] += 1
                 continue
             missing = [i for i in (inst_a, inst_b) if i not in instances]
             if missing:
@@ -110,7 +132,7 @@ def main():
         writer.writerow(UNRESOLVED_COLUMNS)
         writer.writerows(unresolved)
 
-    for key in ("rows", "recorded", "no_ddi_row", "unknown_instance"):
+    for key in ("rows", "recorded", "no_ddi_row", "unknown_instance", "label_mismatch"):
         print(f"[membership] {key} = {stats[key]}", flush=True)
     for method, split, n, n_ddis in conn.execute(
         "SELECT method, split, COUNT(*), COUNT(DISTINCT ddi_id) "
@@ -118,6 +140,17 @@ def main():
     ):
         print(f"[membership] {method}/{split} = {n} pairs over {n_ddis} DDIs", flush=True)
     conn.close()
+
+    if stats["label_mismatch"]:
+        print(
+            f"[membership] WARNING: {stats['label_mismatch']} rows carried a label that "
+            f"contradicts domain_domain_interaction.negative and were DROPPED; see "
+            f"{args.unresolved_out} (reason=label_mismatch). Each is a pair the negative "
+            "sampler drew that a protected source already holds with the opposite label -- "
+            "publishing it would have flipped its class. See INGEST_SAMPLED_NEGATIVES' "
+            "negative_positive_collisions.tsv for the family pairs.",
+            flush=True,
+        )
 
     if stats["no_ddi_row"] or stats["unknown_instance"]:
         print(

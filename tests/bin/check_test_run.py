@@ -37,7 +37,11 @@ import sys
 # directory and an `_hcni` one: 5 method directories, 18 split databases. The
 # `random` row stays `uniform`-only -- the naive baseline stays a baseline.
 # Set `--ppi_splitting_multi_negset false` and this drops back to 3 / 11.
-INTERNAL_SPLITS = ["train", "validation", "test_balanced", "test_realistic"]
+# Published names, i.e. after bin/split_io.py's SPLIT_RENAME: upstream's
+# test_balanced/test_realistic are published as test_matched_1_1/
+# test_uniform_1_10, because the two come from different samplers rather
+# than from one sampler at two ratios (DATASET_AUDIT.md F1).
+INTERNAL_SPLITS = ["train", "validation", "test_matched_1_1", "test_uniform_1_10"]
 EXTERNAL_SPLITS = ["train", "validation", "test"]
 EXPECTED = {
     "random": INTERNAL_SPLITS,
