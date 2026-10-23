@@ -174,10 +174,19 @@ def main():
 
     kept = conn.execute("SELECT COUNT(*) FROM keep_ddi").fetchone()[0]
     if kept == 0:
-        print(
-            f"[subset] WARNING: no ddi_split_membership rows for {args.method}/{args.split}; "
-            "the emitted database will be empty.",
-            flush=True,
+        # Fatal, not a warning: no real split is empty, and the way to get here is
+        # a split name that the workflow's splitsOf() and the ingested membership
+        # spell differently -- which used to publish an empty database per split.
+        recorded = sorted(
+            f"{m}/{sp}" for m, sp in conn.execute(
+                "SELECT DISTINCT method, split FROM src.ddi_split_membership"
+            )
+        )
+        sys.exit(
+            f"[subset] no ddi_split_membership rows for {args.method}/{args.split}; the master "
+            f"records {', '.join(recorded) or 'no split at all'}. A split name mismatch between "
+            "publishedSplit()/splitsOf() in workflows/domainsplit.nf and the ingested "
+            "membership would publish an empty database."
         )
 
     params = {"method": args.method, "split": args.split}
