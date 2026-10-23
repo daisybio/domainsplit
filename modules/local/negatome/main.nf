@@ -33,10 +33,21 @@ process DOWNLOAD_NEGATOME {
                     break
                 fh.write(chunk)
 
+    def is_cert_failure(exc):
+        # urlopen wraps the TLS error in a URLError; an HTTPError (a 404, say) is a
+        # URLError too, and so is a DNS failure -- neither is about the certificate,
+        # and retrying them unverified only hid the real error behind a cert warning.
+        if isinstance(exc, urllib.error.HTTPError):
+            return False
+        reason = getattr(exc, "reason", exc)
+        return isinstance(reason, ssl.SSLCertVerificationError)
+
     if URL.startswith(("http://", "https://", "ftp://", "file://")):
         try:
             download(URL, ssl.create_default_context())
         except (urllib.error.URLError, ssl.SSLError) as exc:
+            if not is_cert_failure(exc):
+                raise
             print(
                 f"WARNING: Negatome HTTPS cert validation failed for {URL} ({exc!r}); "
                 "retrying with unverified SSL context.",
