@@ -25,8 +25,9 @@
     `*_instances.csv`. `examples/*_universe.txt`, `_reserve.txt` and
     `unclaimed.txt` are ignored -- they are ppi-splitting's own bookkeeping.
 
-    `val` -> `validation` renaming happens inside the ingest scripts
-    (bin/split_io.py), at this boundary; ppi-splitting keeps `val` internally.
+    Split names arrive already published (`validation`, `test_matched_1_1`,
+    ...): `publishedSplit()` in workflows/domainsplit.nf renames ppi-splitting's
+    labels, and bin/split_io.py rejects a raw upstream label.
 
     Both split channels carry `[method, split, csv]`, where `method` is the
     output directory name -- the negative-set -> method mapping (`ilp` ->

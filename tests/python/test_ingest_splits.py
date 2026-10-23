@@ -5,7 +5,8 @@ Covers the three properties the ingest boundary has to hold:
 
   * a ``label=0`` family pair becomes exactly one ``sampled_negative`` DDI no
     matter how many splits or negative sets produced it;
-  * ``val`` is renamed to ``validation`` here, and nowhere else;
+  * split names are taken verbatim, and an upstream label (``val``, ...) that
+    bypassed the workflow's rename is rejected;
   * running before INSERT_EXTERNAL_SOURCES is not a suggestion -- if an external
     source already holds a sampled-negative pair, the insertion order that makes
     the external test set unseen has been broken, and the script must say so
@@ -41,7 +42,7 @@ POSITIVES = [("PF00001", "PF00002"), ("PF00003", "PF00004")]
 
 FAMILY_SPLITS = {
     "train": [("PF00001", "PF00002", 1), ("PF00001", "PF00003", 0)],
-    "val": [("PF00003", "PF00004", 1), ("PF00002", "PF00004", 0)],
+    "validation": [("PF00003", "PF00004", 1), ("PF00002", "PF00004", 0)],
 }
 # The same negative pair reappears in the second negative set; it must not
 # produce a second DDI row.
@@ -90,7 +91,7 @@ def run(script, db, specs, extra=(), check=True):
     return subprocess.run(args, check=check, env=ENV, capture_output=True, text=True)
 
 
-def test_sampled_negatives_dedup_and_rename():
+def test_sampled_negatives_dedup_and_membership():
     with tempfile.TemporaryDirectory() as tmp:
         db = os.path.join(tmp, "domainsplit.sqlite3")
         instances = seed_db(db)
@@ -136,7 +137,6 @@ def test_sampled_negatives_dedup_and_rename():
         ).fetchall()
         conn.close()
 
-        # `val` became `validation` at this boundary, and only here.
         assert seen == [
             ("minimal_leakage", "train", 2),
             ("minimal_leakage", "validation", 2),
@@ -145,6 +145,23 @@ def test_sampled_negatives_dedup_and_rename():
 
         with open(unresolved) as fh:
             assert len(fh.read().splitlines()) == 1, "expected header only"
+
+
+def test_upstream_split_label_is_rejected():
+    """A raw ppi-splitting label means publishedSplit() was bypassed: fail loudly.
+
+    Stored verbatim it would land under a split name SUBSET_SPLIT_DB never
+    selects, and the split database would come out empty.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        db = os.path.join(tmp, "domainsplit.sqlite3")
+        seed_db(db)
+        for label in ("val", "test_balanced", "test_realistic"):
+            path = os.path.join(tmp, f"{label}.csv")
+            write_family_csv(path, [("PF00001", "PF00003", 0)])
+            proc = run(NEGATIVES, db, [f"random:{label}:{path}"], check=False)
+            assert proc.returncode != 0, label
+            assert "publishedSplit()" in proc.stderr, proc.stderr
 
 
 def test_external_source_before_negatives_is_fatal():
@@ -193,7 +210,7 @@ def test_negative_colliding_with_3did_positive_is_dropped():
         fam = os.path.join(tmp, "test_balanced.csv")
         write_family_csv(fam, [("PF08716", "PF08716", 0)])
         collisions = os.path.join(tmp, "collisions.tsv")
-        proc = run(NEGATIVES, db, [f"minimal_leakage:test_balanced:{fam}"],
+        proc = run(NEGATIVES, db, [f"minimal_leakage:test_matched_1_1:{fam}"],
                    extra=["--collisions-out", collisions])
         assert proc.returncode == 0, proc.stderr
         with open(collisions) as fh:
@@ -202,7 +219,7 @@ def test_negative_colliding_with_3did_positive_is_dropped():
         inst = os.path.join(tmp, "test_balanced_instances.csv")
         write_instance_csv(inst, [(inst_a, inst_b, 0, "PF08716", "PF08716")])
         unresolved = os.path.join(tmp, "unresolved.tsv")
-        run(MEMBERSHIP, db, [f"minimal_leakage:test_balanced:{inst}"],
+        run(MEMBERSHIP, db, [f"minimal_leakage:test_matched_1_1:{inst}"],
             extra=["--unresolved-out", unresolved])
 
         conn = sqlite3.connect(db)
@@ -216,7 +233,8 @@ def test_negative_colliding_with_3did_positive_is_dropped():
 
 
 if __name__ == "__main__":
-    test_sampled_negatives_dedup_and_rename()
+    test_sampled_negatives_dedup_and_membership()
+    test_upstream_split_label_is_rejected()
     test_external_source_before_negatives_is_fatal()
     test_negative_colliding_with_3did_positive_is_dropped()
-    print("OK: dedup, val->validation rename, insertion order, 3did-collision drop")
+    print("OK: dedup, upstream-label guard, insertion order, 3did-collision drop")

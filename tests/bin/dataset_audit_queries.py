@@ -37,11 +37,15 @@ from collections import Counter, defaultdict
 
 MASTER = "domainsplit.sqlite3"
 INTERNAL = ["random", "minimal_leakage", "minimal_leakage_hcni"]
-# (matched-1:1, uniform-1:10) under both naming schemes: runs before the
-# SPLIT_RENAME change publish test_balanced/test_realistic, later ones publish
-# test_matched_1_1/test_uniform_1_10. resolve_ratios() picks whichever exists so
-# one script audits both.
-RATIO_NAMES = [("test_matched_1_1", "test_uniform_1_10"), ("test_balanced", "test_realistic")]
+# (1:1, 1:10) under every naming scheme a run may have published: the original
+# test_balanced/test_realistic, the first rename (test_matched_1_1 for every
+# method) and the current per-sampler names (test_uniform_1_1 for `random`).
+# resolve_ratios() picks whichever exists so one script audits all of them.
+RATIO_NAMES = [
+    ("test_matched_1_1", "test_uniform_1_10"),
+    ("test_uniform_1_1", "test_uniform_1_10"),
+    ("test_balanced", "test_realistic"),
+]
 
 
 def resolve_ratios(results, method):

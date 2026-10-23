@@ -19,7 +19,7 @@ Checked:
    pairs whose parent proteins differ;
 7. the reports exist;
 8. every published embedding HDF5 satisfies the benchmark's own key contract --
-   `h5[str(domain_id)][COALESCE(instance_id, 'r' || rowid)]` resolves for the
+   `h5[pfam_id][COALESCE(instance_id, 'r' || rowid)]` resolves for the
    master's domain instances -- and carries its root attributes. This is the seam
    that yields zero training rows *silently* if it drifts, so it is checked here
    as well as in tests/python/test_export_domain_embeddings.py.
@@ -37,25 +37,25 @@ import sys
 # directory and an `_hcni` one: 5 method directories, 18 split databases. The
 # `random` row stays `uniform`-only -- the naive baseline stays a baseline.
 # Set `--ppi_splitting_multi_negset false` and this drops back to 3 / 11.
-# Published names, i.e. after bin/split_io.py's SPLIT_RENAME: upstream's
-# test_balanced/test_realistic are published as test_matched_1_1/
-# test_uniform_1_10, because the two come from different samplers rather
-# than from one sampler at two ratios (DATASET_AUDIT.md F1).
-INTERNAL_SPLITS = ["train", "validation", "test_matched_1_1", "test_uniform_1_10"]
+# Published names, i.e. after publishedSplit() in workflows/domainsplit.nf: the
+# 1:1 test set is named for its negative set's sampler -- uniform for `random`,
+# the bias-matched ILP for the ILP rows -- and the 1:10 one is uniform
+# everywhere (DATASET_AUDIT.md F1).
+UNIFORM_SPLITS = ["train", "validation", "test_uniform_1_1", "test_uniform_1_10"]
+MATCHED_SPLITS = ["train", "validation", "test_matched_1_1", "test_uniform_1_10"]
 EXTERNAL_SPLITS = ["train", "validation", "test"]
 EXPECTED = {
-    "random": INTERNAL_SPLITS,
-    "minimal_leakage": INTERNAL_SPLITS,
-    "minimal_leakage_hcni": INTERNAL_SPLITS,
+    "random": UNIFORM_SPLITS,
+    "minimal_leakage": MATCHED_SPLITS,
+    "minimal_leakage_hcni": MATCHED_SPLITS,
     "external_test": EXTERNAL_SPLITS,
     "external_test_hcni": EXTERNAL_SPLITS,
 }
 EXTERNAL_SOURCES = ("single_domain_ppi", "PPIDM", "negatome")
-# Root attributes export_domain_embeddings.py writes; `domainsplit_run` is the
-# cross-run guard, since `domain.id` is a surrogate integer that means nothing
-# outside the run that assigned it.
+# Root attributes export_domain_embeddings.py writes. There is no run identifier:
+# the files key on the Pfam accession, which needs no cross-run guard.
 EMBEDDING_ATTRS = ("model", "pooling", "dim", "dtype", "key_layout",
-                   "n_domains", "n_instances", "domainsplit_run")
+                   "n_domains", "n_instances")
 
 failures = []
 notes = []
@@ -203,7 +203,8 @@ def check_embeddings(outdir, master):
 
     conn = sqlite3.connect(master)
     instances = conn.execute(
-        "SELECT domain_id, COALESCE(instance_id, 'r' || rowid) FROM domain_protein_map"
+        "SELECT d.pfam_id, COALESCE(m.instance_id, 'r' || m.rowid) "
+        "FROM domain_protein_map AS m JOIN domain AS d ON d.id = m.domain_id"
     ).fetchall()
     conn.close()
     check(bool(instances), "the master database has no domain instances at all")
@@ -216,12 +217,12 @@ def check_embeddings(outdir, master):
             # Not every instance has to resolve -- --embedding_max_len drops the
             # long tail -- but the *shape* has to, or the benchmark skips silently.
             resolved = sum(
-                1 for domain_id, key in instances
-                if str(domain_id) in h5 and key in h5[str(domain_id)]
+                1 for pfam_id, key in instances
+                if pfam_id in h5 and key in h5[pfam_id]
             )
             check(resolved > 0,
                   f"{name} resolves none of the master's {len(instances)} "
-                  "(domain_id, instance_key) pairs -- the key layout has drifted")
+                  "(pfam_id, instance_key) pairs -- the key layout has drifted")
             if 0 < resolved < len(instances):
                 notes.append(f"{name} covers {resolved} of {len(instances)} domain instances "
                              "(the rest were dropped by --embedding_max_len or an OOM)")

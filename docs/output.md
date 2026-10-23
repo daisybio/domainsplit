@@ -47,13 +47,13 @@ The master carries **no BLOBs**: embeddings are published separately (see below)
 With the default `--ppi_splitting_multi_negset true` there are **5 method directories and 18
 databases**:
 
-| method                 | splits                                                   |
-| ---------------------- | -------------------------------------------------------- |
-| `random`               | `train`, `validation`, `test_balanced`, `test_realistic` |
-| `minimal_leakage`      | `train`, `validation`, `test_balanced`, `test_realistic` |
-| `minimal_leakage_hcni` | `train`, `validation`, `test_balanced`, `test_realistic` |
-| `external_test`        | `train`, `validation`, `test`                            |
-| `external_test_hcni`   | `train`, `validation`, `test`                            |
+| method                 | splits                                                         |
+| ---------------------- | -------------------------------------------------------------- |
+| `random`               | `train`, `validation`, `test_uniform_1_1`, `test_uniform_1_10` |
+| `minimal_leakage`      | `train`, `validation`, `test_matched_1_1`, `test_uniform_1_10` |
+| `minimal_leakage_hcni` | `train`, `validation`, `test_matched_1_1`, `test_uniform_1_10` |
+| `external_test`        | `train`, `validation`, `test`                                  |
+| `external_test_hcni`   | `train`, `validation`, `test`                                  |
 
 `random` is the naive baseline (random split, uniform negatives). `minimal_leakage` is the main
 product (ILP split, ILP negatives). The `_hcni` directories are the same positive split with
@@ -61,6 +61,15 @@ product (ILP split, ILP negatives). The `_hcni` directories are the same positiv
 Pfam pairs a Y2H/MS screen tested without finding an interaction. `external_test`'s `test` split is
 not an internal held-out slice at all — it is the external DDIs (PPIDM / single-domain-PPI /
 Negatome), unseen by construction.
+
+The two internal test sets are named for the sampler that drew their negatives, because they
+are not one test set at two class ratios. `test_uniform_1_10` is always drawn uniformly at 1:10.
+The 1:1 set is drawn by the negative set's own sampler: uniform for `random`
+(`test_uniform_1_1`), the bias-matched ILP for the ILP rows (`test_matched_1_1`). Comparing a
+predictor's ROC-AUC between `test_matched_1_1` and `test_uniform_1_10` therefore compares two
+negative distributions, not two ratios. A sampled negative that 3did already holds as a
+positive is dropped (`reports/unresolved_split_rows.tsv`, `reason=label_mismatch`), so a 1:1 set
+can be a few negatives short of exactly 1:1.
 
 Set `--ppi_splitting_multi_negset false` and this drops to 3 directories / 11 databases.
 

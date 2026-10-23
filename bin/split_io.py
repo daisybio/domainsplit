@@ -20,49 +20,41 @@ built by the calling subworkflow -- which is also where the negative-set ->
 method-directory mapping (``ilp`` -> ``minimal_leakage``, ``ilp_candidates`` ->
 ``minimal_leakage_hcni``, ...) lives.
 
-``val`` is renamed to ``validation`` here, at the ingest boundary; ppi-splitting
-keeps ``val`` internally.
+The split names arriving here are already the *published* ones
+(``validation``, ``test_matched_1_1``, ...): ``publishedSplit()`` in
+workflows/domainsplit.nf renames them, because the 1:1 test set's name depends on
+the negative set's sampler and only the workflow knows which negative set
+produced a CSV.  A raw upstream label reaching this module is a wiring error and
+is rejected rather than stored under a name no split database selects.
 """
 
 import csv
 
-#: ppi-splitting's split label -> the name domainsplit publishes it under.
-#:
-#: ``test_balanced`` and ``test_realistic`` are renamed because those names claim
-#: something untrue: they read as one test set at two class ratios, and ROC-AUC
-#: would then have to agree between them for a fixed predictor. They are not.
-#: Upstream samples them with **different samplers** -- ``test_balanced`` per
-#: negative set through the bias-matched ILP, ``test_realistic`` once through the
-#: uniform sampler at 1:10 (its ``subworkflows/sample_negatives.nf`` lines 58-76,
-#: 86) -- so their negative distributions differ, not just their ratios. Measured
-#: on the 2026-09 run: 8,616 of 8,625 balanced negatives are absent from the
-#: realistic pool. The names now say which sampler produced which set, so nobody
-#: reads a cross-ratio AUC difference as a modelling result. DATASET_AUDIT.md F1.
-SPLIT_RENAME = {
-    "val": "validation",
-    "test_balanced": "test_matched_1_1",
-    "test_realistic": "test_uniform_1_10",
-}
+#: ppi-splitting's own split labels.  ``publishedSplit()`` in
+#: workflows/domainsplit.nf renames every one of them before a spec is built, so
+#: seeing one here means the rename was bypassed.
+UPSTREAM_LABELS = frozenset({"val", "test_balanced", "test_realistic"})
 
 FAMILY_COLUMNS = ["protein1", "protein2", "label"]
 INSTANCE_COLUMNS = ["protein1", "protein2", "label", "family1", "family2"]
 
 
-def normalise_split(name):
-    """``val`` -> ``validation``; every other label passes through unchanged."""
-    return SPLIT_RENAME.get(name, name)
-
-
 def parse_split_spec(spec):
-    """``"minimal_leakage:val:/path/to/val.csv"`` -> ``("minimal_leakage", "validation", path)``.
+    """``"minimal_leakage:validation:/path/val.csv"`` -> ``("minimal_leakage", "validation", path)``.
 
     The path may itself contain colons, so only the first two are separators.
+    The split must be a published name; an upstream label is rejected.
     """
     parts = spec.split(":", 2)
     if len(parts) != 3 or not all(parts):
         raise ValueError(f"--split expects method:split:path, got {spec!r}")
     method, split, path = parts
-    return method, normalise_split(split), path
+    if split in UPSTREAM_LABELS:
+        raise ValueError(
+            f"--split {spec!r} carries ppi-splitting's label {split!r}, not a published split "
+            "name; publishedSplit() in workflows/domainsplit.nf must rename it first"
+        )
+    return method, split, path
 
 
 def _read_rows(path, required):

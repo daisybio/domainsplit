@@ -96,17 +96,47 @@ def activeNegsets(row) {
     return multi ? row.negsets.keySet() as List : [row.negsets.keySet().first()]
 }
 
-// ppi-splitting labels its splits train/val/test_balanced/test_realistic; the
-// ingest scripts rename them at that boundary (bin/split_io.py's SPLIT_RENAME:
-// val -> validation, test_balanced -> test_matched_1_1, test_realistic ->
-// test_uniform_1_10 -- the last two because the two test sets come from
-// *different samplers*, not from one sampler at two ratios; see the comment on
-// SPLIT_RENAME and DATASET_AUDIT.md F1). These are the published names, so they
-// must be the renamed ones: SUBSET_SPLIT_DB selects `ddi_split_membership` rows
-// by them. A row with no internal test set contributes train/validation here and
-// gets its `test` from BUILD_EXTERNAL_TEST.
-def splitsOf(row) {
-    return row.internal_test ? ['train', 'validation', 'test_matched_1_1', 'test_uniform_1_10'] : ['train', 'validation']
+// ppi-splitting labels its splits train/val/test_balanced/test_realistic; this is
+// the one place they are renamed to the names domainsplit publishes. The two test
+// labels are renamed because they read as one test set at two class ratios, and
+// they are not: `test_realistic` is always drawn by the uniform sampler at 1:10,
+// while `test_balanced` is drawn at 1:1 by *the negative set's own sampler* --
+// the bias-matched ILP for `ilp`/`ilp_candidates`, the uniform sampler for
+// `uniform` (ppi-splitting's subworkflows/sample_negatives.nf routes on the
+// negative set). So the 1:1 name depends on the negative set: `random`'s two
+// test sets really are one sampler at two ratios, the ILP rows' are not.
+// Measured on the 2026-09 run: 8,616 of 8,625 `minimal_leakage` 1:1 negatives
+// are absent from its 1:10 pool. DATASET_AUDIT.md F1.
+//
+// Renamed here, in the workflow, rather than in the ingest scripts: only this
+// file knows which negative set produced a CSV, and the ingest scripts and
+// SUBSET_SPLIT_DB must agree on the names exactly.
+def publishedSplit(negset, label) {
+    if (label == 'val') {
+        return 'validation'
+    }
+    if (label == 'test_realistic') {
+        return 'test_uniform_1_10'
+    }
+    if (label == 'test_balanced') {
+        if (negset in ['ilp', 'ilp_candidates']) {
+            return 'test_matched_1_1'
+        }
+        if (negset == 'uniform') {
+            return 'test_uniform_1_1'
+        }
+        error("no published name for ${label} of negative set ${negset}: add its sampler to publishedSplit()")
+    }
+    return label
+}
+
+// The published split names of one (row, negative set). A row with no internal
+// test set contributes train/validation here and gets its `test` from
+// BUILD_EXTERNAL_TEST. SUBSET_SPLIT_DB selects `ddi_split_membership` rows by
+// these names, so they must come from publishedSplit().
+def splitsOf(row, negset) {
+    def labels = row.internal_test ? ['train', 'val', 'test_balanced', 'test_realistic'] : ['train', 'val']
+    return labels.collect { label -> publishedSplit(negset, label) }
 }
 
 // Every per-dataset override ppi-splitting reads out of `meta`. Mirrors
@@ -409,10 +439,10 @@ Use all_species_reviewed or human_any_review_status.""")
 
     family_splits = ppi.labelled
         .filter { meta, _negset, label, _csv -> internalTest[meta.id] || !label.startsWith('test') }
-        .map    { meta, negset, label, csv -> tuple(negsetMethod[meta.id][negset], label, csv) }
+        .map    { meta, negset, label, csv -> tuple(negsetMethod[meta.id][negset], publishedSplit(negset, label), csv) }
     instance_splits = ppi.labelled_inst
         .filter { meta, _negset, label, _csv -> internalTest[meta.id] || !label.startsWith('test') }
-        .map    { meta, negset, label, csv -> tuple(negsetMethod[meta.id][negset], label, csv) }
+        .map    { meta, negset, label, csv -> tuple(negsetMethod[meta.id][negset], publishedSplit(negset, label), csv) }
 
     //
     // Ingest, then the external sources, then prune -- in that order.
@@ -571,7 +601,7 @@ Use all_species_reviewed or human_any_review_status.""")
     def subset_targets = splitRows().collectMany { row ->
         activeNegsets(row).collectMany { negset ->
             def method = row.negsets[negset]
-            def splits = row.internal_test ? splitsOf(row) : splitsOf(row) + ['test']
+            def splits = row.internal_test ? splitsOf(row, negset) : splitsOf(row, negset) + ['test']
             splits.collect { split -> [method: method, split: split] }
         }
     }

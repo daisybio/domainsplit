@@ -10,8 +10,10 @@ of the old splitter modules.
 Both labels are recorded.  A ``label=1`` pair is a 3did DDI, a ``label=0`` pair
 is one INGEST_SAMPLED_NEGATIVES has just inserted; either way the family pair
 already has a row in ``domain_domain_interaction`` by the time this runs, so a
-row that fails to resolve is a wiring error, not data.  Unresolved rows are
-counted and written to a report rather than dropped silently.
+row with no DDI row (``no_ddi_row``) or an unknown instance
+(``unknown_instance``) is a wiring error, not data.  Unresolved rows -- those two
+and ``label_mismatch`` below, which *is* data -- are counted and written to a
+report rather than dropped silently.
 
 ``ddi.negative`` **is** the published label -- a split database carries no label
 column, so a pair is positive there iff ``ddi.negative = 0``.  A CSV row whose
@@ -19,9 +21,11 @@ label contradicts it would therefore be published as the opposite class, which i
 reachable whenever ppi-splitting's samplers draw a pair that 3did already holds as
 a positive (they exclude only the current split's positives; see
 ``ingest_sampled_negatives.py``).  Such rows are dropped with
-``reason=label_mismatch`` rather than recorded.  DATASET_AUDIT.md F3.
+``reason=label_mismatch`` rather than recorded.  DATASET_AUDIT.md F3.  In
+practice the dropped rows are negatives, so an affected 1:1 test set ends up a
+few negatives short of exactly 1:1 (4 pairs on the 2026-09 run).
 
-The ``val`` -> ``validation`` rename happens here (see ``split_io``).
+Split names arrive already published; see ``split_io``.
 """
 
 import argparse
