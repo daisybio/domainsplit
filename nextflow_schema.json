@@ -267,8 +267,8 @@
                 },
                 "embedding_batch_size_esm3": {
                     "type": "integer",
-                    "description": "Initial batch size for esm3 domain inference. Halved in-process on torch.OutOfMemoryError and retried.",
-                    "default": 32,
+                    "description": "Batch size for esm3 domain inference. Forced to 1 in-process: ESM3's logits path masks no padding, so a larger batch would make a domain's embedding depend on its batch-mates.",
+                    "default": 1,
                     "minimum": 1,
                     "fa_icon": "fas fa-layer-group"
                 },
