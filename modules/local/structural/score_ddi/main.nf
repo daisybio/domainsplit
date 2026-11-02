@@ -1,6 +1,6 @@
 process SCORE_DDI {
     tag "$method-$shard_id"
-    label 'process_medium'
+    label 'process_high'
     conda "${moduleDir}/environment.yml"
     container "docker.io/konstantinpelz/domainsplit-general:1.0.0"
 

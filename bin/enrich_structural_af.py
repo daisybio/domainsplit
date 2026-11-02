@@ -1,17 +1,16 @@
 #!/usr/bin/env python3
 """Slice every AF3-predicted complex needed by ddi_split_membership into its
-constituent domain-instance-pair structures, store them in structures.h5, and
+domain-instance-pair structures, store them in structures.h5, and
 record which (ddi_id, instance_id_a, instance_id_b) triples have a structure
 via ddi_split_membership.is_mock.
 
-Driven by ddi_split_membership, not by every domain x domain combination in
-the database: only instance-pairs some (method, split) actually uses are
-worth slicing. Grouped by UNORDERED protein pair so a complex predicted once
+Driven by ddi_split_membership, only instance-pairs some (method, split) actually uses are
+sliced. Grouped by UNORDERED protein pair so a complex predicted once
 is loaded/parsed exactly once, even when it realizes several DDIs and even
 when the pair shows up as (A, B) for some DDIs and (B, A) for others.
 
 When af_metadata has no entry for a pair, or the referenced file is missing
-or unreadable (e.g. the AF3 run for it hasn't finished yet), the pair is
+or unreadable, the pair is
 marked is_mock=1 and no structure is written to structures.h5.
 """
 import argparse as ap
@@ -38,8 +37,7 @@ from Bio.PDB.PDBParser import PDBParser
 import utils_struct
 
 # Only these methods get structural analysis downstream (build_scoring_matrix.py,
-# score_ddi.py) -- everything else in ddi_split_membership can be skipped before
-# it ever leaves SQL.
+# score_ddi.py)
 STRUCTURAL_METHODS = ("random", "minimal_leakage")
 
 # How many (ddi_id, instance_id_a, instance_id_b) rows to batch per
@@ -275,12 +273,14 @@ def main():
 
     meta_index = build_meta_index(args.af_metadata)
 
+    # Confirm metadata entries
+    print(f"enrich_structural_af: built metadata index with {len(meta_index)} entries")
+
     con_ro = sqlite3.connect(f"file:{args.db_in}?mode=ro", uri=True)
     instances = fetch_relevant_instances(con_ro)
     con_ro.close()
 
-    # Unordered protein-pair key: (A, B) and (B, A) share one complex file, so
-    # they must be one task (one load + parse), not two.
+    # Unordered protein-pair key: (A, B) and (B, A) share one complex file, order lexicographically
     ua, ub = instances["uniprot_id_a"], instances["uniprot_id_b"]
     instances["pair_key"] = np.where(ua <= ub, ua + "|" + ub, ub + "|" + ua)
 
@@ -292,7 +292,7 @@ def main():
     n_ok = n_mock = n_missing_meta = n_missing_file = n_failed_slice = 0
     inserter = BatchedInserter(conn)
 
-    # Pass 1 (main process, no PDB work): mock pairs go straight to the DB
+    # Pass 1 (main process): mock pairs go straight to the DB
     # buffer; pairs with a metadata entry become worker tasks.
     tasks = []
     for _, group in instances.groupby("pair_key", sort=False):
@@ -311,7 +311,8 @@ def main():
     print(f"enrich_structural_af: {n_mock} rows mock (no metadata), "
           f"{len(tasks)} protein pairs to slice", flush=True)
 
-    # Biggest tasks first so the last worker isn't stuck with a huge pair at the end.
+    # Sort tasks by number of rows to slice, descending, so the longest-running
+    # tasks are started firstv
     tasks.sort(key=lambda t: -len(t[3]))
 
     # Pass 2 (workers): load once, slice everything; main process writes results.
@@ -332,8 +333,7 @@ def main():
             for (group_key, dset_key), pdb_gz in res["slices"].items():
                 grp = h5file.require_group(group_key)
                 if dset_key not in grp:
-                    # pdb_gz is already gzip-compressed -- no h5 compression
-                    # filter here, or we'd be gzipping gzip for no benefit.
+                    # pdb_gz is already gzip-compressed, no h5 compression filter here
                     grp.create_dataset(dset_key, data=np.frombuffer(pdb_gz, dtype="uint8"),
                                        compression=None)
 

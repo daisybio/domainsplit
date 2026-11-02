@@ -1,17 +1,14 @@
-// subworkflows/local/annotate_ddi/main.nf
 include { BUILD_SCORING_MATRIX } from '../../../modules/local/structural/build_scoring_matrix/main.nf'
 include { MERGE_SCORING_MATRIX } from '../../../modules/local/structural/merge_scoring_matrix/main.nf'
 include { SCORE_DDI            } from '../../../modules/local/structural/score_ddi/main.nf'
 include { MERGE_SCORE_SHARDS   } from '../../../modules/local/structural/merge_score_shards/main.nf'
 include { MERGE_SCORES         } from '../../../modules/local/structural/merge_scores/main.nf'
 
-// Number of parallel shards per method for each phase. Kept separate since
-// build_scoring_matrix only sees the (smaller) train split while score_ddi
-// scores every DDI the method places in any split -- they don't need the
-// same degree of parallelism. Override in nextflow.config / -params-file;
-// these are just starting points to tune against your trace.
-params.build_scoring_matrix_shards = 6
-params.score_ddi_shards            = 12
+// Number of parallel shards per method. 
+// Override in nextflow.config / -params-file;
+// Build scoring matrix only sees training data, so fewer shards are needed.
+params.build_scoring_matrix_shards = 12
+params.score_ddi_shards            = 24
 
 workflow ANNOTATE_DDI {
     take:
@@ -21,7 +18,7 @@ workflow ANNOTATE_DDI {
     main:
     ch_versions = Channel.empty()
 
-    database       = domainsplit_db.first()   // broadcastable: every consumer sees the same one item
+    database       = domainsplit_db.first()   
     hdf_structures = structures.first()
 
     methods_ch = Channel.fromList(params.structure_data_methods.toString().tokenize(','))
@@ -29,7 +26,7 @@ workflow ANNOTATE_DDI {
         .combine(hdf_structures)
     // methods_ch: (method, database, hdf_structures)
 
-    // ---- Phase 1: build each method's scoring matrix, sharded --------
+    // Step 1: build scoring matrix for each splitting method, sharded
     build_shard_in = methods_ch
         .combine(Channel.of(0..<params.build_scoring_matrix_shards))
         .map { method, db, h5, shard_id ->
@@ -46,7 +43,7 @@ workflow ANNOTATE_DDI {
     MERGE_SCORING_MATRIX(matrix_shards_grouped)
     // MERGE_SCORING_MATRIX.out.matrix: (method, c_ab_matrix, db_freq, t_db)
 
-    // ---- Phase 2: score every DDI under each method, sharded ---------
+    // Step 2: score every DDI under each method, sharded 
     score_shard_in = methods_ch
         .combine(Channel.of(0..<params.score_ddi_shards))
         .map { method, db, h5, shard_id ->
@@ -54,18 +51,17 @@ workflow ANNOTATE_DDI {
         }
         .combine(MERGE_SCORING_MATRIX.out.matrix, by: 0)
     // score_shard_in: (method, shard_id, n_shards, database, hdf_structures, c_ab_matrix, db_freq, t_db)
-    // -- already matches SCORE_DDI's expected input tuple order
 
     SCORE_DDI(score_shard_in)
     ch_versions = ch_versions.mix(SCORE_DDI.out.versions)
 
-    // Plain concatenation-safe grouping: score_ddi.py shards by ddi_id, so
-    // no ddi_id repeats across a method's shards.
+    // Combine shards for each method
     score_shards_grouped = SCORE_DDI.out.shard.groupTuple(by: 0)
 
     MERGE_SCORE_SHARDS(score_shards_grouped)
     // MERGE_SCORE_SHARDS.out.merged: (method, scores, confirmed)
 
+    // Add scores to db, together with interaction annotations (majority_confirmed, mean_confirmed)
     MERGE_SCORES(
         database,
         MERGE_SCORE_SHARDS.out.merged.map { it[1] }.collect(),

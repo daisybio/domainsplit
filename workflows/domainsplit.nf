@@ -31,8 +31,9 @@ include { GET_LENGTHS                 } from '../subworkflows/external/ppi-split
 include { SUBSET_DOMAIN_DATA          } from '../subworkflows/external/ppi-splitting/processes/data_prep.nf'
 
 // AF inclusion
-include { ENRICH_STRUCTURAL } from '../subworkflows/local/enrich_structural/main.nf'
-include { ANNOTATE_DDI      } from '../subworkflows/local/annotate_ddi/main.nf'
+include { ADAPT_PREBUILT_DB           } from '../modules/local/adapt_prebuilt_db/main.nf'
+include { ENRICH_STRUCTURAL           } from '../subworkflows/local/enrich_structural/main.nf'
+include { ANNOTATE_DDI                } from '../subworkflows/local/annotate_ddi/main.nf'
 
 
 /*
@@ -642,6 +643,69 @@ emit:
     dropped_families  = dropped_families
 }
 
+
+/*
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    ALTERNATIVE ENTRY: START FROM A PREBUILT MASTER DATABASE
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    Skips everything up to and including ENRICH_DDI_DATABASE. `--prebuilt_db` must be
+    the database that was the input of ENRICH_STRUCTURAL in the run it came from
+    (i.e. the output of ENRICH_DDI_DATABASE), so it already carries the split
+    membership rows, the external test set, proteins, GO terms and STRING links.
+    From there on this is the same code as the tail of DOMAINSPLIT.
+*/
+workflow DOMAINSPLIT_FROM_DB {
+main:
+    if (!params.prebuilt_db) {
+        error("DOMAINSPLIT_FROM_DB needs --prebuilt_db <path to the sqlite database that enters ENRICH_STRUCTURAL>.")
+    }
+
+    ch_versions = Channel.empty()
+
+    // Bring the prebuilt database up to the current schema (missing columns/table/index).
+    prebuilt_db = channel.fromPath(params.prebuilt_db, checkIfExists: true)
+    ADAPT_PREBUILT_DB(prebuilt_db)
+    enriched_db    = ADAPT_PREBUILT_DB.out.domainsplit_db
+
+    ch_af_metadata = Channel.fromPath(params.af_metadata, checkIfExists: true)
+
+    ENRICH_STRUCTURAL(enriched_db, ch_af_metadata)
+
+    ANNOTATE_DDI(ENRICH_STRUCTURAL.out.domainsplit_db, ENRICH_STRUCTURAL.out.structures)
+    scored_db = ANNOTATE_DDI.out.domainsplit_db
+
+    def subset_targets = splitRows().collectMany { row ->
+        activeNegsets(row).collectMany { negset ->
+            def method = row.negsets[negset]
+            def splits = row.internal_test ? splitsOf(row) : splitsOf(row) + ['test']
+            splits.collect { split -> [method: method, split: split] }
+        }
+    }
+
+    split_dbs = SUBSET_SPLIT_DB(
+        channel.fromList(subset_targets).combine(scored_db)
+    )
+
+    ch_versions = ch_versions.mix(
+        ADAPT_PREBUILT_DB.out.versions,
+        ENRICH_STRUCTURAL.out.versions,
+        ANNOTATE_DDI.out.versions,
+        SUBSET_SPLIT_DB.out.versions
+    )
+
+    softwareVersionsToYAML(ch_versions)
+        .collectFile(
+            storeDir: "${params.outdir}/pipeline_info",
+            name: 'nf_core_' + 'pipeline_software_' + 'mqc_' + 'versions.yml',
+            sort: true,
+            newLine: true,
+        )
+
+emit:
+    domainsplit_db = scored_db
+    split_db       = split_dbs.split_db
+    structures     = ENRICH_STRUCTURAL.out.structures
+}
 /*
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
     THE END

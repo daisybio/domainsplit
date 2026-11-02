@@ -232,6 +232,12 @@
                     "format": "file-path",
                     "description": "Optional AlphaFold DB metadata TSV (columns: uniprot_id_a,uniprot_id_b,path,source), source is either downloaded or inferred.",
                     "fa_icon": "fas fa-file-import"
+                },
+                "prebuilt_db": {
+                    "type": ["string"],
+                    "format": "file-path",
+                    "description": "Optional path to a prebuilt database file (domainsplit.sqlite3).",
+                    "fa_icon": "fas fa-file-import"
                 }
             }
         },

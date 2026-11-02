@@ -69,6 +69,9 @@ params {
     ddi_mode: Boolean
     embedding_require_gpu: Boolean
     ppi_splitting_multi_negset: Boolean
+    // Start from a prebuilt master database (skips everything up to ENRICH_STRUCTURAL).
+    // Default (null) stays in nextflow.config, like the others.
+    prebuilt_db: String?
 
     // ---- imported from ppi-splitting via
     //      `includeConfig 'subworkflows/external/ppi-splitting/conf/params.config'`.
@@ -100,7 +103,7 @@ params {
     ddi_candidate_factor: Integer
 }
 
-include { DOMAINSPLIT  } from './workflows/domainsplit'
+include { DOMAINSPLIT; DOMAINSPLIT_FROM_DB } from './workflows/domainsplit'
 include { PIPELINE_INITIALISATION } from './subworkflows/local/utils_nfcore_domainsplit_pipeline'
 include { PIPELINE_COMPLETION     } from './subworkflows/local/utils_nfcore_domainsplit_pipeline'
 /*
@@ -116,14 +119,27 @@ workflow DAISYBIO_DOMAINSPLIT {
 
     main:
 
-    //
-    // WORKFLOW: Run pipeline
-    //
-    DOMAINSPLIT ()
 
-emit:
-    domainsplit_db = DOMAINSPLIT.out.domainsplit_db
-    split_db   = DOMAINSPLIT.out.split_db
+    if (params.prebuilt_db) {
+        // Secondary entrypoint
+        //
+        // WORKFLOW: Run pipeline. With --prebuilt_db, skip everything up to
+        // ENRICH_STRUCTURAL and start from that database.
+        //
+        log.info "--prebuilt_db is set: starting at ENRICH_STRUCTURAL from ${params.prebuilt_db}; all upstream steps are skipped."
+        DOMAINSPLIT_FROM_DB ()
+        ch_domainsplit_db = DOMAINSPLIT_FROM_DB.out.domainsplit_db
+        ch_split_db       = DOMAINSPLIT_FROM_DB.out.split_db
+    }
+    else {
+        DOMAINSPLIT ()
+        ch_domainsplit_db = DOMAINSPLIT.out.domainsplit_db
+        ch_split_db       = DOMAINSPLIT.out.split_db
+    }
+
+    emit:
+        domainsplit_db = ch_domainsplit_db
+        split_db       = ch_split_db
 }
 /*
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
