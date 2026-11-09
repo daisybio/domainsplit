@@ -107,3 +107,35 @@ def test_retired_vocabulary_is_rejected_with_the_mapping(tmp_path):
     assert proc.returncode != 0
     assert "any -> all_species_reviewed" in out, out
     assert "human_only -> human_reviewed" in out, out
+
+
+# --external_test_sources decides which external sources are fetched at all: a
+# source it leaves out must not appear in the DAG (a Negatome download failing
+# on a run that never uses Negatome is the bug this pins). The preview stops at
+# the absent local gurobi.lic, but -with-dag is written before that.
+SOURCE_PROCESSES = {"DOWNLOAD_NEGATOME", "PARSE_NEGATOME", "PARSE_SINGLE_DOMAIN_PPI",
+                    "BUILD_SWISSPROT_PFAM_MAP", "PARSE_PPIDM"}
+
+
+def dag_processes(tmp_path, *args):
+    dag = tmp_path / "dag.mmd"
+    preview(tmp_path, "-with-dag", str(dag), *args)
+    assert dag.exists(), "preview wrote no DAG"
+    text = dag.read_text()
+    return {p for p in SOURCE_PROCESSES if p in text}
+
+
+@pytest.mark.parametrize("sources, expected", [
+    ("", SOURCE_PROCESSES),
+    ("PPIDM_Gold", {"PARSE_PPIDM"}),
+    ("PPIDM_Gold,negatome", {"PARSE_PPIDM", "DOWNLOAD_NEGATOME", "PARSE_NEGATOME"}),
+])
+def test_external_test_sources_prunes_fetches(sources, expected, tmp_path):
+    args = ["--external_test_sources", sources] if sources else []
+    assert dag_processes(tmp_path, *args) == expected
+
+
+def test_external_test_sources_rejects_unknown_token(tmp_path):
+    proc = preview(tmp_path, "--external_test_sources", "PPIDM_gold")
+    assert proc.returncode != 0
+    assert "unknown source PPIDM_gold" in proc.stdout + proc.stderr

@@ -658,8 +658,9 @@ Use all_species_reviewed or human_any_review_status.""")
     WRITE_RUN_MANIFEST(
         channel.of(manifestBase(uniprot_dats)).collectFile(name: 'manifest_base.json'),
         enriched_db,
-        file(params.hippie_tsv, checkIfExists: true),
-        file(params.ppidm_tsv, checkIfExists: true),
+        // [] when --external_test_sources left that source out.
+        params.hippie_tsv ? file(params.hippie_tsv, checkIfExists: true) : [],
+        params.ppidm_tsv ? file(params.ppidm_tsv, checkIfExists: true) : [],
         file(params.negative_ppi_parquet, checkIfExists: true),
     )
 

@@ -20,12 +20,14 @@ process WRITE_RUN_MANIFEST {
     path "versions.yml",      emit: versions
 
     script:
+    def hippie_arg = hippie_tsv ? "--input hippie_tsv=${hippie_tsv}" : ''
+    def ppidm_arg  = ppidm_tsv ? "--input ppidm_tsv=${ppidm_tsv}" : ''
     """
     write_run_manifest.py \\
         --base ${base_json} \\
         --db "${domainsplit_db_in}" \\
-        --input hippie_tsv=${hippie_tsv} \\
-        --input ppidm_tsv=${ppidm_tsv} \\
+        ${hippie_arg} \\
+        ${ppidm_arg} \\
         --input negative_ppi_parquet=${negative_ppi_parquet} \\
         --out run_manifest.json \\
         --versions versions.yml \\

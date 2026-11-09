@@ -41,7 +41,7 @@
             "type": "object",
             "fa_icon": "fas fa-database",
             "description": "Public source databases (URLs and local file paths) used to assemble the domainsplit database.",
-            "required": ["hippie_tsv", "ppidm_tsv", "negative_ppi_parquet"],
+            "required": ["negative_ppi_parquet"],
             "properties": {
                 "url_3did": {
                     "type": "string",
@@ -212,7 +212,7 @@
                 "hippie_tsv": {
                     "type": ["string"],
                     "format": "file-path",
-                    "description": "Required path to a HIPPIE PPI TSV. COLLECT_DDI_DATA adds positive DDIs inferred from PPIs between two single-domain proteins.",
+                    "description": "Path to a HIPPIE PPI TSV; required unless --external_test_sources leaves out single_domain_ppi. COLLECT_DDI_DATA adds positive DDIs inferred from PPIs between two single-domain proteins.",
                     "fa_icon": "fas fa-file-import"
                 },
                 "hippie_min_score": {
@@ -226,7 +226,7 @@
                 "ppidm_tsv": {
                     "type": ["string"],
                     "format": "file-path",
-                    "description": "Required path to a PPIDM predictions TSV (columns: domain_1, domain_2, class). PARSE_PPIDM emits each DDI twice, under the umbrella source 'PPIDM' and under 'PPIDM_<Class>'; both merge onto one database row.",
+                    "description": "Path to a PPIDM predictions TSV, required unless --external_test_sources leaves out every PPIDM token (columns: domain_1, domain_2, class). PARSE_PPIDM emits each DDI twice, under the umbrella source 'PPIDM' and under 'PPIDM_<Class>'; both merge onto one database row.",
                     "fa_icon": "fas fa-file-import"
                 },
                 "ppidm_classes": {
@@ -237,7 +237,7 @@
                 },
                 "external_test_sources": {
                     "type": "string",
-                    "description": "Comma-separated source tokens the external test set is built from (single_domain_ppi, PPIDM, PPIDM_<Class>, negatome). A DDI enters if any of its tokens is listed, e.g. 'PPIDM_Gold,negatome'. Empty = every external source. A token no external DDI carries fails the run.",
+                    "description": "Comma-separated source tokens the external test set is built from (single_domain_ppi, PPIDM, PPIDM_<Class>, negatome). A DDI enters if any of its tokens is listed, e.g. 'PPIDM_Gold,negatome'. Empty = every external source. A source not selected is neither downloaded nor parsed (e.g. no Negatome download without negatome), and its input file is then optional. A token no external DDI carries fails the run.",
                     "default": "",
                     "fa_icon": "fas fa-filter"
                 }
