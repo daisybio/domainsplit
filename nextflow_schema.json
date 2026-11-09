@@ -205,7 +205,7 @@
                 },
                 "ppi_splitting_multi_negset": {
                     "type": "boolean",
-                    "description": "Ask ppi-splitting for both ILP negative sets per split \u2014 plain `ilp` plus `ilp_candidates`, the same sampler restricted to the candidate network \u2014 which turns 3 method directories into 5 and 11 split databases into 18. On by default: the comma-separated `negative_sampling_method` fan-out it needs is in the pinned submodule. The candidate network must be dense enough that every split can cover itself from it: survival is quadratic in a split's share, because both families of a pair have to land in the same split. Set false for a `--split_only` debug run, which ppi-splitting refuses unless `negative_sampling_method` is exactly \"ilp\".",
+                    "description": "Ask ppi-splitting for every negative set of each split row \u2014 plain `ilp` plus `ilp_candidates`, the same sampler restricted to the candidate network, and for `random` also its `uniform` baseline \u2014 which turns 3 method directories into 7 and 11 split databases into 26. On by default: the comma-separated `negative_sampling_method` fan-out it needs is in the pinned submodule. The candidate network must be dense enough that every split can cover itself from it: survival is quadratic in a split's share, because both families of a pair have to land in the same split. Set false for a `--split_only` debug run, which ppi-splitting refuses unless `negative_sampling_method` is exactly \"ilp\".",
                     "default": true,
                     "fa_icon": "fas fa-clone"
                 },
@@ -234,6 +234,12 @@
                     "description": "Comma-separated PPIDM confidence classes to include.",
                     "default": "Bronze,Silver,Gold",
                     "fa_icon": "fas fa-tags"
+                },
+                "external_test_sources": {
+                    "type": "string",
+                    "description": "Comma-separated source tokens the external test set is built from (single_domain_ppi, PPIDM, PPIDM_<Class>, negatome). A DDI enters if any of its tokens is listed, e.g. 'PPIDM_Gold,negatome'. Empty = every external source. A token no external DDI carries fails the run.",
+                    "default": "",
+                    "fa_icon": "fas fa-filter"
                 }
             }
         },

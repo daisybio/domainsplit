@@ -66,7 +66,7 @@ def build_db(path):
     conn.close()
 
 
-def run_builder(db, tmp, seed=42, target=3, tag=""):
+def run_builder(db, tmp, seed=42, target=3, tag="", sources=None):
     dropped = os.path.join(tmp, f"dropped{tag}.tsv")
     args = [sys.executable, BUILDER, "--db", db]
     for method in METHODS:
@@ -74,6 +74,8 @@ def run_builder(db, tmp, seed=42, target=3, tag=""):
     args += ["--split", "test", "--target", str(target), "--pool-factor", "2",
              "--seed", str(seed), "--dropped-out", dropped,
              "--versions", os.path.join(tmp, f"versions{tag}.yml"), "--process-name", "TEST"]
+    if sources is not None:
+        args += ["--sources", sources]
     subprocess.run(args, check=True, env=ENV, capture_output=True, text=True)
     return dropped
 
@@ -158,7 +160,37 @@ def test_seed_is_per_ddi_and_deterministic():
         assert moved, "no seed in 1..11 changed the sample; --seed is not reaching the sampler"
 
 
+
+def test_sources_filter_and_unknown_token():
+    with tempfile.TemporaryDirectory() as tmp:
+        db = os.path.join(tmp, "domainsplit.sqlite3")
+        build_db(db)
+        conn = sqlite3.connect(db)
+        conn.execute("PRAGMA foreign_keys=ON")
+        merge_external_ddis(conn, [("PF00010", "PF00011", 0, "PPIDM_Gold")])
+        conn.commit()
+        conn.close()
+        try:
+            run_builder(db, tmp, sources="single_domain_ppi")
+        except subprocess.CalledProcessError as e:
+            assert "no external DDI carries" in e.stderr, e.stderr
+        else:
+            raise AssertionError("a --sources token no DDI carries must fail the run")
+    with tempfile.TemporaryDirectory() as tmp:
+        db = os.path.join(tmp, "domainsplit.sqlite3")
+        build_db(db)
+        conn = sqlite3.connect(db)
+        conn.execute("PRAGMA foreign_keys=ON")
+        # PF00010/PF00011 becomes "PPIDM,PPIDM_Gold"; the negatome pair has no Gold token.
+        merge_external_ddis(conn, [("PF00010", "PF00011", 0, "PPIDM_Gold")])
+        conn.commit()
+        conn.close()
+        run_builder(db, tmp, sources="PPIDM_Gold")
+        assert {(r[2], r[3]) for r in membership(db)} == {("PF00010", "PF00011")}
+
+
 if __name__ == "__main__":
     test_external_only_distinct_parents_and_report()
     test_seed_is_per_ddi_and_deterministic()
+    test_sources_filter_and_unknown_token()
     print("OK: external test set is external-only, parent-distinct and seed-deterministic")

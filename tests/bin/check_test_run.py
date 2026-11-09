@@ -34,9 +34,9 @@ import sys
 
 # `params.ppi_splitting_multi_negset = true` (the default) asks ppi-splitting for
 # both ILP negative sets per ILP row, so each of those rows yields a plain
-# directory and an `_hcni` one: 5 method directories, 18 split databases. The
-# `random` row stays `uniform`-only -- the naive baseline stays a baseline.
-# Set `--ppi_splitting_multi_negset false` and this drops back to 3 / 11.
+# directory and an `_hcni` one; `random` additionally gets `random_ilp` and
+# `random_hcni` next to its uniform baseline: 7 method directories, 26 split
+# databases. Set `--ppi_splitting_multi_negset false` and this drops back to 3 / 11.
 # Published names, i.e. after publishedSplit() in workflows/domainsplit.nf: the
 # 1:1 test set is named for its negative set's sampler -- uniform for `random`,
 # the bias-matched ILP for the ILP rows -- and the 1:10 one is uniform
@@ -46,6 +46,8 @@ MATCHED_SPLITS = ["train", "validation", "test_matched_1_1", "test_uniform_1_10"
 EXTERNAL_SPLITS = ["train", "validation", "test"]
 EXPECTED = {
     "random": UNIFORM_SPLITS,
+    "random_ilp": MATCHED_SPLITS,
+    "random_hcni": MATCHED_SPLITS,
     "minimal_leakage": MATCHED_SPLITS,
     "minimal_leakage_hcni": MATCHED_SPLITS,
     "external_test": EXTERNAL_SPLITS,

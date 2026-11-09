@@ -36,7 +36,7 @@ import sys
 from collections import Counter, defaultdict
 
 MASTER = "domainsplit.sqlite3"
-INTERNAL = ["random", "minimal_leakage", "minimal_leakage_hcni"]
+INTERNAL = ["random", "random_ilp", "random_hcni", "minimal_leakage", "minimal_leakage_hcni"]
 # (1:1, 1:10) under every naming scheme a run may have published: the original
 # test_balanced/test_realistic, the first rename (test_matched_1_1 for every
 # method) and the current per-sampler names (test_uniform_1_1 for `random`).
@@ -215,15 +215,17 @@ def check_f1(rep, results):
 
 def check_f2(rep, results):
     rep.head("F2 -- are the _hcni and non-_hcni test sets identical")
-    plain = resolve_ratios(results, "minimal_leakage")
-    hcni = resolve_ratios(results, "minimal_leakage_hcni")
-    if plain is None or hcni is None:
-        rep.line("  missing DB(s) -- skipped")
-        return
-    for split, a, b in zip(("balanced 1:1", "uniform 1:10"), plain, hcni):
-        (ap, an), (bp, bn) = pair_sets(a), pair_sets(b)
-        rep.line(f"  {split}: positives identical = {ap == bp}; negatives identical = {an == bn}; "
-                 f"negatives differing = {len(an ^ bn)}")
+    # random_ilp/random_hcni (F9) exist only on runs after 2026-11; skipped otherwise.
+    for base in ("minimal_leakage", "random_ilp"):
+        plain = resolve_ratios(results, base)
+        hcni = resolve_ratios(results, base.replace("_ilp", "") + "_hcni")
+        if plain is None or hcni is None:
+            rep.line(f"  {base}: missing DB(s) -- skipped")
+            continue
+        for split, a, b in zip(("balanced 1:1", "uniform 1:10"), plain, hcni):
+            (ap, an), (bp, bn) = pair_sets(a), pair_sets(b)
+            rep.line(f"  {base} {split}: positives identical = {ap == bp}; negatives identical = {an == bn}; "
+                     f"negatives differing = {len(an ^ bn)}")
     rep.line("  Expected before the F2 fix: the 1:10 set identical, the 1:1 set differing.")
 
 

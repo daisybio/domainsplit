@@ -38,6 +38,7 @@ process BUILD_EXTERNAL_TEST {
         --target ${params.ddi_examples_target} \\
         --pool-factor ${params.ddi_examples_pool_factor} \\
         --seed ${params.seed} \\
+        --sources '${params.external_test_sources}' \\
         --dropped-out external_test_dropped.tsv \\
         --versions versions.yml \\
         --process-name "${task.process}"

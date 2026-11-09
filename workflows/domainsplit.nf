@@ -16,6 +16,7 @@ include { INSERT_EXTERNAL_SOURCES     } from '../modules/local/insert_external_s
 include { PRUNE_UNREPRESENTED_DDIS    } from '../modules/local/prune_unrepresented_ddis/main.nf'
 include { FETCH_STRING_LINKS          } from '../modules/local/fetch_string_links/main.nf'
 include { REPORT_DDI_ATTRITION        } from '../modules/local/report_ddi_attrition/main.nf'
+include { WRITE_RUN_MANIFEST          } from '../modules/local/write_run_manifest/main.nf'
 include { generate_domain_embeddings  } from '../modules/local/domain_embeddings/main.nf'
 include { ENRICH_DDI_DATABASE         } from '../subworkflows/local/enrich_ddi_database/main.nf'
 include { BUILD_EXTERNAL_TEST         } from '../modules/local/build_external_test/main.nf'
@@ -50,8 +51,8 @@ include { SUBSET_DOMAIN_DATA          } from '../subworkflows/external/ppi-split
     high-confidence negative instances -- hence the `_hcni` directories. It needs
     ppi-splitting's comma-separated `negative_sampling_method` fan-out, which the
     pinned submodule has (`parseNegsets` in its main.nf), so both ILP rows produce
-    two negative sets on one positive split and the run yields 5 method
-    directories / 18 split databases.
+    two negative sets on one positive split, `random` produces three, and the
+    run yields 7 method directories / 26 split databases.
 ----------------------------------------------------------------------------*/
 
 // A function, not a script-level `def` variable: those are locals of the script's
@@ -61,7 +62,12 @@ def splitRows() {
         [
             id            : 'random',
             split_method  : 'random',
-            negsets       : ['uniform': 'random'],
+            // `random_ilp`/`random_hcni` share this positive split and the ILP
+            // sampler, so the candidate pool is their only difference: they
+            // separate the HCNI effect from the family-disjoint split effect
+            // (DATASET_AUDIT.md F9). `uniform` stays first so a single-negset
+            // run keeps the naive baseline.
+            negsets       : ['uniform': 'random', 'ilp': 'random_ilp', 'ilp_candidates': 'random_hcni'],
             internal_test : true,
         ],
         [
@@ -169,6 +175,45 @@ def metaOf(row) {
         // itself, and restating it here keeps the two metas identical.
         neg_ilp_lambda_jaccard   : 0,
     ]
+}
+
+// `git` output for the manifest, or a note why there is none: a run launched
+// from a release tarball has no .git, and that must not fail a finished run.
+def gitOut(dir, List args) {
+    try {
+        def proc = (['git', '-C', dir.toString()] + args).execute()
+        proc.waitFor()
+        return proc.exitValue() == 0 ? proc.text.trim() : "unavailable (git exit ${proc.exitValue()})"
+    } catch (Exception e) {
+        return "unavailable (${e.class.simpleName})"
+    }
+}
+
+// Everything the manifest knows on the Groovy side; WRITE_RUN_MANIFEST adds the
+// input hashes, URL headers and per-split counts. Params are stringified except
+// scalars and lists, since a Path or GString has no stable JSON form.
+def jsonScalar(v) {
+    return (v == null || v instanceof Number || v instanceof Boolean) ? v : v.toString()
+}
+
+def manifestBase(uniprot_dats) {
+    def submodule = "${projectDir}/subworkflows/external/ppi-splitting"
+    def urls = params.findAll { k, v -> k.toString().startsWith('url_') && v }
+        .collectEntries { k, v -> [(k.toString()): v.toString()] }
+    uniprot_dats.eachWithIndex { u, i -> urls["uniprot_dat_" + i] = u.toString() }
+    return groovy.json.JsonOutput.toJson([
+        params        : params.collectEntries { k, v -> [(k.toString()): v instanceof Collection ? v.collect { x -> jsonScalar(x) } : jsonScalar(v)] },
+        urls          : urls,
+        domainsplit   : [commit: gitOut(projectDir, ['rev-parse', 'HEAD']),
+                         // Empty when the tracked tree is clean; a moved submodule pin shows here too.
+                         modified: gitOut(projectDir, ['status', '--porcelain', '--untracked-files=no']),
+                         revision: workflow.revision],
+        ppi_splitting : [commit: gitOut(submodule, ['rev-parse', 'HEAD'])],
+        nextflow      : [version: nextflow.version.toString(), session_id: workflow.sessionId.toString(),
+                         run_name: workflow.runName, start: workflow.start.toString(),
+                         profile: workflow.profile, container_engine: workflow.containerEngine],
+        split_rows    : splitRows().collect { row -> row + [active_negsets: activeNegsets(row)] },
+    ])
 }
 
 /*
@@ -610,6 +655,14 @@ Use all_species_reviewed or human_any_review_status.""")
         channel.fromList(subset_targets).combine(enriched_db)
     )
 
+    WRITE_RUN_MANIFEST(
+        channel.of(manifestBase(uniprot_dats)).collectFile(name: 'manifest_base.json'),
+        enriched_db,
+        file(params.hippie_tsv, checkIfExists: true),
+        file(params.ppidm_tsv, checkIfExists: true),
+        file(params.negative_ppi_parquet, checkIfExists: true),
+    )
+
     //
     // Collate and save software versions
     //
@@ -630,6 +683,7 @@ Use all_species_reviewed or human_any_review_status.""")
         ENRICH_DDI_DATABASE.out.versions,
         BUILD_EXTERNAL_TEST.out.versions,
         SUBSET_SPLIT_DB.out.versions,
+        WRITE_RUN_MANIFEST.out.versions,
     )
 
     softwareVersionsToYAML(ch_versions)
