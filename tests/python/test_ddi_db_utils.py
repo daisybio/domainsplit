@@ -29,6 +29,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from ddi_db_utils import (  # noqa: E402
     ACTION_DELETED,
     ACTION_DROPPED,
+    ACTION_PROTECTED,
     canonical_pair,
     count_source,
     ensure_domains,
@@ -65,7 +66,7 @@ def test_insert_into_empty():
         conn.close()
 
 
-def test_protected_source_wins_silently():
+def test_protected_source_wins_and_reports_a_contradiction():
     with tempfile.TemporaryDirectory() as tmp:
         conn = _conn(tmp)
         _seed_protected(conn, [("PF00001", "PF00002")])
@@ -80,8 +81,13 @@ def test_protected_source_wins_silently():
         conn.commit()
 
         assert stats["dropped_protected"] == 1
-        assert stats["conflict_pairs"] == 0, "a protected pair is not a conflict"
-        assert conflicts == [], "protected drops are silent by design"
+        assert stats["conflict_pairs"] == 0, "a protected pair is not an external conflict"
+        # The agreeing PPIDM row leaves no trace; the contradicting negatome row is
+        # reported, so label noise on a protected pair can be counted.
+        assert stats["protected_label_conflicts"] == 1
+        assert conflicts == [
+            ("PF00001", "PF00002", "negatome", 1, ACTION_PROTECTED),
+        ], conflicts
         assert ddi_rows(conn) == {("PF00001", "PF00002"): (0, "3did")}
         conn.close()
 
@@ -219,9 +225,14 @@ def test_canonical_pair_is_numeric():
     assert canonical_pair("PF00002", "PF00010") == ("PF00002", "PF00010")
 
 
+def test_canonical_pair_is_order_independent_on_a_digit_tie():
+    """Two accessions with the same number must still order one way only."""
+    assert canonical_pair("PF00001", "PB00001") == canonical_pair("PB00001", "PF00001")
+
+
 if __name__ == "__main__":
     test_insert_into_empty()
-    test_protected_source_wins_silently()
+    test_protected_source_wins_and_reports_a_contradiction()
     test_external_sources_merge_on_agreement()
     test_merge_appends_to_existing_external_row()
     test_label_conflict_within_one_batch_drops_the_pair()
@@ -229,4 +240,5 @@ if __name__ == "__main__":
     test_conflict_is_not_resurrected_by_a_third_source()
     test_count_source_matches_whole_tokens_only()
     test_canonical_pair_is_numeric()
+    test_canonical_pair_is_order_independent_on_a_digit_tie()
     print("OK: ddi_db_utils merge/drop rules hold")

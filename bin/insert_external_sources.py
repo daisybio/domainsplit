@@ -5,8 +5,9 @@ Consumes the normalized TSVs written by the ``PARSE_*`` modules and applies the
 merge/drop rules in ``ddi_db_utils.merge_external_ddis``:
 
   * a pair already held by a protected source (``3did``, ``sampled_negative``)
-    is dropped silently -- that is what makes the external test set strictly
-    unseen;
+    is dropped -- that is what makes the external test set strictly unseen. An
+    agreeing label leaves no trace; a contradicting one is reported as
+    ``dropped_protected_label_conflict``;
   * external sources agreeing on ``negative`` merge into one row whose ``source``
     is their comma-joined list;
   * external sources disagreeing on ``negative`` drop the pair entirely, and any
@@ -62,7 +63,7 @@ def main():
         writer.writerows(conflicts)
 
     for key in ("pairs_offered", "inserted", "merged", "dropped_protected",
-                "conflict_pairs", "sources_dropped"):
+                "protected_label_conflicts", "conflict_pairs", "sources_dropped"):
         print(f"[external] {key} = {stats[key]}", flush=True)
     for source in sorted({row[3] for row in rows}):
         print(f"[external] n_ddis_source_{source} = {count_source(conn, source)}",

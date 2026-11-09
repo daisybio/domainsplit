@@ -19,7 +19,7 @@ subgroup would be dead weight):
 `instance_id` is whatever the FASTA header says, and ppi-splitting's
 `sequences.fasta` is already keyed `{family}_{accession}_{start}_{end}`
 (`fetch_domains.py`), so nothing here reconstructs a key.
-EXPORT_DOMAIN_EMBEDDINGS re-keys these chunks to `{domain_id}/{instance_id}`.
+EXPORT_DOMAIN_EMBEDDINGS re-keys these chunks to `{pfam_id}/{instance_id}`.
 
 Pooling is a masked mean, and the two model families deliberately differ in what
 the mask covers:
@@ -35,6 +35,12 @@ Performance (all inherited unchanged from the ESM-only version):
   - Batched forward; bf16 autocast around it (autocast, NOT `model.bfloat16()`,
     since some ESM3 sub-modules are not bf16-safe).
   - Length bucketing: sort all records by length, batch contiguous groups.
+  - Padding must never change a vector, so a domain's embedding cannot depend on
+    which other domains share its batch. ESMC pads with the tokenizer's
+    `<pad>` (its forward masks `tokens != pad`; padding with 0 -- `<cls>` --
+    left every pad position attended). ESM3 runs at batch size 1: its `logits`
+    path calls `forward(sequence_id=None)`, which masks nothing whatever the pad
+    token, so any batch > 1 leaked padding into every shorter sequence.
   - On torch.OutOfMemoryError: halve the batch size and retry the same group;
     at batch size 1 the record is skipped.
   - `--max-len` drops the long-tail quadratic-attention sequences entirely.
@@ -49,6 +55,11 @@ import re
 import sys
 
 MODELS = ("esm3", "esmc", "prott5")
+
+#: Exit status for "--require-gpu but no GPU visible". Not 1: conf/modules.config
+#: retries exit 1 (a broken weight download), and a missing GPU does not appear
+#: on a retry -- it only burned two more attempts per task.
+NO_GPU_EXIT = 3
 
 # ---------------------------------------------------------------------------
 # Torch-free helpers. Deliberately importable without torch, h5py or any model
@@ -74,6 +85,15 @@ def real_token_lengths(mask_sums) -> list:
     Clamped at 1 so an empty sequence cannot produce a zero divisor.
     """
     return [max(int(total) - 1, 1) for total in mask_sums]
+
+
+def effective_batch_size(model: str, requested: int) -> int:
+    """The batch size `model` can run at without padding changing its output.
+
+    ESM3's `logits` never masks padding (see the module docstring), so a batch of
+    one -- which `_stack_batch` does not pad at all -- is the only exact one.
+    """
+    return 1 if model == "esm3" else requested
 
 
 def masked_mean(emb, lengths):
@@ -204,8 +224,20 @@ def _move_batch_to_device(bt, device):
     return bt
 
 
-def _stack_batch(tensors, device):
-    """Stack a list of ESMProteinTensor into a _BatchedESMProteinTensor on `device`."""
+def _pad_token_id(client):
+    """The sequence tokenizer's `<pad>` id: ESMC has `.tokenizer`, ESM3 `.tokenizers.sequence`."""
+    tokenizer = getattr(client, "tokenizer", None)
+    if tokenizer is None:
+        tokenizer = client.tokenizers.sequence
+    return tokenizer.pad_token_id
+
+
+def _stack_batch(tensors, device, pad_id):
+    """Stack a list of ESMProteinTensor into a _BatchedESMProteinTensor on `device`.
+
+    `pad_id` must be the model tokenizer's `<pad>`: ESMC derives its attention
+    mask from `tokens != pad_token_id`, so any other value is attended to.
+    """
     import esm.sdk.api  # noqa: F401  prime to avoid circular import in esm 3.1.x
     from esm.utils.sampling import _BatchedESMProteinTensor
     import torch
@@ -213,7 +245,6 @@ def _stack_batch(tensors, device):
         bt = _BatchedESMProteinTensor.from_protein_tensor(tensors[0])
         return _move_batch_to_device(bt, device)
     max_len = max(t.sequence.shape[0] for t in tensors)
-    pad_id = 0
     padded = torch.full(
         (len(tensors), max_len), pad_id,
         dtype=tensors[0].sequence.dtype, device=device,
@@ -275,7 +306,7 @@ def _process_esm_batch(client, seqs, ids, out_h5, device):
     from esm.sdk.api import LogitsConfig
 
     tensors = [_encode_one(client, s) for s in seqs]
-    batched = _stack_batch(tensors, device)
+    batched = _stack_batch(tensors, device, _pad_token_id(client))
     # Per-item tokenized length, BOS+seq+EOS -- see the docstring for why the
     # terminal tokens stay in the ESM mean.
     lengths = [int(t.sequence.shape[0]) for t in tensors]
@@ -443,7 +474,13 @@ def main() -> int:
     os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
     device = _resolve_device(args.require_gpu)
     if device is None:
-        return 1
+        return NO_GPU_EXIT
+
+    batch_size = effective_batch_size(args.model, args.batch_size)
+    if batch_size != args.batch_size:
+        print(f"{args.model}: --batch-size {args.batch_size} -> {batch_size}; ESM3's logits path "
+              "does not mask padding, so only unpadded single-sequence batches are exact",
+              flush=True)
 
     records = _load_records(args.input_fasta, args.max_len)
     print(f"loaded {len(records)} records from {args.input_fasta}", flush=True)
@@ -468,7 +505,7 @@ def main() -> int:
             client = _load_prott5(args.prott5_model, device)
             process = lambda seqs, ids: _process_prott5_batch(client, seqs, ids, out_h5, device)  # noqa: E731
 
-        _run_batches(records, args.batch_size, process)
+        _run_batches(records, batch_size, process)
 
         del client, process
         gc.collect()

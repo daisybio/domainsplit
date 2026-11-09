@@ -97,6 +97,14 @@
                     "default": "12.0",
                     "fa_icon": "fas fa-tag"
                 },
+                "string_min_score": {
+                    "type": "number",
+                    "description": "Minimum STRING combined_score for an edge to enter protein_protein_interaction. 0 keeps every edge (the historical behaviour); a links file starts at STRING's own floor of 150 and aggregates every channel, text-mining and predicted included. STRING's published cutoffs are 400 (medium) and 700 (high).",
+                    "default": 0.0,
+                    "minimum": 0,
+                    "maximum": 1000,
+                    "fa_icon": "fas fa-filter"
+                },
                 "string_min_proteins_per_taxon": {
                     "type": "integer",
                     "description": "Skip a taxon contributing fewer than this many proteins, so one stray protein does not cost a 50 MB STRING download. 1 fetches for every taxon present.",
@@ -259,8 +267,8 @@
                 },
                 "embedding_batch_size_esm3": {
                     "type": "integer",
-                    "description": "Initial batch size for esm3 domain inference. Halved in-process on torch.OutOfMemoryError and retried.",
-                    "default": 32,
+                    "description": "Batch size for esm3 domain inference. Forced to 1 in-process: ESM3's logits path masks no padding, so a larger batch would make a domain's embedding depend on its batch-mates.",
+                    "default": 1,
                     "minimum": 1,
                     "fa_icon": "fas fa-layer-group"
                 },

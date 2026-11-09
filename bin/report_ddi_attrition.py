@@ -37,9 +37,11 @@ Columns, left to right in the order a DDI travels:
 ``surviving``
     DDI rows in the published master.
 ``conflict``
-    Contributions dropped or deleted by the external-source label-conflict rule
-    (``source_conflicts.tsv``).  Not a subset of any other column: these pairs
-    never entered the database.
+    Contributions dropped or deleted by a label conflict (``source_conflicts.tsv``):
+    external sources disagreeing with each other, or an external label
+    contradicting the protected row that owns the pair
+    (``dropped_protected_label_conflict``).  Per source it counts contributions;
+    on the ``ALL_SOURCES`` row it counts distinct pairs.
 """
 
 import argparse
@@ -296,7 +298,9 @@ def build_rows(counts):
         {
             "source": TOTAL_ROW,
             # A row sum, not a distinct count: one pair offered by two sources is
-            # two contributions. Every other column on this row is distinct DDIs.
+            # two contributions. Every other column on this row is distinct pairs
+            # -- `conflict` too, although source_conflicts.tsv has one line per
+            # (pair, source).
             "offered": counts["offered_rows"] or NA,
             "in_db": counts["pruned_rows"] + counts["surviving_rows"],
             "to_splitting": counts["to_splitting"],
@@ -328,7 +332,9 @@ def main():
     pruned, pruned_rows = count_tokens(read_tsv_rows(args.pruned_ddis))
     conflict, conflict_rows = (Counter(), 0)
     if args.conflicts:
-        conflict, conflict_rows = count_tokens(read_tsv_rows(args.conflicts))
+        conflict_lines = list(read_tsv_rows(args.conflicts))
+        conflict, _n_lines = count_tokens(conflict_lines)
+        conflict_rows = len({(r["pfam_a"], r["pfam_b"]) for r in conflict_lines})
 
     offered = offered_counts(args.external_ddis, args.offered_counts)
     offered_rows = sum(offered.values())

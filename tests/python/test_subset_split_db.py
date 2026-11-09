@@ -137,6 +137,22 @@ def test_subset_to_one_split():
         assert membership == [("minimal_leakage", "train")], membership
 
 
+def test_empty_split_is_fatal():
+    """A split with no membership rows is a name mismatch, not an empty result."""
+    with tempfile.TemporaryDirectory() as tmp:
+        master = os.path.join(tmp, "master.sqlite3")
+        build_db(master)
+        done = subprocess.run(
+            [sys.executable, SUBSET, "--source", master,
+             "--out", os.path.join(tmp, "out.sqlite3"),
+             "--method", "minimal_leakage", "--split", "test_balanced",
+             "--versions", os.path.join(tmp, "versions.yml"), "--process-name", "TEST"],
+            env=ENV, capture_output=True, text=True,
+        )
+        assert done.returncode != 0
+        assert "minimal_leakage/train" in done.stderr, done.stderr
+
+
 def test_unknown_table_is_refused():
     """A table with no reachability rule must fail, not be copied whole.
 
@@ -165,5 +181,6 @@ def test_unknown_table_is_refused():
 
 if __name__ == "__main__":
     test_subset_to_one_split()
+    test_empty_split_is_fatal()
     test_unknown_table_is_refused()
     print("OK: subsetting keeps one split and omits everything else")

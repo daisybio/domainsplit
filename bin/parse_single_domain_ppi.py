@@ -41,11 +41,6 @@ def parse_args():
     return p.parse_args()
 
 
-#: Where the accession columns sit in HIPPIE-current.txt, used only if a header is
-#: present but does not name them explicitly.
-DEFAULT_ACCESSION_COLUMNS = (0, 3, 6)
-
-
 def detect_layout(first_line):
     """``(col_a, col_b, col_score)`` from HIPPIE's header. Raises if it has none.
 
@@ -65,9 +60,16 @@ def detect_layout(first_line):
         )
     a = [i for i, c in enumerate(cols) if c.startswith("uniprot_accession") and c.endswith("_a")]
     b = [i for i, c in enumerate(cols) if c.startswith("uniprot_accession") and c.endswith("_b")]
+    # No positional fallback: on a header that names `score` but no accession
+    # column, fixed offsets point at entrez ids (or at the score itself), nothing
+    # resolves, and the step reports zero DDIs with exit 0.
     if not a or not b:
-        d_a, d_b, _ = DEFAULT_ACCESSION_COLUMNS
-        a, b = a or [d_a], b or [d_b]
+        missing = [n for n, found in (("uniprot_accession_A", a), ("uniprot_accession_B", b)) if not found]
+        raise SystemExit(
+            f"ERROR: the HIPPIE header names no {' / '.join(missing)} column "
+            f"(columns: {', '.join(cols)}). This step reads interactors by UniProt "
+            "accession only; supply HIPPIE-current.txt."
+        )
     return a[0], b[0], cols.index("score")
 
 

@@ -133,7 +133,10 @@ def run(tmp):
     write_tsv(
         conflicts,
         ["pfam_a", "pfam_b", "source", "negative", "action"],
-        [("PF00016", "PF00017", "negatome", 1, "dropped_label_conflict")],
+        # One dropped pair, two contributions: the per-source column counts each,
+        # ALL_SOURCES counts the pair once.
+        [("PF00016", "PF00017", "negatome", 1, "dropped_label_conflict"),
+         ("PF00016", "PF00017", "single_domain_ppi", 0, "dropped_label_conflict")],
     )
 
     counts = os.path.join(tmp, "insert_3did_counts.tsv")
@@ -217,7 +220,8 @@ def test_report():
     assert total["pruned"] == "5"
     assert total["in_db"] == "9"
     assert total["to_splitting"] == "1"
-    assert total["conflict"] == "1"
+    assert total["conflict"] == "1", "two conflict lines over one pair are one pair"
+    assert rows["single_domain_ppi"]["conflict"] == "1"
     assert sum(int(r["surviving"]) for s, r in rows.items() if s != "ALL_SOURCES") > 4
 
 

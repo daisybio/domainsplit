@@ -20,34 +20,41 @@ built by the calling subworkflow -- which is also where the negative-set ->
 method-directory mapping (``ilp`` -> ``minimal_leakage``, ``ilp_candidates`` ->
 ``minimal_leakage_hcni``, ...) lives.
 
-``val`` is renamed to ``validation`` here, at the ingest boundary; ppi-splitting
-keeps ``val`` internally.
+The split names arriving here are already the *published* ones
+(``validation``, ``test_matched_1_1``, ...): ``publishedSplit()`` in
+workflows/domainsplit.nf renames them, because the 1:1 test set's name depends on
+the negative set's sampler and only the workflow knows which negative set
+produced a CSV.  A raw upstream label reaching this module is a wiring error and
+is rejected rather than stored under a name no split database selects.
 """
 
 import csv
 
-#: ppi-splitting's split label -> the name domainsplit publishes it under.
-SPLIT_RENAME = {"val": "validation"}
+#: ppi-splitting's own split labels.  ``publishedSplit()`` in
+#: workflows/domainsplit.nf renames every one of them before a spec is built, so
+#: seeing one here means the rename was bypassed.
+UPSTREAM_LABELS = frozenset({"val", "test_balanced", "test_realistic"})
 
 FAMILY_COLUMNS = ["protein1", "protein2", "label"]
 INSTANCE_COLUMNS = ["protein1", "protein2", "label", "family1", "family2"]
 
 
-def normalise_split(name):
-    """``val`` -> ``validation``; every other label passes through unchanged."""
-    return SPLIT_RENAME.get(name, name)
-
-
 def parse_split_spec(spec):
-    """``"minimal_leakage:val:/path/to/val.csv"`` -> ``("minimal_leakage", "validation", path)``.
+    """``"minimal_leakage:validation:/path/val.csv"`` -> ``("minimal_leakage", "validation", path)``.
 
     The path may itself contain colons, so only the first two are separators.
+    The split must be a published name; an upstream label is rejected.
     """
     parts = spec.split(":", 2)
     if len(parts) != 3 or not all(parts):
         raise ValueError(f"--split expects method:split:path, got {spec!r}")
     method, split, path = parts
-    return method, normalise_split(split), path
+    if split in UPSTREAM_LABELS:
+        raise ValueError(
+            f"--split {spec!r} carries ppi-splitting's label {split!r}, not a published split "
+            "name; publishedSplit() in workflows/domainsplit.nf must rename it first"
+        )
+    return method, split, path
 
 
 def _read_rows(path, required):

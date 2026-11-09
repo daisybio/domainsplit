@@ -19,6 +19,7 @@ Run directly (`python3 tests/python/test_fetch_string_links.py`) or via pytest.
 """
 
 import gzip
+from collections import Counter
 import io
 import os
 import sqlite3
@@ -75,6 +76,28 @@ class FakeResponse:
         yield self._payload
 
 
+class FlakySession:
+    """Fails each taxon's first ``failures`` requests with a transient error."""
+
+    def __init__(self, failures, status_code=None):
+        self.inner = FakeSession()
+        self.headers = self.inner.headers
+        self.requested = self.inner.requested
+        self.failures = failures
+        self.status_code = status_code
+        self.seen = Counter()
+
+    def get(self, url, **kwargs):
+        taxid = os.path.basename(url).split(".")[0]
+        self.seen[taxid] += 1
+        if self.seen[taxid] <= self.failures:
+            self.requested.append(url)
+            if self.status_code:
+                return FakeResponse(self.status_code)
+            raise fsl.requests.ConnectionError("connection reset")
+        return self.inner.get(url, **kwargs)
+
+
 class FakeSession:
     """Serves LINKS; 404s for anything else. Records what was asked for."""
 
@@ -124,7 +147,7 @@ def run(tmp, argv_extra=(), session=None, monkeypatch=None, proteins=PROTEINS):
     monkeypatch.setattr(
         sys, "argv",
         ["fetch_string_links.py", "--db", db, "--string-map", mapping,
-         "--out", out, "--report", report, "--jobs", "1",
+         "--out", out, "--report", report, "--jobs", "1", "--retry-wait", "0",
          "--versions", os.path.join(tmp, "versions.yml"),
          "--process-name", "TEST:FETCH_STRING_LINKS", *argv_extra],
     )
@@ -161,6 +184,25 @@ def test_a_missing_taxon_is_reported_not_fatal():
     assert report["7227"]["edges_kept"] == "0"
     # The other two still contributed.
     assert len(links) == 3
+
+
+def test_a_transient_failure_is_retried(monkeypatch, tmp_path):
+    """A dropped connection is retried, and the taxon still contributes."""
+    session, links, report = run(str(tmp_path), session=FlakySession(failures=2),
+                                 monkeypatch=monkeypatch)
+    assert report["9606"]["status"] == "downloaded"
+    assert len(links) == 3
+
+
+def test_a_persistent_non_404_failure_is_fatal(monkeypatch, tmp_path):
+    """A 5xx that outlasts the retries is not a coverage gap: fail, don't drop the species."""
+    with pytest.raises(SystemExit) as excinfo:
+        run(str(tmp_path), argv_extra=["--retries", "2"],
+            session=FlakySession(failures=99, status_code=503), monkeypatch=monkeypatch)
+    assert "failed to download" in str(excinfo.value)
+    # The per-taxon report is still written, so the cause can be read afterwards.
+    with open(os.path.join(str(tmp_path), "string_taxa_report.tsv")) as fh:
+        assert "error:HTTPError" in fh.read()
 
 
 def test_every_taxon_missing_is_fatal():

@@ -23,7 +23,11 @@ tens of GB of which a fraction of a percent survives the join. What
 A 404 for a taxon is counted and warned about, never fatal -- STRING does not
 cover every NCBI taxid UniProt does. Running out of *every* taxon is fatal,
 because a silently empty PPI table is the failure this whole path exists to
-avoid.
+avoid. Any *other* failure -- a timeout, a dropped connection, a 5xx -- says
+nothing about STRING's coverage, so it is retried with backoff and, if it
+persists, fatal: treated like a 404 it dropped a whole species' network (the
+human one, on an unlucky run) behind a green run, and differently on every
+re-run.
 
 Also reports the proteins that will never receive an interaction: UniProt does
 not cross-reference STRING for unreviewed entries (measured on
@@ -39,6 +43,7 @@ import os
 import sqlite3
 import sys
 import tempfile
+import time
 from collections import Counter, defaultdict
 
 import requests
@@ -62,6 +67,10 @@ def parse_args():
     p.add_argument("--out", required=True, help="filtered links file to write (.txt.gz)")
     p.add_argument("--report", required=True, help="per-taxon TSV to write")
     p.add_argument("--release", default="12.0", help="STRING release in the URL template")
+    p.add_argument("--retries", type=int, default=4,
+                   help="attempts per taxon for a non-404 download failure before the run fails")
+    p.add_argument("--retry-wait", type=float, default=10.0,
+                   help="seconds before the first retry; doubled after each further failure")
     p.add_argument(
         "--min-proteins",
         type=int,
@@ -106,11 +115,26 @@ def load_string_map(path, proteins):
     return string_to_uniprot, per_taxon
 
 
-def download(taxid, release, cache_dir, session):
+def download(taxid, release, cache_dir, session, retries=4, retry_wait=10.0):
     """``(path, status)``. ``path`` is None unless the file is on disk.
 
-    ``status`` is ``cached``, ``downloaded``, ``404`` or ``error:<reason>``.
+    ``status`` is ``cached``, ``downloaded``, ``404`` or ``error:<reason>``. A 404
+    is final at once; any other failure is retried up to ``retries`` attempts in
+    total, waiting ``retry_wait`` seconds and doubling, before it is reported.
     """
+    status = None
+    for attempt in range(max(retries, 1)):
+        if attempt:
+            time.sleep(retry_wait * 2 ** (attempt - 1))
+        path, status = _download_once(taxid, release, cache_dir, session)
+        if not status.startswith("error:"):
+            return path, status
+        print(f"[string] {taxid}: attempt {attempt + 1} failed ({status})", flush=True)
+    return None, status
+
+
+def _download_once(taxid, release, cache_dir, session):
+    """One attempt of :func:`download`."""
     name = f"{taxid}.protein.links.v{release}.txt.gz"
     cached = os.path.join(cache_dir, name) if cache_dir else None
     if cached and os.path.exists(cached) and os.path.getsize(cached) > 0:
@@ -230,7 +254,11 @@ def main():
     session = requests.Session()
     session.headers["User-Agent"] = "domainsplit-pipeline"
     with concurrent.futures.ThreadPoolExecutor(max_workers=max(args.jobs, 1)) as pool:
-        results = list(pool.map(lambda t: (t,) + download(t, args.release, cache_dir, session), taxa))
+        results = list(pool.map(
+            lambda t: (t,) + download(t, args.release, cache_dir, session,
+                                      retries=args.retries, retry_wait=args.retry_wait),
+            taxa,
+        ))
 
     rows, totals = [], Counter()
     with gzip.open(args.out, "wt", newline="") as out:
@@ -270,18 +298,24 @@ def main():
         for row in rows:
             fh.write("\t".join(str(row[c]) for c in REPORT_COLUMNS) + "\n")
 
-    missing = totals["404"] + sum(n for s, n in totals.items() if s.startswith("error:"))
+    failed = sorted(taxid for taxid, _path, status in results if status.startswith("error:"))
     print(
         f"[string] taxa: {totals['downloaded']} downloaded, {totals['cached']} from cache, "
-        f"{totals['404']} with no STRING file (404), "
-        f"{sum(n for s, n in totals.items() if s.startswith('error:'))} failed; "
+        f"{totals['404']} with no STRING file (404), {len(failed)} failed; "
         f"edges: {totals['edges_read']} read, {totals['edges_kept']} kept",
         flush=True,
     )
-    if missing:
+    if failed:
+        raise SystemExit(
+            f"ERROR: {len(failed)} taxa failed to download after {args.retries} attempts "
+            f"each ({', '.join(failed[:20])}). Unlike a 404 this is not a gap in STRING's "
+            "coverage, and dropping those species' networks would change the PPI table "
+            "from run to run; see string_taxa_report.tsv for the error per taxon."
+        )
+    if totals["404"]:
         print(
-            f"[string] WARNING: {missing} of {len(taxa)} taxa contributed no links file; "
-            "their proteins get no interactions (see string_taxa_report.tsv)",
+            f"[string] WARNING: {totals['404']} of {len(taxa)} taxa have no STRING links "
+            "file (404); their proteins get no interactions (see string_taxa_report.tsv)",
             flush=True,
         )
     if totals["downloaded"] + totals["cached"] == 0:

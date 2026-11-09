@@ -21,7 +21,15 @@ import sys
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.join(REPO, "bin"))
 
-from run_embeddings import prepare_prott5_sequence, real_token_lengths  # noqa: E402
+import pytest  # noqa: E402
+
+from run_embeddings import (  # noqa: E402
+    _pad_token_id,
+    _stack_batch,
+    effective_batch_size,
+    prepare_prott5_sequence,
+    real_token_lengths,
+)
 
 
 def test_rare_residues_become_x():
@@ -73,7 +81,53 @@ def test_esm_and_prott5_pool_different_spans_on_purpose():
     assert real_token_lengths([residues + 1]) != [esm_tokenized_length]
 
 
+def test_esm3_never_batches():
+    """ESM3's logits path masks no padding, so only an unpadded batch of one is exact."""
+    assert effective_batch_size("esm3", 32) == 1
+    assert effective_batch_size("esmc", 32) == 32
+    assert effective_batch_size("prott5", 16) == 16
+
+
+def test_pad_token_comes_from_either_model_family():
+    """ESMC exposes `.tokenizer`, ESM3 `.tokenizers.sequence` -- both must resolve."""
+    class Tok:
+        pad_token_id = 1
+
+    class Esmc:
+        tokenizer = Tok()
+
+    class Esm3:
+        class tokenizers:
+            sequence = Tok()
+
+    assert _pad_token_id(Esmc()) == 1
+    assert _pad_token_id(Esm3()) == 1
+
+
+def test_esm_batches_pad_with_the_tokenizer_pad_token():
+    """Padding with 0 (`<cls>`) left every pad position attended in ESMC.
+
+    Needs torch and the esm package (no weights); skipped where they are absent.
+    """
+    torch = pytest.importorskip("torch")
+    pytest.importorskip("esm")
+    from esm.sdk.api import ESMProteinTensor
+    from esm.tokenization import EsmSequenceTokenizer
+
+    tok = EsmSequenceTokenizer()
+    assert tok.pad_token_id != tok.cls_token_id
+    short = ESMProteinTensor(sequence=torch.tensor(tok.encode("MKV")))
+    long = ESMProteinTensor(sequence=torch.tensor(tok.encode("MKVLAAG")))
+    batched = _stack_batch([short, long], torch.device("cpu"), tok.pad_token_id)
+    pad_region = batched.sequence[0, short.sequence.shape[0]:]
+    assert pad_region.numel() > 0
+    assert (pad_region == tok.pad_token_id).all(), batched.sequence
+
+
 if __name__ == "__main__":
+    test_esm3_never_batches()
+    test_pad_token_comes_from_either_model_family()
+    test_esm_batches_pad_with_the_tokenizer_pad_token()
     test_rare_residues_become_x()
     test_residues_are_whitespace_separated()
     test_eos_is_excluded_from_the_pooled_mean()

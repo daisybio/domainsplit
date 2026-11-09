@@ -24,23 +24,30 @@ NEGATOME_LINES = [
     "PF00003 PF00004 extra",  # trailing columns ignored
     "PF00005",               # too short -> skipped
     "",                      # blank -> skipped
+    "PF00006.12 PF00007.3",  # version suffixes stripped
+    "<!DOCTYPE html>",       # not two Pfam accessions -> skipped
 ]
+
+
+def run_parser(tmp, lines, check=True):
+    negatome = os.path.join(tmp, "combined_pfam.txt")
+    with open(negatome, "w") as fh:
+        fh.write("\n".join(lines) + "\n")
+    out = os.path.join(tmp, "negatome_ddis.tsv")
+    env = dict(os.environ, PYTHONPATH=BIN + os.pathsep + os.environ.get("PYTHONPATH", ""))
+    proc = subprocess.run(
+        [sys.executable, PARSER, "--negatome", negatome, "--out", out,
+         "--versions", os.path.join(tmp, "versions.yml"),
+         "--process-name", "TEST:PARSE_NEGATOME"],
+        check=check, env=env, capture_output=True, text=True,
+    )
+    return proc, out
 
 
 def test_parse_negatome():
     with tempfile.TemporaryDirectory() as tmp:
-        negatome = os.path.join(tmp, "combined_pfam.txt")
-        with open(negatome, "w") as fh:
-            fh.write("\n".join(NEGATOME_LINES) + "\n")
-        out = os.path.join(tmp, "negatome_ddis.tsv")
-
-        env = dict(os.environ, PYTHONPATH=BIN + os.pathsep + os.environ.get("PYTHONPATH", ""))
-        subprocess.run(
-            [sys.executable, PARSER, "--negatome", negatome, "--out", out,
-             "--versions", os.path.join(tmp, "versions.yml"),
-             "--process-name", "TEST:PARSE_NEGATOME"],
-            check=True, env=env,
-        )
+        proc, out = run_parser(tmp, NEGATOME_LINES)
+        assert "skipped 2 lines" in proc.stdout, proc.stdout
 
         with open(out) as fh:
             rows = [
@@ -51,9 +58,21 @@ def test_parse_negatome():
         assert rows == [
             ("PF00001", "PF00002", 1, "negatome"),
             ("PF00003", "PF00004", 1, "negatome"),
+            ("PF00006", "PF00007", 1, "negatome"),
         ], rows
+
+
+def test_an_html_error_page_is_fatal():
+    """An error page served with HTTP 200 must not become a green, Negatome-less run."""
+    page = ["<!DOCTYPE html>", "<html><head><title>404 Not Found</title></head>",
+            "<h1>Not Found</h1>", "</html>"]
+    with tempfile.TemporaryDirectory() as tmp:
+        proc, _out = run_parser(tmp, page, check=False)
+    assert proc.returncode != 0
+    assert "holds no Pfam pair" in proc.stderr, proc.stderr
 
 
 if __name__ == "__main__":
     test_parse_negatome()
+    test_an_html_error_page_is_fatal()
     print("OK: parse_negatome invariants hold")

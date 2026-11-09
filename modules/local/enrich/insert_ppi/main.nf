@@ -19,6 +19,7 @@ process INSERT_PPI {
         --db-in ${domainsplit_db_in} \\
         --string-ppi ${string_ppi} \\
         --uniprot-id-mapping ${uniprot_id_mapping} \\
+        --min-score ${params.string_min_score} \\
         --versions versions.yml \\
         --process-name "${task.process}"
     """
