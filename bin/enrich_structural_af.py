@@ -126,6 +126,10 @@ def slice_pair(structure, chain_a: str, start_a: int, end_a: int,
     ca.id, cb.id = "X", "Y"
     ca.id, cb.id = "A", "B"
     try:
+        # PDBIO happily writes an empty slice; a pair needs residues on both sides.
+        for chain, start, end in (("A", start_a, end_a), ("B", start_b, end_b)):
+            if not any(start <= res.id[1] <= end for res in model[chain]):
+                raise ValueError(f"no residues of chain {chain} in {start}-{end}")
         buf = io.StringIO()
         io_obj = PDBIO()
         io_obj.set_structure(structure)

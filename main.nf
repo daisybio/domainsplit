@@ -42,6 +42,10 @@
     included script (the ppi-splitting submodule's own main.nf) is ignored, which
     is why the imported params have to be repeated here. Verified, not assumed.
 
+    This types-only block (config-defined params like `outdir` left out) needs
+    Nextflow >= 26.04: 25.10 treats the block as the only declaration source and
+    rejects `--outdir` as undeclared. Hence manifest.nextflowVersion.
+
     `Float`, not `Double`/`BigDecimal`/`Number`: those reject the String outright
     instead of coercing it. Booleans are `Boolean`.
 

@@ -324,9 +324,12 @@ Use all_species_reviewed or human_any_review_status.""")
     if (tier.endsWith('_any_review_status') && reviewed_only) {
         error("--instance_tier ${tier} asks for an unreviewed stratum, but every resolved --uniprot_dat_urls entry is a Swiss-Prot flat file:\n  ${uniprot_dats.join('\n  ')}\nAn unreviewed stratum that can never fill produces a green run with fewer families and nothing saying why. Add the matching uniprot_trembl_*.dat.gz.")
     }
-    // Not an error: this is how a human+mouse run is expressed.
+    // FETCH_DOMAIN_META (ppi-splitting) derives its taxon filter from the tier names
+    // alone, so an all_species_* tier samples instances from every species whatever
+    // this says, and ingest_instances.py then aborts on the first excluded one --
+    // after the fetch and the ILP. Refuse up front until upstream takes a taxon list.
     if (tier.startsWith('all_species_') && taxa) {
-        log.info "--instance_tier ${tier} with --swissprot_taxon_ids '${taxa}': the universe is deliberately narrowed to those taxa, not every species."
+        error("--instance_tier ${tier} with --swissprot_taxon_ids '${taxa}' is not supported: ppi-splitting's FETCH_DOMAIN_META cannot narrow instance sampling to a taxon list, so instances from other species would be sampled and INGEST_INSTANCES would abort. Drop --swissprot_taxon_ids, or use a human_* tier.")
     }
 
     // The whole derivation on one line of the run log. Four values that must

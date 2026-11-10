@@ -76,7 +76,7 @@
                 "swissprot_taxon_ids": {
                     "type": "string",
                     "description": "Comma-separated NCBI taxon ids kept while parsing the UniProt flat files; an empty string keeps every species. Leave unset: it is derived from instance_tier ('9606' for the human_* tiers, empty for the all_species_* ones).",
-                    "help_text": "Set explicitly only to narrow further, e.g. '9606,10090' together with --instance_tier all_species_reviewed for a human+mouse run. Note that `--swissprot_taxon_ids \"\"` on the command line is parsed by Nextflow as a bare boolean flag and rejected; use an all_species_* tier, or a -params-file.",
+                    "help_text": "A non-empty value together with an all_species_* tier is rejected: ppi-splitting's FETCH_DOMAIN_META derives its taxon filter from the tier alone, so a human+mouse universe cannot be expressed yet. Note that `--swissprot_taxon_ids \"\"` on the command line is parsed by Nextflow as a bare boolean flag and rejected; use an all_species_* tier, or a -params-file.",
                     "fa_icon": "fas fa-filter"
                 },
                 "url_negatome": {

@@ -130,6 +130,22 @@ def test_enrich_slices_in_row_orientation_and_flags_every_row():
         assert b[3]["CA"].coord[1] == 4.0
 
 
+def test_slice_with_an_empty_domain_window_is_rejected():
+    import enrich_structural_af
+    from Bio.PDB.PDBParser import PDBParser
+
+    s = PDBParser(QUIET=True).get_structure("x", io.StringIO(pdb_text([("A", 0.0), ("B", 4.0)])))
+    assert enrich_structural_af.slice_pair(s, "A", 1, 10, "B", 1, 10)  # control
+    for windows in ((50, 60, 50, 60), (1, 10, 50, 60)):
+        try:
+            enrich_structural_af.slice_pair(s, "A", windows[0], windows[1], "B", windows[2], windows[3])
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"empty window {windows} produced a slice")
+    assert [c.id for c in s[0]] == ["A", "B"], "chain ids restored after a rejected slice"
+
+
 def test_scoring_pairs_are_distinct_and_draws_are_seeded():
     import score_ddi
     import utils_struct

@@ -151,11 +151,15 @@ def parse_model(path):
     ESM's parser, so the atom37 layout is by construction the one ESM3's
     structure encoder expects. `is_predicted` reads the B-factor as pLDDT.
     """
+    from esm.utils.structure import protein_chain
     from esm.utils.structure.protein_chain import ProteinChain
 
     with gzip.open(path, "rt") as fh:
         chain = ProteinChain.from_pdb(io.StringIO(fh.read()), chain_id="A", is_predicted=True)
-    return chain.residue_index.tolist(), chain.sequence, chain.atom37_positions, chain.confidence
+    # esm >= 3.4 divides the B-factor by PLDDT_B_FACTOR_SCALE (pLDDT in 0-1); older
+    # esm returns it raw. --min-plddt is on AFDB's 0-100 scale, so undo the division.
+    plddt = chain.confidence * getattr(protein_chain, "PLDDT_B_FACTOR_SCALE", 1.0)
+    return chain.residue_index.tolist(), chain.sequence, chain.atom37_positions, plddt
 
 
 def main() -> int:
