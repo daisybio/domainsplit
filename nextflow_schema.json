@@ -326,7 +326,7 @@
                 "af_metadata": {
                     "type": "string",
                     "format": "path",
-                    "description": "CSV uniprot_id_a,uniprot_id_b,path,source (source: downloaded or inferred) pointing at AF3 complex files. Only read when structure_data_methods is non-empty; pairs without an entry keep has_structure = 0.",
+                    "description": "CSV uniprot_id_a,uniprot_id_b,path,source (source: downloaded or inferred) pointing at AF3 complex files (a relative path is relative to the CSV). Only read when structure_data_methods is non-empty; pairs without an entry keep has_structure = 0.",
                     "default": "/nfs/data/CoBiNet_Masterpraktikum/domainsplit/af_metadata.csv",
                     "fa_icon": "fas fa-file-csv"
                 },

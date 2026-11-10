@@ -79,10 +79,13 @@ def build_meta_index(meta_path: str) -> dict:
     uniprot_id_a), so callers can tell whether their own (a, b) matches the
     file's orientation or is swapped."""
     meta = pd.read_csv(meta_path, sep=",", dtype=str)
+    # A relative path is relative to the CSV's real location: Nextflow stages
+    # the CSV as a symlink, and a fixture cannot know the absolute path.
+    base = os.path.dirname(os.path.realpath(meta_path))
     index = {}
     for row in meta.itertuples(index=False):
         key = frozenset({row.uniprot_id_a, row.uniprot_id_b})
-        index[key] = (row.path, row.uniprot_id_a, row.source)
+        index[key] = (os.path.join(base, row.path), row.uniprot_id_a, row.source)
     return index
 
 

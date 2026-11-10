@@ -82,7 +82,8 @@ def build(tmp):
     meta = os.path.join(tmp, "af_metadata.csv")
     with open(meta, "w") as fh:
         fh.write("uniprot_id_a,uniprot_id_b,path,source\n")
-        fh.write(f"P2,P1,{complex_path},downloaded\n")
+        # Relative to the CSV, as a fixture has to write it.
+        fh.write(f"P2,P1,{os.path.basename(complex_path)},downloaded\n")
     return db, meta, ia, ib, ic
 
 
