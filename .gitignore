@@ -144,6 +144,8 @@ celerybeat.pid
 .env
 .venv
 env/
+# ...but not the pinned image environments every module symlinks to.
+!docker/env/
 venv/
 ENV/
 env.bak/
