@@ -251,9 +251,9 @@
             "properties": {
                 "embedding_models_domainbench": {
                     "type": "string",
-                    "description": "Comma-separated domain-embedding models to run (`esm3`, `esmc`, `prott5`). One GPU task per (model, shard). Set empty to produce no embeddings at all.",
+                    "description": "Comma-separated domain-embedding models to run (`esm3`, `esmc`, `prott5`, `esm3_structure`). One GPU task per (model, shard). `esm3_structure` is opt-in: ESM3 conditioned on AlphaFold DB monomer coordinates, fetched only when it is listed. Set empty to produce no embeddings at all.",
                     "default": "esm3,esmc,prott5",
-                    "pattern": "^$|^(esm3|esmc|prott5)(,(esm3|esmc|prott5))*$",
+                    "pattern": "^$|^(esm3_structure|esm3|esmc|prott5)(,(esm3_structure|esm3|esmc|prott5))*$",
                     "fa_icon": "fas fa-vector-square"
                 },
                 "embedding_shards": {
@@ -290,6 +290,44 @@
                     "default": 32,
                     "minimum": 1,
                     "fa_icon": "fas fa-layer-group"
+                },
+                "embedding_batch_size_esm3_structure": {
+                    "type": "integer",
+                    "description": "Batch size for esm3_structure inference. Forced to 1 in-process, as for esm3.",
+                    "default": 1,
+                    "minimum": 1,
+                    "fa_icon": "fas fa-layer-group"
+                },
+                "afdb_version": {
+                    "type": "integer",
+                    "description": "AlphaFold DB model version fetched for esm3_structure (`AF-<acc>-F1-model_v<version>.pdb`). AFDB serves only its latest version.",
+                    "default": 6,
+                    "minimum": 1,
+                    "fa_icon": "fas fa-code-branch"
+                },
+                "afdb_min_plddt": {
+                    "type": "number",
+                    "description": "Residues of an AFDB model below this pLDDT are left unresolved (NaN) for esm3_structure.",
+                    "default": 70.0,
+                    "minimum": 0,
+                    "maximum": 100,
+                    "fa_icon": "fas fa-filter"
+                },
+                "afdb_max_mismatch_rate": {
+                    "type": "number",
+                    "description": "Drop a protein whose AFDB model disagrees with this run's UniProt sequence on more than this fraction of residues (the model was predicted from an older sequence version).",
+                    "default": 0.02,
+                    "minimum": 0,
+                    "maximum": 1,
+                    "fa_icon": "fas fa-not-equal"
+                },
+                "esm3_structure_min_coverage": {
+                    "type": "number",
+                    "description": "Fraction of a domain's residues that must have resolved coordinates for it to get an esm3_structure embedding; unresolved residues are masked. Below it the domain is absent from that model's H5.",
+                    "default": 0.8,
+                    "minimum": 0,
+                    "maximum": 1,
+                    "fa_icon": "fas fa-percentage"
                 },
                 "embedding_prott5_model": {
                     "type": "string",

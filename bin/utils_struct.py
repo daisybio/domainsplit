@@ -116,7 +116,11 @@ def calculate_rsa_residue_level(domain, chain_id):
     }
 
     rsa_residue = {}
-    for residue in domain.get_residues():
+    # Only the chain SASA was computed for: residue ids carry no chain, so
+    # walking the whole complex let the partner's same-numbered residue
+    # overwrite this chain's entry with the wrong residue type's max SASA.
+    residues = domain[0][chain_id] if chain_id else domain
+    for residue in residues.get_residues():
         resname = residue.get_resname()
         rid = residue.get_id()
         sasa_value = sasa_residue.get(rid, 0)

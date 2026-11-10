@@ -31,6 +31,48 @@
 
 include { SHARD_FASTA } from '../util/main.nf'
 
+// AlphaFold DB monomer coordinates for every parent protein of a domain
+// instance, UniProt-numbered and checked against this run's UniProt sequences
+// (bin/fetch_afdb_structures.py). CPU and network only: the GPU task that reads
+// the H5 makes no network call. Runs only when `esm3_structure` is requested.
+process FETCH_AFDB_STRUCTURES {
+    tag "afdb_v${params.afdb_version}"
+    label 'process_low'
+    label 'error_retry'
+    // The gpu env for ESM's own PDB parser (same atom37 layout ESM3 encodes);
+    // nothing here touches a GPU, and no `process_gpu` label routes it to one.
+    conda "${moduleDir}/environment.yml"
+    container "docker.io/konstantinpelz/domainsplit-gpu:2.0.0"
+
+    input:
+    path domain_sequences
+    path uniprot_sequences
+    // Absolute cache root or '' -- a val for the reason FETCH_STRING_LINKS gives.
+    val cache_dir
+
+    output:
+    path "afdb_structures.h5",         emit: structures
+    path "afdb_structures_report.tsv", emit: report
+    path "versions.yml",               emit: versions
+
+    script:
+    def cache_arg = cache_dir ? "--cache-dir ${cache_dir}" : ''
+    """
+    fetch_afdb_structures.py \\
+        --domain-fasta ${domain_sequences} \\
+        --uniprot-fasta ${uniprot_sequences} \\
+        --output-h5 afdb_structures.h5 \\
+        --report afdb_structures_report.tsv \\
+        --version ${params.afdb_version} \\
+        --min-plddt ${params.afdb_min_plddt} \\
+        --max-mismatch-rate ${params.afdb_max_mismatch_rate} \\
+        --jobs ${task.cpus} \\
+        ${cache_arg} \\
+        --versions versions.yml \\
+        --process-name "${task.process}"
+    """
+}
+
 // One pooled-embedding task per (model, shard).
 process GENERATE_DOMAIN_EMBEDDINGS_CHUNK {
     tag { "${model}:${input_fasta.simpleName}" }
@@ -56,7 +98,9 @@ process GENERATE_DOMAIN_EMBEDDINGS_CHUNK {
     }
 
     input:
-    tuple val(model), path(input_fasta)
+    // `structures` is the AFDB H5 for esm3_structure and `[]` for every other
+    // model, so a new H5 never invalidates the cached esm3/esmc/prott5 tasks.
+    tuple val(model), path(input_fasta), path(structures)
 
     output:
     tuple val(model), path("${input_fasta.simpleName}.${model}.h5"), emit: chunk
@@ -71,6 +115,9 @@ process GENERATE_DOMAIN_EMBEDDINGS_CHUNK {
     def require_gpu = params.embedding_require_gpu.toString().toBoolean() ? '--require-gpu' : ''
     def hf_cache    = params.embedding_hf_cache_dir ?: ''
     def batch_size  = params["embedding_batch_size_${model}"]
+    def structure_args = model == 'esm3_structure'
+        ? "--structures-h5 ${structures} --min-coverage ${params.esm3_structure_min_coverage}"
+        : ''
     """
     if [ -n "${hf_cache}" ]; then
         mkdir -p "${hf_cache}"
@@ -87,6 +134,7 @@ process GENERATE_DOMAIN_EMBEDDINGS_CHUNK {
         --prott5-model "${params.embedding_prott5_model}" \\
         --batch-size ${batch_size} \\
         --max-len ${params.embedding_max_len} \\
+        ${structure_args} \\
         ${require_gpu}
     """
 }
@@ -122,13 +170,15 @@ workflow generate_domain_embeddings {
     take:
     domain_sequences   // ppi-splitting's sequences.fasta, keyed by instance id
     domainsplit_db     // the pruned master; supplies the instance -> Pfam family map
+    uniprot_sequences  // PARSE_SWISSPROT's FASTA: the sequence AFDB models are checked against
+    cache_dir          // absolute cache root or ''
 
     main:
     // Validated here rather than in the schema: nf-schema can check the string's
     // shape but not that a name has a `embedding_batch_size_<model>` param behind
     // it, and an unknown name would otherwise reach the task as a null batch size.
     def models = params.embedding_models_domainbench.toString().tokenize(',')*.trim().findAll { m -> m }
-    def known = ['esm3', 'esmc', 'prott5']
+    def known = ['esm3', 'esmc', 'prott5', 'esm3_structure']
     def unknown = models.findAll { m -> !(m in known) }
     if (unknown) {
         error("--embedding_models_domainbench names unknown model(s) ${unknown.join(', ')} (known: ${known.join(', ')}).")
@@ -151,7 +201,22 @@ workflow generate_domain_embeddings {
             params.embedding_shards,
         ).shards.flatten()
 
-        chunks = GENERATE_DOMAIN_EMBEDDINGS_CHUNK(channel.fromList(models).combine(shards))
+        // Fetched only when its one consumer is enabled.
+        if ('esm3_structure' in models) {
+            FETCH_AFDB_STRUCTURES(domain_sequences, uniprot_sequences, cache_dir)
+            structures  = FETCH_AFDB_STRUCTURES.out.structures
+            ch_versions = FETCH_AFDB_STRUCTURES.out.versions
+        }
+        else {
+            // A placeholder, not `[]`: combine() would splice an empty list away.
+            structures  = channel.value('none')
+            ch_versions = Channel.empty()
+        }
+
+        chunks = GENERATE_DOMAIN_EMBEDDINGS_CHUNK(
+            channel.fromList(models).combine(shards).combine(structures)
+                .map { model, fasta, h5 -> tuple(model, fasta, model == 'esm3_structure' ? h5 : []) }
+        )
 
         // No `size:` on the groupTuple: shard_fasta.py emits min(num_shards,
         // records) shards, so a fixture smaller than `embedding_shards` would hang
@@ -160,7 +225,7 @@ workflow generate_domain_embeddings {
             chunks.chunk.groupTuple().combine(domainsplit_db)
         ).embeddings
 
-        ch_versions = Channel.empty().mix(
+        ch_versions = ch_versions.mix(
             SHARD_FASTA.out.versions,
             GENERATE_DOMAIN_EMBEDDINGS_CHUNK.out.versions,
             EXPORT_DOMAIN_EMBEDDINGS.out.versions,

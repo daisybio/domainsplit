@@ -64,6 +64,11 @@ params {
     embedding_batch_size_esm3: Integer
     embedding_batch_size_esmc: Integer
     embedding_batch_size_prott5: Integer
+    embedding_batch_size_esm3_structure: Integer
+    afdb_version: Integer
+    afdb_min_plddt: Float
+    afdb_max_mismatch_rate: Float
+    esm3_structure_min_coverage: Float
     hippie_min_score: Float
     string_min_score: Float
     split_train_fraction: Float

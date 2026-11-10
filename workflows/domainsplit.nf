@@ -647,6 +647,8 @@ Use all_species_reviewed or human_any_review_status.""")
     generate_domain_embeddings(
         union_sequences,
         domainsplit_db,
+        input_uniprot_sequences,
+        cache_dir,
     )
 
     //

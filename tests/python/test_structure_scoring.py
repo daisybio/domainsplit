@@ -173,7 +173,24 @@ def test_merge_scores_copies_z_to_every_split_row_of_its_method():
         assert votes == [(1, "random", 1, 1)]
 
 
+def test_rsa_normalises_with_the_requested_chains_own_residue_type():
+    from Bio.PDB import PDBParser
+    from utils_struct import calculate_rsa_residue_level
+
+    # Chain B renumbered 1..N_RES as in AF3 complexes, but TRP: before the fix
+    # its residues overwrote chain A's and A was divided by TRP's max SASA.
+    text = pdb_text([("A", 0.0), ("B", 30.0)])
+    text = "\n".join(l.replace(" ALA B", " TRP B") for l in text.splitlines()) + "\n"
+    st = PDBParser(QUIET=True).get_structure("x", io.StringIO(text))
+    rsa = calculate_rsa_residue_level(st, "A")
+    assert len(rsa) == N_RES
+    sasa = {r.get_id(): r.sasa for r in st[0]["A"]}
+    for rid, v in rsa.items():
+        assert abs(v - sasa[rid] / 129.0) < 1e-9, "chain A is ALA: normalise by ALA's 129"
+
+
 if __name__ == "__main__":
+    test_rsa_normalises_with_the_requested_chains_own_residue_type()
     test_enrich_slices_in_row_orientation_and_flags_every_row()
     test_scoring_pairs_are_distinct_and_draws_are_seeded()
     test_merge_scores_copies_z_to_every_split_row_of_its_method()
