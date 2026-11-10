@@ -1,17 +1,19 @@
 #!/usr/bin/env python3
 """Slice every AF3-predicted complex needed by ddi_split_membership into its
 domain-instance-pair structures, store them in structures.h5, and
-record which (ddi_id, instance_id_a, instance_id_b) triples have a structure
-via ddi_split_membership.is_mock.
+set ddi_split_membership.has_structure = 1 on every row of each sliced
+(ddi_id, instance_id_a, instance_id_b) triple.
 
-Driven by ddi_split_membership, only instance-pairs some (method, split) actually uses are
-sliced. Grouped by UNORDERED protein pair so a complex predicted once
+Driven by ddi_split_membership: only instance pairs that one of --methods
+uses in some split are sliced. Grouped by UNORDERED protein pair so a complex predicted once
 is loaded/parsed exactly once, even when it realizes several DDIs and even
 when the pair shows up as (A, B) for some DDIs and (B, A) for others.
 
 When af_metadata has no entry for a pair, or the referenced file is missing
-or unreadable, the pair is
-marked is_mock=1 and no structure is written to structures.h5.
+or unreadable, nothing is written for it and has_structure keeps its default
+of 0. has_structure is a property of the instance pair, so it is set for
+every method's rows of that triple, not only the --methods ones: the
+structure is in structures.h5 either way.
 """
 import argparse as ap
 import gzip
@@ -36,19 +38,10 @@ from Bio.PDB.PDBParser import PDBParser
 
 import utils_struct
 
-# Only these methods get structural analysis downstream (build_scoring_matrix.py,
-# score_ddi.py)
-STRUCTURAL_METHODS = ("random", "minimal_leakage")
-
 # How many (ddi_id, instance_id_a, instance_id_b) rows to batch per
 # executemany() + commit. Keeps a single Python list from growing unbounded on
 # a very large run while still avoiding one round-trip/commit per row.
 INSERT_BATCH_SIZE = 20000
-
-# Temporary index so the per-row UPDATE ... WHERE ddi_id=? AND instance_id_a=?
-# AND instance_id_b=? is an index lookup instead of a table scan. Dropped again
-# at the end so the output DB schema is unchanged.
-TMP_INDEX = "tmp_idx_dsm_enrich_triple"
 
 # Columns handed to the workers, in this order.
 ROW_COLS = ["ddi_id", "instance_id_a", "instance_id_b",
@@ -69,6 +62,8 @@ def parse_args():
     p.add_argument("--db_out", required=True)
     p.add_argument("--structures_h5", required=True)
     p.add_argument("--af_metadata", required=True)
+    p.add_argument("--methods", required=True,
+                   help="comma-separated methods whose instance pairs are sliced")
     p.add_argument("--versions", required=True)
     p.add_argument("--process_name", required=True)
     p.add_argument("--cpus", type=int, default=None,
@@ -143,7 +138,7 @@ def process_pair(task):
     path, source, file_uniprot_a, rows = task
     try:
         structure = load_structure(path, source)
-    except Exception as exc:  # missing / corrupt file -> treated as mock
+    except Exception as exc:  # missing / corrupt file -> no structure
         return {"unreadable_rows": [(r[0], r[1], r[2]) for r in rows],
                 "error": f"{path}: {exc!r}",
                 "slices": {}, "ok_rows": [], "failed": []}
@@ -196,21 +191,21 @@ def run_tasks(tasks, n_workers: int):
                     pending.add(ex.submit(process_pair, nxt))
 
 
-def fetch_relevant_instances(conn) -> pd.DataFrame:
-    """Every (ddi_id, instance_id_a, instance_id_b) triple used by the
-    structural methods in any split, deduplicated, with pfam/uniprot/
+def fetch_relevant_instances(conn, methods) -> pd.DataFrame:
+    """Every (ddi_id, instance_id_a, instance_id_b) triple used by `methods`
+    in any split, deduplicated, with pfam/uniprot/
     coordinates parsed out of the instance ids.
 
     The method filter happens in SQL (idx_ddi_split_membership_method_split
     covers it) so rows for methods that never reach structural scoring are
     never pulled across into pandas at all."""
-    placeholders = ",".join("?" for _ in STRUCTURAL_METHODS)
+    placeholders = ",".join("?" for _ in methods)
     df = pd.read_sql_query(
         "SELECT DISTINCT ddi_id, instance_id_a, instance_id_b FROM ddi_split_membership "
         "WHERE instance_id_a IS NOT NULL AND instance_id_b IS NOT NULL "
         f"AND method IN ({placeholders})",
         conn,
-        params=STRUCTURAL_METHODS,
+        params=methods,
     )
     records = []
     for row in df.itertuples():
@@ -228,22 +223,19 @@ def fetch_relevant_instances(conn) -> pd.DataFrame:
     return pd.DataFrame(records, columns=columns)
 
 
-def fetch_protein_sequences(conn) -> dict:
-    return dict(conn.execute("SELECT uniprot_id, sequence FROM protein"))
-
-
 class BatchedInserter:
-    """Buffers is_mock updates and flushes them with executemany() + a single
-    commit per batch, instead of one UPDATE (and one commit per protein pair)
-    per row."""
+    """Buffers has_structure updates and flushes them with executemany() + a
+    single commit per batch, instead of one UPDATE (and one commit per protein
+    pair) per row. The UPDATE is an index lookup via
+    idx_ddi_split_membership_triple (INIT_DOMAINSPLIT_DB)."""
 
     def __init__(self, conn: sqlite3.Connection, batch_size: int = INSERT_BATCH_SIZE):
         self.conn = conn
         self.batch_size = batch_size
         self._buf = []
 
-    def add(self, ddi_id, instance_id_a, instance_id_b, is_mock: bool):
-        self._buf.append((int(is_mock), ddi_id, instance_id_a, instance_id_b))
+    def add(self, ddi_id, instance_id_a, instance_id_b):
+        self._buf.append((ddi_id, instance_id_a, instance_id_b))
         if len(self._buf) >= self.batch_size:
             self.flush()
 
@@ -251,7 +243,7 @@ class BatchedInserter:
         if not self._buf:
             return
         self.conn.executemany(
-            "UPDATE ddi_split_membership SET is_mock = ? "
+            "UPDATE ddi_split_membership SET has_structure = 1 "
             "WHERE ddi_id = ? AND instance_id_a = ? AND instance_id_b = ?",
             self._buf,
         )
@@ -267,9 +259,7 @@ def main():
     conn = sqlite3.connect(args.db_out)
     conn.execute("PRAGMA journal_mode = WAL")
     conn.execute("PRAGMA synchronous = NORMAL")
-    conn.execute(f"CREATE INDEX IF NOT EXISTS {TMP_INDEX} "
-                 "ON ddi_split_membership(ddi_id, instance_id_a, instance_id_b)")
-    conn.commit()
+    methods = [m.strip() for m in args.methods.split(",") if m.strip()]
 
     meta_index = build_meta_index(args.af_metadata)
 
@@ -277,7 +267,7 @@ def main():
     print(f"enrich_structural_af: built metadata index with {len(meta_index)} entries")
 
     con_ro = sqlite3.connect(f"file:{args.db_in}?mode=ro", uri=True)
-    instances = fetch_relevant_instances(con_ro)
+    instances = fetch_relevant_instances(con_ro, methods)
     con_ro.close()
 
     # Unordered protein-pair key: (A, B) and (B, A) share one complex file, order lexicographically
@@ -286,33 +276,29 @@ def main():
 
     n_pairs = instances["pair_key"].nunique()
     print(f"enrich_structural_af: {len(instances)} distinct instance-pairs across "
-          f"{n_pairs} protein pairs to process (methods={STRUCTURAL_METHODS}, "
+          f"{n_pairs} protein pairs to process (methods={methods}, "
           f"workers={n_workers})", flush=True)
 
-    n_ok = n_mock = n_missing_meta = n_missing_file = n_failed_slice = 0
+    n_ok = n_missing_meta = n_missing_file = n_failed_slice = 0
     inserter = BatchedInserter(conn)
 
-    # Pass 1 (main process): mock pairs go straight to the DB
-    # buffer; pairs with a metadata entry become worker tasks.
+    # Pass 1 (main process): pairs with a metadata entry become worker tasks;
+    # the rest keep has_structure = 0.
     tasks = []
     for _, group in instances.groupby("pair_key", sort=False):
         first = group.iloc[0]
         entry = meta_index.get(frozenset((first.uniprot_id_a, first.uniprot_id_b)))
         if entry is None:
             n_missing_meta += len(group)
-            for row in group.itertuples():
-                inserter.add(row.ddi_id, row.instance_id_a, row.instance_id_b, is_mock=True)
-                n_mock += 1
             continue
         path, file_uniprot_a, source = entry
         rows = list(group[ROW_COLS].itertuples(index=False, name=None))
         tasks.append((path, source, file_uniprot_a, rows))
-    inserter.flush()
-    print(f"enrich_structural_af: {n_mock} rows mock (no metadata), "
+    print(f"enrich_structural_af: {n_missing_meta} rows without metadata, "
           f"{len(tasks)} protein pairs to slice", flush=True)
 
     # Sort tasks by number of rows to slice, descending, so the longest-running
-    # tasks are started firstv
+    # tasks are started first
     tasks.sort(key=lambda t: -len(t[3]))
 
     # Pass 2 (workers): load once, slice everything; main process writes results.
@@ -323,12 +309,9 @@ def main():
             n_done += 1
 
             if res["unreadable_rows"]:
-                print(f"  WARNING: {res['error']} -- marking {len(res['unreadable_rows'])} "
-                      f"rows as mock", flush=True)
-                for ddi_id, ia, ib in res["unreadable_rows"]:
-                    inserter.add(ddi_id, ia, ib, is_mock=True)
-                    n_mock += 1
-                    n_missing_file += 1
+                print(f"  WARNING: {res['error']} -- {len(res['unreadable_rows'])} "
+                      f"rows left without structure", flush=True)
+                n_missing_file += len(res["unreadable_rows"])
 
             for (group_key, dset_key), pdb_gz in res["slices"].items():
                 grp = h5file.require_group(group_key)
@@ -338,7 +321,7 @@ def main():
                                        compression=None)
 
             for ddi_id, ia, ib in res["ok_rows"]:
-                inserter.add(ddi_id, ia, ib, is_mock=False)
+                inserter.add(ddi_id, ia, ib)
                 n_ok += 1
 
             for ddi_id, ia, ib, err in res["failed"]:
@@ -351,10 +334,8 @@ def main():
                       f"({time.time() - t0:.0f}s)", flush=True)
 
     inserter.flush()
-    conn.execute(f"DROP INDEX IF EXISTS {TMP_INDEX}")
-    conn.commit()
     conn.close()
-    print(f"enrich_structural_af: done -> sliced={n_ok} (mock={n_mock}) "
+    print(f"enrich_structural_af: done -> sliced={n_ok} "
           f"missing_meta={n_missing_meta} missing_file={n_missing_file} "
           f"failed_slice={n_failed_slice}", flush=True)
 

@@ -8,7 +8,7 @@ include { softwareVersionsToYAML      } from '../subworkflows/nf-core/utils_nfco
 include { methodsDescriptionText      } from '../subworkflows/local/utils_nfcore_domainsplit_pipeline'
 include { INIT_DOMAINSPLIT_DB         } from '../modules/local/init_domainsplit_db/main.nf'
 include { PARSE_SWISSPROT             } from '../modules/local/parse_swissprot/main.nf'
-include { COLLECT_DDI_DATA            } from '../subworkflows/local/collect_ddi_data/main.nf'
+include { COLLECT_DDI_DATA; externalSourceWanted } from '../subworkflows/local/collect_ddi_data/main.nf'
 include { EXPORT_UNION_FAMILIES       } from '../modules/local/export_union_families/main.nf'
 include { EXPORT_SPLIT_DDIS           } from '../modules/local/export_split_ddis/main.nf'
 include { INGEST_SPLITS               } from '../subworkflows/local/ingest_splits/main.nf'
@@ -150,6 +150,21 @@ def splitsOf(row, negset) {
     return labels.collect { label -> publishedSplit(negset, label) }
 }
 
+// Methods ENRICH_STRUCTURAL / ANNOTATE_DDI slice and score. 'all' = every
+// method this run publishes; '' = structure off. Anything else must name
+// published methods: an unknown name would score nothing, silently.
+def structureMethods(all_methods) {
+    def wanted = params.structure_data_methods.toString().tokenize(',')*.trim().findAll { m -> m }
+    if (wanted == ['all']) {
+        return all_methods
+    }
+    def unknown = wanted - all_methods
+    if (unknown) {
+        error("--structure_data_methods names ${unknown.join(', ')}, which this run does not publish (methods: ${all_methods.join(', ')}; or 'all', or '' for no structure).")
+    }
+    return wanted
+}
+
 // Every per-dataset override ppi-splitting reads out of `meta`. Mirrors
 // buildDatasetsChannel() in its main.nf: the keys are fixed, and mutating the
 // map downstream would break every join() in there, all of which key on the
@@ -203,7 +218,14 @@ def jsonScalar(v) {
 
 def manifestBase(uniprot_dats) {
     def submodule = "${projectDir}/subworkflows/external/ppi-splitting"
-    def urls = params.findAll { k, v -> k.toString().startsWith('url_') && v }
+    // Only the URLs this run reads: the manifest HEADs each one, and a request
+    // to a source the run never uses (Negatome, when not selected) is a request
+    // that can only fail.
+    def unused = [
+        url_negatome    : !externalSourceWanted('negatome'),
+        url_pfam_regions: params.pfam_regions as boolean,
+    ]
+    def urls = params.findAll { k, v -> k.toString().startsWith('url_') && v && !unused[k.toString()] }
         .collectEntries { k, v -> [(k.toString()): v.toString()] }
     uniprot_dats.eachWithIndex { u, i -> urls["uniprot_dat_" + i] = u.toString() }
     return groovy.json.JsonOutput.toJson([
@@ -315,9 +337,6 @@ Use all_species_reviewed or human_any_review_status.""")
 
     input_pfam2go = file(params.url_pfam2go)
 
-    ch_af_metadata = Channel.fromPath(params.af_metadata, checkIfExists: true)
-
-
     //
     // One pass over the UniProt flat files, six consumers. See the
     // `uniprot_dat_urls` comment in nextflow.config for why this is a parse of
@@ -354,6 +373,7 @@ Use all_species_reviewed or human_any_review_status.""")
         params.hippie_tsv,
         params.ppidm_tsv,
         params.negative_ppi_parquet,
+        splitRows().any { row -> 'ilp_candidates' in activeNegsets(row) },
     )
 
     domainsplit_db_ddi = COLLECT_DDI_DATA.out.domainsplit_db
@@ -646,19 +666,6 @@ Use all_species_reviewed or human_any_review_status.""")
 
     enriched_db = ENRICH_DDI_DATABASE.out.domainsplit_db
 
-    // Structural enrichment, on the master database, before any subsetting
-    // Processes structures and stores them in a hd5 file
-    ENRICH_STRUCTURAL(enriched_db, ch_af_metadata)
-
-    // Annotate & score the DDI database using structural information
-    ANNOTATE_DDI(ENRICH_STRUCTURAL.out.domainsplit_db, ENRICH_STRUCTURAL.out.structures)
-    scored_db = ANNOTATE_DDI.out.domainsplit_db
-
-    //
-    // One database per (method, split). SUBSET_SPLIT_DB creates each output and
-    // pulls the surviving rows out of the master read-only -- it does not clone
-    // and delete, so a split's file costs only the rows it keeps.
-    //
     def subset_targets = splitRows().collectMany { row ->
         activeNegsets(row).collectMany { negset ->
             def method = row.negsets[negset]
@@ -666,6 +673,39 @@ Use all_species_reviewed or human_any_review_status.""")
             splits.collect { split -> [method: method, split: split] }
         }
     }
+
+    //
+    // Structure, on the master, before any subsetting: slice each instance pair
+    // out of its AF3 complex (ENRICH_STRUCTURAL -> structures.h5,
+    // has_structure), then score it under each method's own train-split contact
+    // potential (ANNOTATE_DDI -> z_score, ddi_interaction_confirmed). Off with
+    // `--structure_data_methods ''`, in which case af_metadata is never opened.
+    //
+    def structure_methods = structureMethods(subset_targets*.method.unique())
+    if (structure_methods) {
+        ENRICH_STRUCTURAL(
+            enriched_db,
+            file(params.af_metadata, checkIfExists: true),
+            structure_methods.join(','),
+        )
+        ANNOTATE_DDI(
+            ENRICH_STRUCTURAL.out.domainsplit_db,
+            ENRICH_STRUCTURAL.out.structures,
+            structure_methods,
+        )
+        scored_db = ANNOTATE_DDI.out.domainsplit_db
+        ch_versions = ch_versions.mix(ENRICH_STRUCTURAL.out.versions, ANNOTATE_DDI.out.versions)
+    }
+    else {
+        scored_db = enriched_db
+        log.info "--structure_data_methods is empty: no structures are sliced or scored, and every has_structure stays 0."
+    }
+
+    //
+    // One database per (method, split). SUBSET_SPLIT_DB creates each output and
+    // pulls the surviving rows out of the master read-only -- it does not clone
+    // and delete, so a split's file costs only the rows it keeps.
+    //
 
     split_dbs = SUBSET_SPLIT_DB(
         channel.fromList(subset_targets).combine(scored_db)
@@ -677,7 +717,7 @@ Use all_species_reviewed or human_any_review_status.""")
         // [] when --external_test_sources left that source out.
         params.hippie_tsv ? file(params.hippie_tsv, checkIfExists: true) : [],
         params.ppidm_tsv ? file(params.ppidm_tsv, checkIfExists: true) : [],
-        file(params.negative_ppi_parquet, checkIfExists: true),
+        params.negative_ppi_parquet ? file(params.negative_ppi_parquet, checkIfExists: true) : [],
     )
 
     //
@@ -701,8 +741,6 @@ Use all_species_reviewed or human_any_review_status.""")
         BUILD_EXTERNAL_TEST.out.versions,
         SUBSET_SPLIT_DB.out.versions,
         WRITE_RUN_MANIFEST.out.versions,
-        ENRICH_STRUCTURAL.out.versions,
-        ANNOTATE_DDI.out.versions
     )
 
     softwareVersionsToYAML(ch_versions)
@@ -719,7 +757,6 @@ emit:
     domainsplit_db    = scored_db
     split_db          = split_dbs.split_db
     domain_embeddings = generate_domain_embeddings.out.embeddings
-    structures        = ENRICH_STRUCTURAL.out.structures
     candidate_network = candidate_network
     source_conflicts  = inserted.conflicts
     ddi_attrition     = attrition.report

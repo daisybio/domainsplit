@@ -41,7 +41,6 @@
             "type": "object",
             "fa_icon": "fas fa-database",
             "description": "Public source databases (URLs and local file paths) used to assemble the domainsplit database.",
-            "required": ["negative_ppi_parquet"],
             "properties": {
                 "url_3did": {
                     "type": "string",
@@ -121,7 +120,7 @@
                 "negative_ppi_parquet": {
                     "type": ["string"],
                     "format": "file-path",
-                    "description": "Required path to a Y2H/MS PPI parquet (columns: gene_name_bait, gene_name_prey, n_tested, ...). BUILD_CANDIDATE_NETWORK maps bait/prey genes to UniProt then Pfam (via UniProt REST API) and emits every tested-but-non-interacting Pfam pair, restricted to families appearing in a 3did DDI, as the pool ppi-splitting's `ilp_candidates` sampler draws from.",
+                    "description": "Path to a Y2H/MS PPI parquet, required while a split row samples `ilp_candidates` negatives (the default, --ppi_splitting_multi_negset); unused otherwise (columns: gene_name_bait, gene_name_prey, n_tested, ...). BUILD_CANDIDATE_NETWORK maps bait/prey genes to UniProt then Pfam (via UniProt REST API) and emits every tested-but-non-interacting Pfam pair, restricted to families appearing in a 3did DDI, as the pool ppi-splitting's `ilp_candidates` sampler draws from.",
                     "fa_icon": "fas fa-file-import"
                 },
                 "negative_ppi_min_n_tested": {
@@ -312,6 +311,41 @@
                 }
             }
         },
+        "structure_options": {
+            "title": "Structure options",
+            "type": "object",
+            "fa_icon": "fas fa-cubes",
+            "description": "AF3-complex slicing (ENRICH_STRUCTURAL) and contact-potential scoring of DDIs (ANNOTATE_DDI).",
+            "properties": {
+                "structure_data_methods": {
+                    "type": "string",
+                    "description": "Comma-separated methods whose instance pairs are sliced and scored, each against its own train-split potential. 'all' = every published method; '' turns structure off (af_metadata is then not read).",
+                    "default": "all",
+                    "fa_icon": "fas fa-list"
+                },
+                "af_metadata": {
+                    "type": "string",
+                    "format": "path",
+                    "description": "CSV uniprot_id_a,uniprot_id_b,path,source (source: downloaded or inferred) pointing at AF3 complex files. Only read when structure_data_methods is non-empty; pairs without an entry keep has_structure = 0.",
+                    "default": "/nfs/data/CoBiNet_Masterpraktikum/domainsplit/af_metadata.csv",
+                    "fa_icon": "fas fa-file-csv"
+                },
+                "build_scoring_matrix_shards": {
+                    "type": "integer",
+                    "description": "Parallel BUILD_SCORING_MATRIX tasks per method.",
+                    "default": 12,
+                    "minimum": 1,
+                    "fa_icon": "fas fa-th"
+                },
+                "score_ddi_shards": {
+                    "type": "integer",
+                    "description": "Parallel SCORE_DDI tasks per method.",
+                    "default": 24,
+                    "minimum": 1,
+                    "fa_icon": "fas fa-th"
+                }
+            }
+        },
         "institutional_config_options": {
             "title": "Institutional config options",
             "type": "object",
@@ -446,6 +480,9 @@
         },
         {
             "$ref": "#/$defs/domain_embedding_options"
+        },
+        {
+            "$ref": "#/$defs/structure_options"
         },
         {
             "$ref": "#/$defs/institutional_config_options"

@@ -3,11 +3,12 @@ process ENRICH_STRUCTURAL_AF {
     label 'process_high'
 
     conda "${moduleDir}/environment.yml"
-    container "docker.io/konstantinpelz/domainsplit-general:1.0.0"
+    container "docker.io/konstantinpelz/domainsplit-general:2.0.0"
 
     input:
     path db_struct, stageAs: 'input.dbstruct.sqlite3'
-    path af_metaddata
+    path af_metadata
+    val methods
 
     output:
     path "dbstruct.sqlite3", emit: dbstruct
@@ -19,8 +20,9 @@ process ENRICH_STRUCTURAL_AF {
     enrich_structural_af.py \\
         --db_in input.dbstruct.sqlite3 \\
         --db_out dbstruct.sqlite3 \\
-        --af_metadata ${af_metaddata} \\
+        --af_metadata ${af_metadata} \\
         --structures_h5 structures.h5 \\
+        --methods "${methods}" \\
         --versions versions.yml \\
         --process_name "${task.process}" \\
         --cpus ${task.cpus}

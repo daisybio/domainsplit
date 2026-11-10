@@ -57,21 +57,21 @@ class DdiPairSelect(Select):
     def __init__(self, chain_id_a: str, start_a: int, end_a: int, chain_id_b: str, start_b: int, end_b: int) -> None:
         self.window_a = (chain_id_a, start_a, end_a)
         self.window_b = (chain_id_b, start_b, end_b)
- 
+
     def _in_window(self, residue, window) -> bool:
         chain_id, start, end = window
         return (
             residue.get_parent().id == chain_id
             and start <= residue.id[1] <= end
         )
- 
+
     def accept_residue(self, residue):
         if self._in_window(residue, self.window_a):
             return 1
         if self._in_window(residue, self.window_b):
             return 1
         return 0
- 
+
 
 
 #---------------------------------------------------------------------------
@@ -147,43 +147,48 @@ def extract_domain_residues(structure, chain_id):
 
 
 # ---------------------------------------------------------------------------
-# domain_structure access -- rewritten for the H5-backed schema (no pdb_gz,
-# no source column: RF is gone, bytes live in structures.h5). Both exclude
-# is_mock rows: see enrich_structural_af.py's mock-fallback path.
+# ddi_split_membership access. Only rows with has_structure = 1 have bytes in
+# structures.h5 (see enrich_structural_af.py).
 # ---------------------------------------------------------------------------
 
+def _ro(db_path):
+    return sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+
+
 def get_positive_train_structures(db_path, method):
-    """Real (non-mock) structures for POSITIVE DDIs in this method's TRAIN
+    """Instance pairs with a structure for POSITIVE DDIs in this method's TRAIN
     split only -- feeds this method's own potential in build_scoring_matrix.py.
     Must never include an instance outside this method's train partition, or
     a test-time DDI scored later under this same matrix would be evaluated
     against a background that had already seen it.
-    Returns [(ddi_id, instance_id_a, instance_id_b)]."""
-    conn = sqlite3.connect(db_path)
-    conn.execute("PRAGMA foreign_keys = ON")
-    conn.execute("PRAGMA synchronous  = OFF")
+    Returns [(ddi_id, instance_id_a, instance_id_b)], sorted."""
+    conn = _ro(db_path)
     rows = conn.execute("""
         SELECT DISTINCT m.ddi_id, m.instance_id_a, m.instance_id_b
         FROM ddi_split_membership m
         JOIN domain_domain_interaction ddi ON ddi.id = m.ddi_id
-        WHERE m.method = ? AND m.split = 'train' AND ddi.negative = 0 AND m.is_mock = 0
+        WHERE m.method = ? AND m.split = 'train' AND ddi.negative = 0
+          AND m.has_structure = 1
+        ORDER BY 1, 2, 3
     """, (method,)).fetchall()
     conn.close()
     return rows
 
 
 def get_structures_for_method(db_path, method):
-    """Real (non-mock) structures for every DDI this method places in ANY
-    split -- feeds score_ddi.py, which scores the whole method.
-    Returns [(ddi_id, instance_id_a, instance_id_b, split)]."""
-    conn = sqlite3.connect(db_path)
-    conn.execute("PRAGMA foreign_keys = ON")
-    conn.execute("PRAGMA synchronous  = OFF")
+    """Distinct instance pairs with a structure for every DDI this method
+    places in ANY split -- feeds score_ddi.py, which scores the whole method.
+    One row per (ddi_id, instance_id_a, instance_id_b), however many splits
+    hold it: the 1:1 and 1:10 test splits share their positives, and scoring
+    those twice would double their vote. merge_scores.py writes the z-score
+    back to every split row of the triple.
+    Returns [(ddi_id, instance_id_a, instance_id_b)], sorted."""
+    conn = _ro(db_path)
     rows = conn.execute("""
-        SELECT DISTINCT m.ddi_id, m.instance_id_a, m.instance_id_b, m.split
+        SELECT DISTINCT m.ddi_id, m.instance_id_a, m.instance_id_b
         FROM ddi_split_membership m
-        WHERE m.method = ? AND m.is_mock = 0
+        WHERE m.method = ? AND m.has_structure = 1
+        ORDER BY 1, 2, 3
     """, (method,)).fetchall()
     conn.close()
     return rows
-

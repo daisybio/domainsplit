@@ -1,6 +1,8 @@
 process MERGE_SCORE_SHARDS {
     tag "$method"
     label 'process_low'
+    conda "${moduleDir}/environment.yml"
+    container "docker.io/konstantinpelz/domainsplit-general:2.0.0"
 
     input:
     tuple val(method), path(score_shards, stageAs: 'scores_??.tsv'), path(confirmed_shards, stageAs: 'confirmed_??.tsv')

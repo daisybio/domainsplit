@@ -72,6 +72,8 @@ params {
     ddi_mode: Boolean
     embedding_require_gpu: Boolean
     ppi_splitting_multi_negset: Boolean
+    build_scoring_matrix_shards: Integer
+    score_ddi_shards: Integer
     validate_params: Boolean
 
     // ---- imported from ppi-splitting via

@@ -22,13 +22,14 @@ process WRITE_RUN_MANIFEST {
     script:
     def hippie_arg = hippie_tsv ? "--input hippie_tsv=${hippie_tsv}" : ''
     def ppidm_arg  = ppidm_tsv ? "--input ppidm_tsv=${ppidm_tsv}" : ''
+    def neg_arg    = negative_ppi_parquet ? "--input negative_ppi_parquet=${negative_ppi_parquet}" : ''
     """
     write_run_manifest.py \\
         --base ${base_json} \\
         --db "${domainsplit_db_in}" \\
         ${hippie_arg} \\
         ${ppidm_arg} \\
-        --input negative_ppi_parquet=${negative_ppi_parquet} \\
+        ${neg_arg} \\
         --out run_manifest.json \\
         --versions versions.yml \\
         --process-name "${task.process}"

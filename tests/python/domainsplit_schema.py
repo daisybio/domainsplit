@@ -11,7 +11,9 @@ Kept in step with ``modules/local/init_domainsplit_db/main.nf`` -- in particular
   ppi-splitting. ``start_pos``/``end_pos`` are **INTEGER**: with no declared type
   they take BLOB affinity and TEXT ``'10'`` stops matching INTEGER ``10`` in the
   UNIQUE key, which is exactly the desync this mirror has to reproduce;
-* ``ddi_split_membership``, which SUBSET_SPLIT_DB filters on.
+* ``ddi_split_membership``, which SUBSET_SPLIT_DB filters on, with the
+  ``has_structure`` / ``z_score`` columns and ``ddi_interaction_confirmed``
+  table the structural steps write.
 
 The GO / PPI tables are here only so the prune and subset tests can assert that
 their cascades fire.
@@ -67,7 +69,19 @@ CREATE TABLE ddi_split_membership (
     ddi_id REFERENCES domain_domain_interaction ON DELETE CASCADE,
     method, split,
     instance_id_a, instance_id_b,
+    has_structure INTEGER NOT NULL DEFAULT 0,
+    z_score REAL,
     UNIQUE(ddi_id, method, split, instance_id_a, instance_id_b)
+);
+CREATE INDEX idx_ddi_split_membership_triple
+ON ddi_split_membership (ddi_id, instance_id_a, instance_id_b);
+
+CREATE TABLE ddi_interaction_confirmed (
+    ddi_id INTEGER REFERENCES domain_domain_interaction ON DELETE CASCADE,
+    method,
+    majority_confirmed INTEGER,
+    mean_confirmed INTEGER,
+    UNIQUE(ddi_id, method)
 );
 
 CREATE UNIQUE INDEX idx_domain_protein_map_instance_id

@@ -107,38 +107,35 @@ process INIT_DOMAINSPLIT_DB {
         -- Which DDIs, and which concrete domain-instance pairs, belong to which
         -- (method, split). Populated by INGEST_SPLIT_MEMBERSHIP from
         -- ppi-splitting's instance-level CSVs and by BUILD_EXTERNAL_TEST.
-        -- Exists only to drive SUBSET_SPLIT_DB, which is a pure SQL filter over
-        -- it. `instance_id_*` reference domain_protein_map.instance_id rather
-        -- than protein.id: a protein carrying two copies of one family gives two
+        -- Drives SUBSET_SPLIT_DB, which is a pure SQL filter over it.
+        -- `instance_id_*` reference domain_protein_map.instance_id rather than
+        -- protein.id: a protein carrying two copies of one family gives two
         -- instances, and the split is defined on instances, not proteins.
+        --
+        -- has_structure: 1 when ENRICH_STRUCTURAL_AF sliced this instance pair
+        -- out of an AF3 complex into structures.h5. Defaults to 0, so a row the
+        -- structural step never looked at (structure off, or a method outside
+        -- --structure_data_methods) never claims a structure it does not have.
+        -- z_score: ANNOTATE_DDI's contact-potential z-score for the instance
+        -- pair under this method's train potential; NULL when has_structure = 0
+        -- or the interface has too few contacts to score.
         CREATE TABLE ddi_split_membership (
             ddi_id REFERENCES domain_domain_interaction ON DELETE CASCADE,
             method, split,
             instance_id_a, instance_id_b,
+            has_structure INTEGER NOT NULL DEFAULT 0,
             z_score REAL,
-            is_mock INTEGER DEFAULT 0,
             UNIQUE(ddi_id, method, split, instance_id_a, instance_id_b)
         );
 
-        -- One row per (DDI, protein-instance-pair) structural slice, written by
-        -- ENRICH_STRUCTURAL_AF after slicing the externally-predicted AF3 complex.
-        -- `instance_id_*` reference domain_protein_map.instance_id rather than
-        -- protein.id: a protein carrying two copies of one family gives two
-        -- instances, and the split is defined on instances, not proteins.
-        -- is_mock is 1 for a mock slice (missing data) and 0 for a real slice.
-        --  CREATE TABLE domain_structure (
-        --    id INTEGER PRIMARY KEY,
-        --    ddi_id REFERENCES domain_domain_interaction ON DELETE CASCADE,
-        --    instance_id_a,
-        --    instance_id_b,
-        --    is_mock INTEGER DEFAULT 1,
-        --    UNIQUE(ddi_id, instance_id_a, instance_id_b)
-        --);
-
-        -- New table: per-method aggregated confirmation. method-dependent,
-        -- split-independent (scoring covers all of a method's splits at once).
+        -- Per-method structural confirmation of a DDI, written by ANNOTATE_DDI.
+        -- Split-independent: one method's potential scores all of its splits.
+        -- majority_confirmed: more than half of the DDI's scored instance pairs
+        -- reach z >= 2.3; mean_confirmed: their mean z does. ddi_id is typed
+        -- INTEGER so a writer binding '1' cannot store TEXT that SUBSET_SPLIT_DB's
+        -- `ddi_id IN (SELECT id ...)` then never matches.
         CREATE TABLE ddi_interaction_confirmed (
-            ddi_id REFERENCES domain_domain_interaction ON DELETE CASCADE,
+            ddi_id INTEGER REFERENCES domain_domain_interaction ON DELETE CASCADE,
             method,
             majority_confirmed INTEGER,
             mean_confirmed INTEGER,
@@ -165,8 +162,6 @@ process INIT_DOMAINSPLIT_DB {
         ON ddi_split_membership (ddi_id);
         CREATE INDEX IF NOT EXISTS idx_ddi_split_membership_triple
         ON ddi_split_membership (ddi_id, instance_id_a, instance_id_b);
-        -- CREATE INDEX IF NOT EXISTS idx_domain_structure_ddi_id
-        -- ON domain_structure (ddi_id);
     ''')
     con.commit()
     con.close()

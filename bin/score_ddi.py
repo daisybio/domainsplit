@@ -5,8 +5,9 @@ score_ddi.py
 Phase 2 of DDI scoring: apply ONE method's train-set empirical potential to
 every DDI that method places in any split, and write two per-method files:
 
-    <method>.scores.tsv    — ddi_id, method, split, instance_id_a,
-                              instance_id_b, z_score
+    <method>.scores.tsv    — ddi_id, method, instance_id_a, instance_id_b,
+                              z_score (one row per distinct instance pair;
+                              merge_scores.py copies it to every split row)
     <method>.confirmed.tsv — ddi_id, method, majority_confirmed, mean_confirmed
 
 merge_scores.py applies these into the shared master once every method's
@@ -19,11 +20,16 @@ Scoring methodology (Sprinzak & Margalit 2001, PNAS):
     z     = (score - mean_random) / std_random   over 1000 random trials
 A domain pair is only scored if it has >= 5 interacting residue pairs.
 
+The random trials are drawn from a generator seeded with (--seed, CRC32 of
+the instance-pair key), so a pair's z-score is the same whatever the shard
+count or row order, and the same across reruns.
+
 """
 import argparse
 import csv
 import math
 import sys
+import zlib
 from pathlib import Path
 
 import h5py
@@ -74,6 +80,7 @@ def parse_args():
     p.add_argument("--confirmed_out", required=True)
     p.add_argument("--versions", required=True)
     p.add_argument("--process_name", required=True)
+    p.add_argument("--seed", type=int, required=True)
     p.add_argument("--shard_id", type=int, default=0,
                     help="0-based index of this shard (default 0 = no sharding)")
     p.add_argument("--n_shards", type=int, default=1,
@@ -175,7 +182,7 @@ def find_contacts_vectorized(res_a, res_b, structure):
     Vectorized contact detection for all residue pairs in res_a x res_b, returning the
     residue indices and contact types of the closest qualifying atom pair for each
     residue pair.
-    
+
     Returns (ra_arr, rb_arr, itype_idx_arr, n_interacting):
       - ra_arr, rb_arr: residue indices (into res_a / res_b) for each
         contacting residue pair
@@ -247,7 +254,12 @@ def compute_real_score_vectorized(res_a, res_b, ra_arr, rb_arr, itype_arr):
     return float(SCORE_LOOKUP[aa_a_idx[valid], aa_b_idx[valid], itype_arr[valid]].sum())
 
 
-def run_random_trials_vectorized(n_a, n_b, ra_arr, rb_arr, itype_arr, n_trials):
+def pair_rng(seed, instance_id_a, instance_id_b):
+    """Generator for one instance pair, independent of sharding and order."""
+    return np.random.default_rng([seed, zlib.crc32(f"{instance_id_a}__{instance_id_b}".encode())])
+
+
+def run_random_trials_vectorized(n_a, n_b, ra_arr, rb_arr, itype_arr, n_trials, rng):
     """
     Run a vectorized simulation of random trials to compute a null distribution
     of contact scores.
@@ -270,8 +282,8 @@ def run_random_trials_vectorized(n_a, n_b, ra_arr, rb_arr, itype_arr, n_trials):
     weights = weights[valid_pool]
     weights = weights / weights.sum()
 
-    sample_a_full = np.random.choice(aa_pool_idx, size=(n_trials, n_a), p=weights)
-    sample_b_full = np.random.choice(aa_pool_idx, size=(n_trials, n_b), p=weights)
+    sample_a_full = rng.choice(aa_pool_idx, size=(n_trials, n_a), p=weights)
+    sample_b_full = rng.choice(aa_pool_idx, size=(n_trials, n_b), p=weights)
 
     aa_a_per_contact = sample_a_full[:, ra_arr]  # (n_trials, n_contacts)
     aa_b_per_contact = sample_b_full[:, rb_arr]  # (n_trials, n_contacts)
@@ -299,9 +311,9 @@ def aggregate_scores(scores):
 
 def write_scores_tsv(path, method, rows):
     with open(path, "w") as f:
-        f.write("ddi_id\tmethod\tsplit\tinstance_id_a\tinstance_id_b\tz_score\n")
-        for ddi_id, split, ia, ib, z in rows:
-            f.write(f"{ddi_id}\t{method}\t{split}\t{ia}\t{ib}\t{z}\n")
+        f.write("ddi_id\tmethod\tinstance_id_a\tinstance_id_b\tz_score\n")
+        for ddi_id, ia, ib, z in rows:
+            f.write(f"{ddi_id}\t{method}\t{ia}\t{ib}\t{z}\n")
 
 
 def write_confirmed_tsv(path, method, aggregated):
@@ -362,7 +374,7 @@ def main():
 
     scores, score_rows = {}, []
     with h5py.File(args.structures_h5, "r") as h5file:
-        for (ddi_id, instance_id_a, instance_id_b, split) in method_structures:
+        for (ddi_id, instance_id_a, instance_id_b) in method_structures:
             pdb_gz = get_structure_bytes(h5file, instance_id_a, instance_id_b)
             if pdb_gz is None:
                 print(f"WARNING: no structure bytes for ddi {ddi_id} ({instance_id_a}, {instance_id_b})", file=sys.stderr)
@@ -390,7 +402,8 @@ def main():
 
             real_score = compute_real_score_vectorized(res_a, res_b, ra_arr, rb_arr, itype_arr)
             random_scores = run_random_trials_vectorized(
-                len(res_a), len(res_b), ra_arr, rb_arr, itype_arr, TRIALS
+                len(res_a), len(res_b), ra_arr, rb_arr, itype_arr, TRIALS,
+                pair_rng(args.seed, instance_id_a, instance_id_b),
             )
             z_score = compute_z_score(real_score, random_scores)
             confirmed = int(z_score >= ZSCORE_THRESHOLD)
@@ -398,7 +411,7 @@ def main():
             print(f"DDI {ddi_id}: n_interacting={n_interacting}, "
                   f"score={real_score:.3f}, z={z_score:.3f}, confirmed={confirmed}", flush=True)
 
-            score_rows.append((ddi_id, split, instance_id_a, instance_id_b, z_score))
+            score_rows.append((ddi_id, instance_id_a, instance_id_b, z_score))
             scores.setdefault(ddi_id, []).append((z_score, confirmed))
 
     aggregated = aggregate_scores(scores)

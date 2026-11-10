@@ -4,31 +4,27 @@ include { SCORE_DDI            } from '../../../modules/local/structural/score_d
 include { MERGE_SCORE_SHARDS   } from '../../../modules/local/structural/merge_score_shards/main.nf'
 include { MERGE_SCORES         } from '../../../modules/local/structural/merge_scores/main.nf'
 
-// Number of parallel shards per method. 
-// Override in nextflow.config / -params-file;
-// Build scoring matrix only sees training data, so fewer shards are needed.
-params.build_scoring_matrix_shards = 12
-params.score_ddi_shards            = 24
-
 workflow ANNOTATE_DDI {
     take:
-    domainsplit_db
-    structures
+    domainsplit_db // master with has_structure set (ENRICH_STRUCTURAL)
+    structures     // structures.h5
+    methods        // List of methods to score, each against its own train potential
 
     main:
-    ch_versions = Channel.empty()
+    ch_versions = channel.empty()
 
-    database       = domainsplit_db.first()   
+    database       = domainsplit_db.first()
     hdf_structures = structures.first()
 
-    methods_ch = Channel.fromList(params.structure_data_methods.toString().tokenize(','))
+    methods_ch = channel.fromList(methods)
         .combine(database)
         .combine(hdf_structures)
     // methods_ch: (method, database, hdf_structures)
 
-    // Step 1: build scoring matrix for each splitting method, sharded
+    // Step 1: build scoring matrix for each splitting method, sharded. It only
+    // reads the train split, so it needs fewer shards than step 2.
     build_shard_in = methods_ch
-        .combine(Channel.of(0..<params.build_scoring_matrix_shards))
+        .combine(channel.of(0..<params.build_scoring_matrix_shards))
         .map { method, db, h5, shard_id ->
             tuple(method, shard_id, params.build_scoring_matrix_shards, db, h5)
         }
@@ -43,9 +39,9 @@ workflow ANNOTATE_DDI {
     MERGE_SCORING_MATRIX(matrix_shards_grouped)
     // MERGE_SCORING_MATRIX.out.matrix: (method, c_ab_matrix, db_freq, t_db)
 
-    // Step 2: score every DDI under each method, sharded 
+    // Step 2: score every DDI under each method, sharded
     score_shard_in = methods_ch
-        .combine(Channel.of(0..<params.score_ddi_shards))
+        .combine(channel.of(0..<params.score_ddi_shards))
         .map { method, db, h5, shard_id ->
             tuple(method, shard_id, params.score_ddi_shards, db, h5)
         }

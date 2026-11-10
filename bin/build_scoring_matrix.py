@@ -4,7 +4,7 @@ build_scoring_matrix.py
 ------------------------
 Phase 1 of DDI scoring: derive one splitting method's empirical potential
 from that method's own TRAIN-split positive-DDI structures (real AF3
-predictions only -- mocked placeholders excluded).
+predictions only -- rows with has_structure = 0 excluded).
 
 Deliberately per-method: score_ddi.py scores every DDI under this method
 (train/val/test alike) against the matrix built here. Built from anything

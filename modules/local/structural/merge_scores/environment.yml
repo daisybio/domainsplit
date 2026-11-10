@@ -1,7 +1,1 @@
-name: merge_scores
-channels:
-  - conda-forge
-  - bioconda
-dependencies:
-  - python>=3.10
-  - sqlite3
+../../../../docker/env/general.yml

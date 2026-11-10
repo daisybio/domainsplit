@@ -25,12 +25,14 @@ def apply_scores(conn, tsv_path):
     with open(tsv_path) as fh:
         next(fh)
         for line in fh:
-            ddi_id, method, split, ia, ib, z_score = line.rstrip("\n").split("\t")
+            ddi_id, method, ia, ib, z_score = line.rstrip("\n").split("\t")
+            # Every split row of the triple: the 1:1 and 1:10 test splits share
+            # their positives, scored once in score_ddi.py.
             conn.execute(
                 "UPDATE ddi_split_membership SET z_score = ? "
-                "WHERE ddi_id = ? AND method = ? AND split = ? "
+                "WHERE ddi_id = ? AND method = ? "
                 "AND instance_id_a = ? AND instance_id_b = ?",
-                (float(z_score), int(ddi_id), method, split, ia, ib),
+                (float(z_score), int(ddi_id), method, ia, ib),
             )
             n += 1
     return n
@@ -45,7 +47,7 @@ def apply_confirmed(conn, tsv_path):
             conn.execute(
                 "INSERT OR REPLACE INTO ddi_interaction_confirmed "
                 "(ddi_id, method, majority_confirmed, mean_confirmed) VALUES (?, ?, ?, ?)",
-                (ddi_id, method, int(majority_confirmed), int(mean_confirmed)),
+                (int(ddi_id), method, int(majority_confirmed), int(mean_confirmed)),
             )
             n += 1
     return n
@@ -66,7 +68,7 @@ def main():
         print(f"[merge_scores] WARNING: {unscored} ddi_split_membership rows still unscored", flush=True)
 
     print(f"[merge_scores] {scored} ddi_split_membership rows scored", flush=True)
-    
+
     conn.close()
     print(f"[merge_scores] done -> {total_scores} z_scores merged, {total_confirmed} confirmed rows merged", flush=True)
 

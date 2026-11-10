@@ -2,7 +2,7 @@ process MERGE_SCORING_MATRIX {
     tag "$method"
     label 'process_low'
     conda "${moduleDir}/environment.yml"
-    container "docker.io/konstantinpelz/domainsplit-general:1.0.0"
+    container "docker.io/konstantinpelz/domainsplit-general:2.0.0"
 
     input:
     tuple val(method), path(c_ab_shards, stageAs: 'c_ab_??.csv'), path(surface_shards, stageAs: 'surface_??.csv')
