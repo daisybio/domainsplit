@@ -1,0 +1,10 @@
+name: build_scoring_matrix
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - python>=3.10
+  - scipy
+  - biopython
+  - numpy
+  - h5py

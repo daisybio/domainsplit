@@ -115,7 +115,34 @@ process INIT_DOMAINSPLIT_DB {
             ddi_id REFERENCES domain_domain_interaction ON DELETE CASCADE,
             method, split,
             instance_id_a, instance_id_b,
+            z_score REAL,
+            is_mock INTEGER DEFAULT 0,
             UNIQUE(ddi_id, method, split, instance_id_a, instance_id_b)
+        );
+
+        -- One row per (DDI, protein-instance-pair) structural slice, written by
+        -- ENRICH_STRUCTURAL_AF after slicing the externally-predicted AF3 complex.
+        -- `instance_id_*` reference domain_protein_map.instance_id rather than
+        -- protein.id: a protein carrying two copies of one family gives two
+        -- instances, and the split is defined on instances, not proteins.
+        -- is_mock is 1 for a mock slice (missing data) and 0 for a real slice.
+        --  CREATE TABLE domain_structure (
+        --    id INTEGER PRIMARY KEY,
+        --    ddi_id REFERENCES domain_domain_interaction ON DELETE CASCADE,
+        --    instance_id_a,
+        --    instance_id_b,
+        --    is_mock INTEGER DEFAULT 1,
+        --    UNIQUE(ddi_id, instance_id_a, instance_id_b)
+        --);
+
+        -- New table: per-method aggregated confirmation. method-dependent,
+        -- split-independent (scoring covers all of a method's splits at once).
+        CREATE TABLE ddi_interaction_confirmed (
+            ddi_id REFERENCES domain_domain_interaction ON DELETE CASCADE,
+            method,
+            majority_confirmed INTEGER,
+            mean_confirmed INTEGER,
+            UNIQUE(ddi_id, method)
         );
 
         CREATE INDEX IF NOT EXISTS idx_domain_domain_interaction_domain_id_a
@@ -136,6 +163,10 @@ process INIT_DOMAINSPLIT_DB {
         ON ddi_split_membership (method, split);
         CREATE INDEX IF NOT EXISTS idx_ddi_split_membership_ddi_id
         ON ddi_split_membership (ddi_id);
+        CREATE INDEX IF NOT EXISTS idx_ddi_split_membership_triple
+        ON ddi_split_membership (ddi_id, instance_id_a, instance_id_b);
+        -- CREATE INDEX IF NOT EXISTS idx_domain_structure_ddi_id
+        -- ON domain_structure (ddi_id);
     ''')
     con.commit()
     con.close()

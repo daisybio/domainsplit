@@ -30,6 +30,11 @@ include { FETCH_DOMAIN_META           } from '../subworkflows/external/ppi-split
 include { GET_LENGTHS                 } from '../subworkflows/external/ppi-splitting/processes/data_prep.nf'
 include { SUBSET_DOMAIN_DATA          } from '../subworkflows/external/ppi-splitting/processes/data_prep.nf'
 
+// AF inclusion
+include { ENRICH_STRUCTURAL           } from '../subworkflows/local/enrich_structural/main.nf'
+include { ANNOTATE_DDI                } from '../subworkflows/local/annotate_ddi/main.nf'
+
+
 /*
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
     SPLITTING STRATEGIES
@@ -309,6 +314,9 @@ Use all_species_reviewed or human_any_review_status.""")
     log.info "protein universe: instance_tier=${tier} -> tiers=${params.instance_tiers}, taxa=${taxa ?: 'all species'}, ${uniprot_dats.size()} UniProt flat file(s): ${uniprot_dats.collect { u -> file(u).name }.join(', ')}"
 
     input_pfam2go = file(params.url_pfam2go)
+
+    ch_af_metadata = Channel.fromPath(params.af_metadata, checkIfExists: true)
+
 
     //
     // One pass over the UniProt flat files, six consumers. See the
@@ -638,6 +646,14 @@ Use all_species_reviewed or human_any_review_status.""")
 
     enriched_db = ENRICH_DDI_DATABASE.out.domainsplit_db
 
+    // Structural enrichment, on the master database, before any subsetting
+    // Processes structures and stores them in a hd5 file
+    ENRICH_STRUCTURAL(enriched_db, ch_af_metadata)
+
+    // Annotate & score the DDI database using structural information
+    ANNOTATE_DDI(ENRICH_STRUCTURAL.out.domainsplit_db, ENRICH_STRUCTURAL.out.structures)
+    scored_db = ANNOTATE_DDI.out.domainsplit_db
+
     //
     // One database per (method, split). SUBSET_SPLIT_DB creates each output and
     // pulls the surviving rows out of the master read-only -- it does not clone
@@ -652,7 +668,7 @@ Use all_species_reviewed or human_any_review_status.""")
     }
 
     split_dbs = SUBSET_SPLIT_DB(
-        channel.fromList(subset_targets).combine(enriched_db)
+        channel.fromList(subset_targets).combine(scored_db)
     )
 
     WRITE_RUN_MANIFEST(
@@ -685,6 +701,8 @@ Use all_species_reviewed or human_any_review_status.""")
         BUILD_EXTERNAL_TEST.out.versions,
         SUBSET_SPLIT_DB.out.versions,
         WRITE_RUN_MANIFEST.out.versions,
+        ENRICH_STRUCTURAL.out.versions,
+        ANNOTATE_DDI.out.versions
     )
 
     softwareVersionsToYAML(ch_versions)
@@ -698,9 +716,10 @@ Use all_species_reviewed or human_any_review_status.""")
 emit:
     // The master: enriched *and* carrying every split's membership rows,
     // including the external test set BUILD_EXTERNAL_TEST wrote upstream.
-    domainsplit_db    = enriched_db
+    domainsplit_db    = scored_db
     split_db          = split_dbs.split_db
     domain_embeddings = generate_domain_embeddings.out.embeddings
+    structures        = ENRICH_STRUCTURAL.out.structures
     candidate_network = candidate_network
     source_conflicts  = inserted.conflicts
     ddi_attrition     = attrition.report
