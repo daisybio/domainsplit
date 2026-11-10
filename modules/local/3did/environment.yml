@@ -1,8 +1,1 @@
-channels:
-  - conda-forge
-  - bioconda
-dependencies:
-  - wget
-  - gzip
-  - gawk
-  - sqlite
+../../../docker/env/general.yml

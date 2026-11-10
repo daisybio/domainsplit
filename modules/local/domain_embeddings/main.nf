@@ -43,7 +43,7 @@ process GENERATE_DOMAIN_EMBEDDINGS_CHUNK {
     label 'process_gpu_large'
     secret 'HF_TOKEN'
     conda "${moduleDir}/environment.yml"
-    container "docker.io/konstantinpelz/domainsplit-gpu:1.1.0"
+    container "docker.io/konstantinpelz/domainsplit-gpu:2.0.0"
     // Apptainer/Singularity `--env` requires KEY=VALUE (a bare name is rejected),
     // unlike Docker's `-e KEY` pass-through. HF_HOME / HUGGINGFACE_HUB_CACHE are
     // exported inside the task script from `params.embedding_hf_cache_dir`, so only
@@ -95,8 +95,9 @@ process GENERATE_DOMAIN_EMBEDDINGS_CHUNK {
 process EXPORT_DOMAIN_EMBEDDINGS {
     tag { model }
     label 'process_medium'
-    conda "${moduleDir}/environment.yml"
-    container "docker.io/konstantinpelz/domainsplit-general:1.0.0"
+    // CPU process sharing this module dir with the GPU one: general env, not ./environment.yml (gpu).
+    conda "${moduleDir}/../../../docker/env/general.yml"
+    container "docker.io/konstantinpelz/domainsplit-general:2.0.0"
 
     input:
     tuple val(model), path("chunk*"), path(domainsplit_db)

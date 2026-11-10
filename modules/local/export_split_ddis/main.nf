@@ -2,7 +2,7 @@ process EXPORT_SPLIT_DDIS {
     tag "export_split_ddis"
     label 'process_single'
     conda "${moduleDir}/environment.yml"
-    container "docker.io/konstantinpelz/domainsplit-general:1.0.0"
+    container "docker.io/konstantinpelz/domainsplit-general:2.0.0"
 
     input:
     path domainsplit_db_in, stageAs: 'input.domainsplit.sqlite3'
