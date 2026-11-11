@@ -41,7 +41,6 @@
             "type": "object",
             "fa_icon": "fas fa-database",
             "description": "Public source databases (URLs and local file paths) used to assemble the domainsplit database.",
-            "required": ["hippie_tsv", "ppidm_tsv", "negative_ppi_parquet"],
             "properties": {
                 "url_3did": {
                     "type": "string",
@@ -77,7 +76,7 @@
                 "swissprot_taxon_ids": {
                     "type": "string",
                     "description": "Comma-separated NCBI taxon ids kept while parsing the UniProt flat files; an empty string keeps every species. Leave unset: it is derived from instance_tier ('9606' for the human_* tiers, empty for the all_species_* ones).",
-                    "help_text": "Set explicitly only to narrow further, e.g. '9606,10090' together with --instance_tier all_species_reviewed for a human+mouse run. Note that `--swissprot_taxon_ids \"\"` on the command line is parsed by Nextflow as a bare boolean flag and rejected; use an all_species_* tier, or a -params-file.",
+                    "help_text": "A non-empty value together with an all_species_* tier is rejected: ppi-splitting's FETCH_DOMAIN_META derives its taxon filter from the tier alone, so a human+mouse universe cannot be expressed yet. Note that `--swissprot_taxon_ids \"\"` on the command line is parsed by Nextflow as a bare boolean flag and rejected; use an all_species_* tier, or a -params-file.",
                     "fa_icon": "fas fa-filter"
                 },
                 "url_negatome": {
@@ -121,7 +120,7 @@
                 "negative_ppi_parquet": {
                     "type": ["string"],
                     "format": "file-path",
-                    "description": "Required path to a Y2H/MS PPI parquet (columns: gene_name_bait, gene_name_prey, n_tested, ...). BUILD_CANDIDATE_NETWORK maps bait/prey genes to UniProt then Pfam (via UniProt REST API) and emits every tested-but-non-interacting Pfam pair, restricted to families appearing in a 3did DDI, as the pool ppi-splitting's `ilp_candidates` sampler draws from.",
+                    "description": "Path to a Y2H/MS PPI parquet, required while a split row samples `ilp_candidates` negatives (the default, --ppi_splitting_multi_negset); unused otherwise (columns: gene_name_bait, gene_name_prey, n_tested, ...). BUILD_CANDIDATE_NETWORK maps bait/prey genes to UniProt then Pfam (via UniProt REST API) and emits every tested-but-non-interacting Pfam pair, restricted to families appearing in a 3did DDI, as the pool ppi-splitting's `ilp_candidates` sampler draws from.",
                     "fa_icon": "fas fa-file-import"
                 },
                 "negative_ppi_min_n_tested": {
@@ -205,14 +204,14 @@
                 },
                 "ppi_splitting_multi_negset": {
                     "type": "boolean",
-                    "description": "Ask ppi-splitting for both ILP negative sets per split \u2014 plain `ilp` plus `ilp_candidates`, the same sampler restricted to the candidate network \u2014 which turns 3 method directories into 5 and 11 split databases into 18. On by default: the comma-separated `negative_sampling_method` fan-out it needs is in the pinned submodule. The candidate network must be dense enough that every split can cover itself from it: survival is quadratic in a split's share, because both families of a pair have to land in the same split. Set false for a `--split_only` debug run, which ppi-splitting refuses unless `negative_sampling_method` is exactly \"ilp\".",
+                    "description": "Ask ppi-splitting for every negative set of each split row \u2014 plain `ilp` plus `ilp_candidates`, the same sampler restricted to the candidate network, and for `random` also its `uniform` baseline \u2014 which turns 3 method directories into 7 and 11 split databases into 26. On by default: the comma-separated `negative_sampling_method` fan-out it needs is in the pinned submodule. The candidate network must be dense enough that every split can cover itself from it: survival is quadratic in a split's share, because both families of a pair have to land in the same split. Set false for a `--split_only` debug run, which ppi-splitting refuses unless `negative_sampling_method` is exactly \"ilp\".",
                     "default": true,
                     "fa_icon": "fas fa-clone"
                 },
                 "hippie_tsv": {
                     "type": ["string"],
                     "format": "file-path",
-                    "description": "Required path to a HIPPIE PPI TSV. COLLECT_DDI_DATA adds positive DDIs inferred from PPIs between two single-domain proteins.",
+                    "description": "Path to a HIPPIE PPI TSV; required unless --external_test_sources leaves out single_domain_ppi. COLLECT_DDI_DATA adds positive DDIs inferred from PPIs between two single-domain proteins.",
                     "fa_icon": "fas fa-file-import"
                 },
                 "hippie_min_score": {
@@ -226,7 +225,7 @@
                 "ppidm_tsv": {
                     "type": ["string"],
                     "format": "file-path",
-                    "description": "Required path to a PPIDM predictions TSV (columns: domain_1, domain_2, class). PARSE_PPIDM emits each DDI twice, under the umbrella source 'PPIDM' and under 'PPIDM_<Class>'; both merge onto one database row.",
+                    "description": "Path to a PPIDM predictions TSV, required unless --external_test_sources leaves out every PPIDM token (columns: domain_1, domain_2, class). PARSE_PPIDM emits each DDI twice, under the umbrella source 'PPIDM' and under 'PPIDM_<Class>'; both merge onto one database row.",
                     "fa_icon": "fas fa-file-import"
                 },
                 "ppidm_classes": {
@@ -234,6 +233,12 @@
                     "description": "Comma-separated PPIDM confidence classes to include.",
                     "default": "Bronze,Silver,Gold",
                     "fa_icon": "fas fa-tags"
+                },
+                "external_test_sources": {
+                    "type": "string",
+                    "description": "Comma-separated source tokens the external test set is built from (single_domain_ppi, PPIDM, PPIDM_<Class>, negatome). A DDI enters if any of its tokens is listed, e.g. 'PPIDM_Gold,negatome'. Empty = every external source. A source not selected is neither downloaded nor parsed (e.g. no Negatome download without negatome), and its input file is then optional. A token no external DDI carries fails the run.",
+                    "default": "",
+                    "fa_icon": "fas fa-filter"
                 }
             }
         },
@@ -246,9 +251,9 @@
             "properties": {
                 "embedding_models_domainbench": {
                     "type": "string",
-                    "description": "Comma-separated domain-embedding models to run (`esm3`, `esmc`, `prott5`). One GPU task per (model, shard). Set empty to produce no embeddings at all.",
+                    "description": "Comma-separated domain-embedding models to run (`esm3`, `esmc`, `prott5`, `esm3_structure`). One GPU task per (model, shard). `esm3_structure` is opt-in: ESM3 conditioned on AlphaFold DB monomer coordinates, fetched only when it is listed. Set empty to produce no embeddings at all.",
                     "default": "esm3,esmc,prott5",
-                    "pattern": "^$|^(esm3|esmc|prott5)(,(esm3|esmc|prott5))*$",
+                    "pattern": "^$|^(esm3_structure|esm3|esmc|prott5)(,(esm3_structure|esm3|esmc|prott5))*$",
                     "fa_icon": "fas fa-vector-square"
                 },
                 "embedding_shards": {
@@ -286,6 +291,44 @@
                     "minimum": 1,
                     "fa_icon": "fas fa-layer-group"
                 },
+                "embedding_batch_size_esm3_structure": {
+                    "type": "integer",
+                    "description": "Batch size for esm3_structure inference. Forced to 1 in-process, as for esm3.",
+                    "default": 1,
+                    "minimum": 1,
+                    "fa_icon": "fas fa-layer-group"
+                },
+                "afdb_version": {
+                    "type": "integer",
+                    "description": "AlphaFold DB model version fetched for esm3_structure (`AF-<acc>-F1-model_v<version>.pdb`). AFDB serves only its latest version.",
+                    "default": 6,
+                    "minimum": 1,
+                    "fa_icon": "fas fa-code-branch"
+                },
+                "afdb_min_plddt": {
+                    "type": "number",
+                    "description": "Residues of an AFDB model below this pLDDT are left unresolved (NaN) for esm3_structure.",
+                    "default": 70.0,
+                    "minimum": 0,
+                    "maximum": 100,
+                    "fa_icon": "fas fa-filter"
+                },
+                "afdb_max_mismatch_rate": {
+                    "type": "number",
+                    "description": "Drop a protein whose AFDB model disagrees with this run's UniProt sequence on more than this fraction of residues (the model was predicted from an older sequence version).",
+                    "default": 0.02,
+                    "minimum": 0,
+                    "maximum": 1,
+                    "fa_icon": "fas fa-not-equal"
+                },
+                "esm3_structure_min_coverage": {
+                    "type": "number",
+                    "description": "Fraction of a domain's residues that must have resolved coordinates for it to get an esm3_structure embedding; unresolved residues are masked. Below it the domain is absent from that model's H5.",
+                    "default": 0.8,
+                    "minimum": 0,
+                    "maximum": 1,
+                    "fa_icon": "fas fa-percentage"
+                },
                 "embedding_prott5_model": {
                     "type": "string",
                     "description": "HuggingFace id of the ProtT5 encoder. Ungated, so it needs no HF_TOKEN \u2014 unlike ESM3 / ESMC.",
@@ -303,6 +346,41 @@
                     "description": "Shared HF_HOME directory for the embedding chunk tasks (e.g. an NFS path). Avoids parallel chunks each re-downloading the gated ESM3 / ESMC weights. Set empty to use the per-task local cache.",
                     "default": null,
                     "fa_icon": "fas fa-folder-open"
+                }
+            }
+        },
+        "structure_options": {
+            "title": "Structure options",
+            "type": "object",
+            "fa_icon": "fas fa-cubes",
+            "description": "AF3-complex slicing (ENRICH_STRUCTURAL) and contact-potential scoring of DDIs (ANNOTATE_DDI).",
+            "properties": {
+                "structure_data_methods": {
+                    "type": "string",
+                    "description": "Comma-separated methods whose instance pairs are sliced and scored, each against its own train-split potential. 'all' = every published method; '' turns structure off (af_metadata is then not read).",
+                    "default": "all",
+                    "fa_icon": "fas fa-list"
+                },
+                "af_metadata": {
+                    "type": "string",
+                    "format": "path",
+                    "description": "CSV uniprot_id_a,uniprot_id_b,path,source (source: downloaded or inferred) pointing at AF3 complex files (a relative path is relative to the CSV). Only read when structure_data_methods is non-empty; pairs without an entry keep has_structure = 0.",
+                    "default": "/nfs/data/CoBiNet_Masterpraktikum/domainsplit/af_metadata.csv",
+                    "fa_icon": "fas fa-file-csv"
+                },
+                "build_scoring_matrix_shards": {
+                    "type": "integer",
+                    "description": "Parallel BUILD_SCORING_MATRIX tasks per method.",
+                    "default": 12,
+                    "minimum": 1,
+                    "fa_icon": "fas fa-th"
+                },
+                "score_ddi_shards": {
+                    "type": "integer",
+                    "description": "Parallel SCORE_DDI tasks per method.",
+                    "default": 24,
+                    "minimum": 1,
+                    "fa_icon": "fas fa-th"
                 }
             }
         },
@@ -440,6 +518,9 @@
         },
         {
             "$ref": "#/$defs/domain_embedding_options"
+        },
+        {
+            "$ref": "#/$defs/structure_options"
         },
         {
             "$ref": "#/$defs/institutional_config_options"

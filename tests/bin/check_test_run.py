@@ -17,26 +17,41 @@ Checked:
 5. every DDI in the master DB has instances for both families (the prune invariant);
 6. the external test split holds only external DDIs, each represented by instance
    pairs whose parent proteins differ;
-7. the reports exist;
+7. the reports exist, and reports/run_manifest.json's per-split counts match
+   the master's membership;
 8. every published embedding HDF5 satisfies the benchmark's own key contract --
    `h5[pfam_id][COALESCE(instance_id, 'r' || rowid)]` resolves for the
    master's domain instances -- and carries its root attributes. This is the seam
    that yields zero training rows *silently* if it drifts, so it is checked here
-   as well as in tests/python/test_export_domain_embeddings.py.
+   as well as in tests/python/test_export_domain_embeddings.py;
+9. column types survived insertion: `protein_protein_interaction.score` is REAL
+   and `domain_protein_map.start_pos/end_pos` are INTEGER in every database (a
+   TEXT score once crashed domainbenchmark's confidence filter mid-run);
+10. `minimal_leakage*` shares no Pfam family between any two of its
+    train / validation / test splits (DATASET_AUDIT.md F6);
+11. structure (only when the run sliced any): every `has_structure = 1` triple
+    resolves in structures/structures.h5 and the file holds nothing else; a
+    z-score only sits on a row with a structure and is identical across every
+    split row of its (method, instance pair); `ddi_interaction_confirmed` only
+    votes on DDIs its method scored; each published scoring matrix is a
+    symmetric 20x20 with frequencies summing to 1 and T_DB consistent; split
+    databases carry only their own method's confirmation rows.
 
 Usage: ``tests/bin/check_test_run.py --outdir results``
 """
 
 import argparse
+import csv
+import json
 import os
 import sqlite3
 import sys
 
 # `params.ppi_splitting_multi_negset = true` (the default) asks ppi-splitting for
 # both ILP negative sets per ILP row, so each of those rows yields a plain
-# directory and an `_hcni` one: 5 method directories, 18 split databases. The
-# `random` row stays `uniform`-only -- the naive baseline stays a baseline.
-# Set `--ppi_splitting_multi_negset false` and this drops back to 3 / 11.
+# directory and an `_hcni` one; `random` additionally gets `random_ilp` and
+# `random_hcni` next to its uniform baseline: 7 method directories, 26 split
+# databases. Set `--ppi_splitting_multi_negset false` and this drops back to 3 / 11.
 # Published names, i.e. after publishedSplit() in workflows/domainsplit.nf: the
 # 1:1 test set is named for its negative set's sampler -- uniform for `random`,
 # the bias-matched ILP for the ILP rows -- and the 1:10 one is uniform
@@ -46,6 +61,8 @@ MATCHED_SPLITS = ["train", "validation", "test_matched_1_1", "test_uniform_1_10"
 EXTERNAL_SPLITS = ["train", "validation", "test"]
 EXPECTED = {
     "random": UNIFORM_SPLITS,
+    "random_ilp": MATCHED_SPLITS,
+    "random_hcni": MATCHED_SPLITS,
     "minimal_leakage": MATCHED_SPLITS,
     "minimal_leakage_hcni": MATCHED_SPLITS,
     "external_test": EXTERNAL_SPLITS,
@@ -181,7 +198,173 @@ def check_splits(outdir, found, master_pairs):
             ).fetchone()[0]
             check(in_split == 0, f"{method}/{split} holds {in_split} DDIs not in that split")
             check(bool(rows), f"{method}/{split} is empty")
+            foreign = conn.execute(
+                "SELECT COUNT(*) FROM ddi_interaction_confirmed WHERE method != ?", (method,)
+            ).fetchone()[0]
+            check(foreign == 0, f"{method}/{split} carries {foreign} other methods' confirmation rows")
+            check_types(conn, f"{method}/{split}")
             conn.close()
+
+
+def check_types(conn, label):
+    """Storage classes that consumers compare numerically."""
+    bad_score = conn.execute(
+        "SELECT COUNT(*) FROM protein_protein_interaction WHERE typeof(score) != 'real'"
+    ).fetchone()[0]
+    check(bad_score == 0, f"{label}: {bad_score} protein_protein_interaction.score values are not REAL")
+    bad_pos = conn.execute(
+        "SELECT COUNT(*) FROM domain_protein_map "
+        "WHERE typeof(start_pos) != 'integer' OR typeof(end_pos) != 'integer'"
+    ).fetchone()[0]
+    check(bad_pos == 0, f"{label}: {bad_pos} domain_protein_map rows have non-INTEGER positions")
+    bad_ddi = conn.execute(
+        "SELECT COUNT(*) FROM ddi_interaction_confirmed WHERE typeof(ddi_id) != 'integer'"
+    ).fetchone()[0]
+    check(bad_ddi == 0, f"{label}: {bad_ddi} ddi_interaction_confirmed.ddi_id values are not INTEGER")
+
+
+def check_family_disjointness(master):
+    """minimal_leakage*: no Pfam family in two of a method's splits (F6). The two
+    test splits are one test set under two negative sets, so they are one side."""
+    conn = sqlite3.connect(master)
+    rows = conn.execute("""
+        WITH fam AS (
+          SELECT DISTINCT m.method,
+                 CASE WHEN m.split LIKE 'test%' THEN 'test' ELSE m.split END AS side,
+                 d.pfam_id AS pfam
+          FROM ddi_split_membership m
+          JOIN domain_domain_interaction x ON x.id = m.ddi_id
+          JOIN domain d ON d.id IN (x.domain_id_a, x.domain_id_b)
+          WHERE m.method LIKE 'minimal_leakage%')
+        SELECT a.method, a.side, b.side, COUNT(*)
+        FROM fam a JOIN fam b ON a.method = b.method AND a.pfam = b.pfam AND a.side < b.side
+        GROUP BY 1, 2, 3""").fetchall()
+    conn.close()
+    for method, side_a, side_b, n in rows:
+        check(False, f"{method}: {n} Pfam families are in both {side_a} and {side_b}")
+
+
+def check_manifest(outdir, master):
+    path = os.path.join(outdir, "reports", "run_manifest.json")
+    if not os.path.exists(path):
+        return  # reported as a missing report in main()
+    with open(path) as fh:
+        manifest = json.load(fh).get("split_counts", {})
+    conn = sqlite3.connect(master)
+    for method, split, negative, n in conn.execute(
+        "SELECT m.method, m.split, d.negative, COUNT(DISTINCT m.ddi_id) "
+        "FROM ddi_split_membership m JOIN domain_domain_interaction d ON d.id = m.ddi_id "
+        "GROUP BY 1, 2, 3"
+    ):
+        key = "negatives" if negative else "positives"
+        got = manifest.get(method, {}).get(split, {}).get(key)
+        check(got == n, f"run_manifest.json says {method}/{split} has {got} {key}, the master has {n}")
+    conn.close()
+
+
+def structure_key(instance_id_a, instance_id_b):
+    """structures.h5 key -- mirrors utils_struct.structure_h5_keys()."""
+    return (f"{instance_id_a.split('_')[0]}_{instance_id_b.split('_')[0]}",
+            f"{instance_id_a}__{instance_id_b}")
+
+
+def check_structure(outdir, master):
+    conn = sqlite3.connect(master)
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(ddi_split_membership)")}
+    check({"has_structure", "z_score"} <= cols,
+          f"ddi_split_membership lacks has_structure/z_score (has {sorted(cols)})")
+    if not {"has_structure", "z_score"} <= cols:
+        conn.close()
+        return
+
+    bad_flag = conn.execute(
+        "SELECT COUNT(*) FROM ddi_split_membership WHERE has_structure NOT IN (0, 1)"
+    ).fetchone()[0]
+    check(bad_flag == 0, f"{bad_flag} membership rows have has_structure outside 0/1")
+    z_without = conn.execute(
+        "SELECT COUNT(*) FROM ddi_split_membership WHERE z_score IS NOT NULL AND has_structure = 0"
+    ).fetchone()[0]
+    check(z_without == 0, f"{z_without} membership rows carry a z_score but no structure")
+    # One score per (method, instance pair), copied to every split row of it.
+    z_split = conn.execute(
+        "SELECT COUNT(*) FROM (SELECT 1 FROM ddi_split_membership WHERE has_structure = 1 "
+        "GROUP BY method, ddi_id, instance_id_a, instance_id_b "
+        "HAVING COUNT(DISTINCT z_score) > 1 "
+        "    OR (COUNT(z_score) > 0 AND COUNT(z_score) < COUNT(*)))"
+    ).fetchone()[0]
+    check(z_split == 0, f"{z_split} (method, instance pair)s have different z-scores across splits")
+    # has_structure is a property of the instance pair, not of the method.
+    flag_split = conn.execute(
+        "SELECT COUNT(*) FROM (SELECT 1 FROM ddi_split_membership "
+        "GROUP BY ddi_id, instance_id_a, instance_id_b HAVING COUNT(DISTINCT has_structure) > 1)"
+    ).fetchone()[0]
+    check(flag_split == 0, f"{flag_split} instance pairs have has_structure set on some rows only")
+
+    unscored_votes = conn.execute(
+        "SELECT COUNT(*) FROM ddi_interaction_confirmed c WHERE NOT EXISTS ("
+        "  SELECT 1 FROM ddi_split_membership m WHERE m.ddi_id = c.ddi_id "
+        "  AND m.method = c.method AND m.z_score IS NOT NULL)"
+    ).fetchone()[0]
+    check(unscored_votes == 0, f"{unscored_votes} ddi_interaction_confirmed rows have no scored instance pair")
+    bad_vote = conn.execute(
+        "SELECT COUNT(*) FROM ddi_interaction_confirmed "
+        "WHERE majority_confirmed NOT IN (0, 1) OR mean_confirmed NOT IN (0, 1)"
+    ).fetchone()[0]
+    check(bad_vote == 0, f"{bad_vote} ddi_interaction_confirmed rows hold a non-boolean vote")
+
+    triples = conn.execute(
+        "SELECT DISTINCT instance_id_a, instance_id_b FROM ddi_split_membership WHERE has_structure = 1"
+    ).fetchall()
+    scored_methods = [m for (m,) in conn.execute("SELECT DISTINCT method FROM ddi_interaction_confirmed")]
+    conn.close()
+
+    h5_path = os.path.join(outdir, "structures", "structures.h5")
+    if not triples:
+        notes.append("no membership row has a structure: structure was off, or no "
+                     "af_metadata pair matched -- structure checks skipped")
+        return
+    check(os.path.exists(h5_path), f"{len(triples)} instance pairs have a structure but {h5_path} is missing")
+    try:
+        import h5py
+    except ImportError:
+        notes.append("h5py is not installed, so structures.h5 was not opened")
+        h5py = None
+    if h5py is not None and os.path.exists(h5_path):
+        with h5py.File(h5_path, "r") as h5:
+            want = {structure_key(a, b) for a, b in triples}
+            have = {(g, d) for g in h5 for d in h5[g]}
+            check(not (want - have), f"{len(want - have)} has_structure = 1 pairs are missing from structures.h5")
+            check(not (have - want), f"structures.h5 holds {len(have - want)} slices no membership row claims")
+            for group, dset in sorted(want & have)[:20]:
+                raw = h5[group][dset][()].tobytes()
+                check(raw[:2] == b"\x1f\x8b", f"structures.h5 {group}/{dset} is not gzip data")
+
+    for method in scored_methods:
+        check_scoring_matrix(outdir, method)
+
+
+def check_scoring_matrix(outdir, method):
+    root = os.path.join(outdir, "ddi_scoring")
+    paths = {k: os.path.join(root, f"{method}.{k}") for k in ("c_ab_matrix.csv", "db_freq.csv", "t_db.txt")}
+    missing = [k for k, v in paths.items() if not os.path.exists(v)]
+    check(not missing, f"ddi_scoring/{method}: missing {missing}")
+    if missing:
+        return
+    with open(paths["c_ab_matrix.csv"]) as fh:
+        c_ab = {(r["aaA"], r["aaB"]): int(r["count"]) for r in csv.DictReader(fh)}
+    check(len(c_ab) == 400, f"ddi_scoring/{method}.c_ab_matrix.csv has {len(c_ab)} cells, expected 400")
+    asym = [k for k, v in c_ab.items() if c_ab.get((k[1], k[0])) != v]
+    check(not asym, f"ddi_scoring/{method}.c_ab_matrix.csv is not symmetric ({len(asym)} cells)")
+    with open(paths["db_freq.csv"]) as fh:
+        total = sum(float(r["frequency"]) for r in csv.DictReader(fh))
+    check(abs(total - 1.0) < 1e-6 or total == 0,
+          f"ddi_scoring/{method}.db_freq.csv sums to {total}")
+    with open(paths["t_db.txt"]) as fh:
+        t_db = int(fh.read().strip())
+    aas = sorted({a for a, _ in c_ab})
+    expected = sum(c_ab[(a, a)] for a in aas) + 2 * sum(
+        c_ab[(a, b)] for i, a in enumerate(aas) for b in aas[i + 1:])
+    check(t_db == expected, f"ddi_scoring/{method}.t_db.txt is {t_db}, the matrix gives {expected}")
 
 
 def check_embeddings(outdir, master):
@@ -237,13 +420,21 @@ def main():
     check(os.path.exists(master), f"{master} does not exist")
     for report in ("reports/source_conflicts.tsv", "reports/pruned_ddis.tsv",
                    "reports/external_test_dropped.tsv",
-                   "reports/ddi_source_attrition.tsv"):
+                   "reports/ddi_source_attrition.tsv",
+                   "reports/ddi_tier_breakdown.tsv",
+                   "reports/run_manifest.json"):
         check(os.path.exists(os.path.join(args.outdir, report)), f"missing {report}")
 
     found = check_layout(args.outdir)
     if os.path.exists(master):
         master_pairs = check_master(master)
         check_splits(args.outdir, found, master_pairs)
+        conn = sqlite3.connect(master)
+        check_types(conn, "master")
+        conn.close()
+        check_family_disjointness(master)
+        check_manifest(args.outdir, master)
+        check_structure(args.outdir, master)
         check_embeddings(args.outdir, master)
 
     for note in notes:

@@ -34,7 +34,7 @@ import sys
 import time
 from collections import Counter, defaultdict
 
-from ddi_db_utils import is_protected
+from ddi_db_utils import is_protected, split_sources
 
 DROPPED_COLUMNS = ["pfam_a", "pfam_b", "negative", "source", "reason"]
 
@@ -61,6 +61,9 @@ def parse_args():
     p.add_argument("--target", type=int, required=True, help="instance pairs per DDI (ddi_examples_target)")
     p.add_argument("--pool-factor", type=int, default=1, help="instances drawn per family = target * this")
     p.add_argument("--seed", type=int, required=True)
+    p.add_argument("--sources", default="",
+                   help="comma-separated source tokens (e.g. 'PPIDM_Gold,negatome'); a DDI enters the "
+                        "test set if any of its tokens is listed. Empty = every external source.")
     p.add_argument("--dropped-out", required=True)
     p.add_argument("--versions", required=True)
     p.add_argument("--process-name", required=True)
@@ -158,11 +161,21 @@ def main():
               "(ddi_id, method, split, instance_id_a, instance_id_b) VALUES (?, ?, ?, ?, ?)")
     BATCH = 100_000
 
+    # A DDI whose source list shares no token with --sources stays in the master
+    # but gets no membership row, so no split database carries it.
+    allowed = set(split_sources(args.sources))
+    seen_tokens = set()
+
     log("scanning DDIs for non-protected sources")
     membership, dropped, stats = [], [], Counter()
     inserted = 0
     for ddi_id, pfam_a, pfam_b, id_a, id_b, negative, source in external_ddis(conn):
         stats["ddis"] += 1
+        tokens = split_sources(source)
+        seen_tokens.update(tokens)
+        if allowed and not allowed.intersection(tokens):
+            stats["excluded_by_source"] += 1
+            continue
         if stats["ddis"] % 100_000 == 0:
             log(f"{stats['ddis']} external DDIs seen, {inserted + len(membership)} membership rows")
         inst_a, inst_b = by_domain.get(id_a, []), by_domain.get(id_b, [])
@@ -187,6 +200,13 @@ def main():
             inserted += len(membership)
             membership.clear()
 
+    # A misspelt token (`PPIDM_gold`) would otherwise publish an empty or
+    # one-class test set from a green run.
+    unknown = allowed - seen_tokens
+    if unknown:
+        sys.exit(f"--sources names {sorted(unknown)}, which no external DDI carries; "
+                 f"tokens present: {sorted(seen_tokens)}")
+
     writer_cur.executemany(INSERT, membership)
     inserted += len(membership)
     membership.clear()
@@ -199,7 +219,7 @@ def main():
         writer.writerow(DROPPED_COLUMNS)
         writer.writerows(sorted(dropped))
 
-    for key in ("ddis", "pairs", "partial", "dropped_no_instances", "dropped_no_distinct_parent"):
+    for key in ("ddis", "excluded_by_source", "pairs", "partial", "dropped_no_instances", "dropped_no_distinct_parent"):
         log(f"{key} = {stats[key]}")
     log(f"methods = {','.join(args.method)} split = {args.split}")
     conn.close()

@@ -42,6 +42,10 @@
     included script (the ppi-splitting submodule's own main.nf) is ignored, which
     is why the imported params have to be repeated here. Verified, not assumed.
 
+    This types-only block (config-defined params like `outdir` left out) needs
+    Nextflow >= 26.04: 25.10 treats the block as the only declaration source and
+    rejects `--outdir` as undeclared. Hence manifest.nextflowVersion.
+
     `Float`, not `Double`/`BigDecimal`/`Number`: those reject the String outright
     instead of coercing it. Booleans are `Boolean`.
 
@@ -64,6 +68,11 @@ params {
     embedding_batch_size_esm3: Integer
     embedding_batch_size_esmc: Integer
     embedding_batch_size_prott5: Integer
+    embedding_batch_size_esm3_structure: Integer
+    afdb_version: Integer
+    afdb_min_plddt: Float
+    afdb_max_mismatch_rate: Float
+    esm3_structure_min_coverage: Float
     hippie_min_score: Float
     string_min_score: Float
     split_train_fraction: Float
@@ -72,6 +81,8 @@ params {
     ddi_mode: Boolean
     embedding_require_gpu: Boolean
     ppi_splitting_multi_negset: Boolean
+    build_scoring_matrix_shards: Integer
+    score_ddi_shards: Integer
     validate_params: Boolean
 
     // ---- imported from ppi-splitting via

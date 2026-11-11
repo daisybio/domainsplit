@@ -2,7 +2,7 @@ process PARSE_SINGLE_DOMAIN_PPI {
     tag "parse_single_domain_ppi"
     label 'process_low'
     conda "${moduleDir}/environment.yml"
-    container "docker.io/konstantinpelz/domainsplit-general:1.0.0"
+    container "docker.io/konstantinpelz/domainsplit-general:2.0.0"
 
     input:
     path hippie_tsv

@@ -1,5 +1,1 @@
-channels:
-  - conda-forge
-  - bioconda
-dependencies:
-  - python=3.11
+../../../docker/env/general.yml

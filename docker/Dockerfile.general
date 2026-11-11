@@ -1,6 +1,9 @@
-FROM mambaorg/micromamba:1.5.10
+FROM mambaorg/micromamba:2.10.0
 
-# Build/tag as konstantinpelz/domainsplit-general:1.0.0
+# Build/tag as konstantinpelz/domainsplit-general:2.0.0
+# Build context is docker/:
+#   docker build -f docker/Dockerfile.general -t konstantinpelz/domainsplit-general:2.0.0 docker/
+# Packages and pins live in docker/env/general.yml, not here.
 # Covers all CPU processes in daisybio/domainsplit pipeline:
 #   - DOWNLOAD_3DID, INSERT_3DID (gawk + gzip + bin/mysql2sqlite, sqlite3 stdlib)
 #   - INIT_DOMAINSPLIT_DB (sqlite3 stdlib)
@@ -15,7 +18,7 @@ FROM mambaorg/micromamba:1.5.10
 #   - SHARD_FASTA (biopython)
 #   - EXPORT_DOMAIN_EMBEDDINGS (h5py, numpy, sqlite3 stdlib)
 LABEL org.opencontainers.image.source="https://github.com/daisybio/domainsplit"
-LABEL org.opencontainers.image.version="1.0.0"
+LABEL org.opencontainers.image.version="2.0.0"
 LABEL org.opencontainers.image.description="domainsplit CPU container (pandas, pyarrow, numpy, h5py, biopython, tqdm, requests, matplotlib, sqlite, wget, gawk)"
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
@@ -32,25 +35,10 @@ ENV PYTHONUNBUFFERED=1
 ENV PIP_NO_CACHE_DIR=1
 ENV PIP_DISABLE_PIP_VERSION_CHECK=1
 
-RUN micromamba create -y -n ${ENV_NAME} \
-    -c conda-forge -c bioconda \
-    python=3.12.2 \
-    numpy=2.2.6 \
-    scipy=1.14.1 \
-    pandas=2.2.3 \
-    pyarrow=18.1.0 \
-    h5py=3.14.0 \
-    biopython=1.84 \
-    requests=2.32.3 \
-    tqdm=4.66.5 \
-    matplotlib=3.9.2 \
-    sqlite=3.50.4 \
-    wget=1.21.4 \
-    gawk=5.3.0 \
-    gzip=1.13 \
-    zstandard=0.25.0 \
-    zstd=1.5.7 \
- && micromamba clean --all --yes
+COPY --chown=$MAMBA_USER:$MAMBA_USER env/general.yml /tmp/env.yml
+RUN micromamba create -y -n ${ENV_NAME} -f /tmp/env.yml \
+ && micromamba clean --all --yes \
+ && rm /tmp/env.yml
 
 ENTRYPOINT ["micromamba", "run", "-n", "general"]
 CMD ["python"]

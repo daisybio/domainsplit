@@ -124,6 +124,25 @@ def test_protein_sequences_fill_ingested_rows_without_duplicating_them():
         conn.close()
 
 
+def test_protein_pruned_after_ingest_is_not_resurrected():
+    """The map is pre-prune: a protein PRUNE_UNREPRESENTED_DDIS deleted is in it
+    and in the FASTA, and must stay deleted."""
+    with tempfile.TemporaryDirectory() as tmp:
+        db, pd_map, fasta = build_inputs(tmp)
+        conn = sqlite3.connect(db)
+        conn.execute("DELETE FROM domain_protein_map WHERE protein_id = "
+                     "(SELECT id FROM protein WHERE uniprot_id = 'Q22222')")
+        conn.execute("DELETE FROM protein WHERE uniprot_id = 'Q22222'")
+        conn.commit()
+        conn.close()
+        out = run_insert_proteins(tmp, db, pd_map, fasta)
+
+        conn = sqlite3.connect(out)
+        assert [r[0] for r in conn.execute("SELECT uniprot_id FROM protein")] == ["P11111"]
+        assert conn.execute("SELECT sequence FROM protein").fetchone()[0] == SEQUENCES["P11111"]
+        conn.close()
+
+
 def test_no_embedding_columns_remain():
     """The schema mirror must not grow the columns back by accident."""
     with tempfile.TemporaryDirectory() as tmp:

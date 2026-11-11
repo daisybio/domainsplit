@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Generate pooled domain embeddings for one model over one FASTA shard.
 
-One model per invocation (`--model esm3|esmc|prott5`). The previous script loaded
+One model per invocation (`--model esm3|esmc|prott5|esm3_structure`). The previous script loaded
 ESM3 *and* ESMC in a single task; splitting them gives independent retries, a
 per-model batch size, and a shard's failure costs one model instead of two.
 
@@ -45,6 +45,21 @@ Performance (all inherited unchanged from the ESM-only version):
     at batch size 1 the record is skipped.
   - `--max-len` drops the long-tail quadratic-attention sequences entirely.
   - Storage dtype is float16.
+
+Structure conditioning (`--model esm3_structure`):
+  - ESM3 with its structure track fed from `--structures-h5`, which
+    FETCH_AFDB_STRUCTURES writes on a CPU node: AlphaFold DB monomer coordinates
+    per accession, UniProt-numbered, (L, 37, 3), NaN where unresolved or below
+    its pLDDT cutoff. This task makes no network call.
+  - A domain's slice `[start-1:end]` is used when at least `--min-coverage` of
+    its residues have a finite backbone; the rest stay NaN (partial
+    conditioning). Below that the domain is left out of this model's H5, like
+    any other missing entry. Unresolved residues get the structure `<mask>`
+    token, so ESM3 conditions on sequence alone there rather than on a token
+    the VQ-VAE produced from NaN.
+  - Batch size 1, as for `esm3` -- which also means the structure, SS8 and SASA
+    tracks are never padded; `_stack_batch` refuses a multi-item batch that
+    carries them rather than pad them wrongly.
 """
 
 import argparse
@@ -54,7 +69,8 @@ import os
 import re
 import sys
 
-MODELS = ("esm3", "esmc", "prott5")
+MODELS = ("esm3", "esmc", "prott5", "esm3_structure")
+ESM_MODELS = ("esm3", "esmc", "esm3_structure")
 
 #: Exit status for "--require-gpu but no GPU visible". Not 1: conf/modules.config
 #: retries exit 1 (a broken weight download), and a missing GPU does not appear
@@ -93,7 +109,36 @@ def effective_batch_size(model: str, requested: int) -> int:
     ESM3's `logits` never masks padding (see the module docstring), so a batch of
     one -- which `_stack_batch` does not pad at all -- is the only exact one.
     """
-    return 1 if model == "esm3" else requested
+    return 1 if model in ("esm3", "esm3_structure") else requested
+
+
+def domain_coords(protein_coords, start, end, min_coverage):
+    """`protein_coords[start-1:end]` if enough of it has a finite backbone, else None.
+
+    `protein_coords` is one accession's (L, 37, 3) array (or h5py dataset; only
+    the slice is read). start/end are the instance id's 1-based inclusive
+    UniProt positions.
+    """
+    import numpy as np
+
+    if end > protein_coords.shape[0]:
+        return None
+    coords = np.asarray(protein_coords[start - 1:end], dtype=np.float32)
+    resolved = np.isfinite(coords[:, :3, :]).all(axis=(1, 2))  # N, CA, C
+    return coords if len(coords) and resolved.mean() >= min_coverage else None
+
+
+def mask_unresolved_structure_tokens(structure_tokens, coords, mask_id):
+    """Set the structure token of every residue without a finite backbone to `mask_id`.
+
+    `structure_tokens` is (L + 2,) with BOS/EOS at the ends; `coords` (L, 37, 3).
+    """
+    import torch
+
+    resolved = torch.isfinite(coords[:, :3, :]).all(dim=-1).all(dim=-1)
+    out = structure_tokens.clone()
+    out[1:-1][~resolved] = mask_id
+    return out
 
 
 def masked_mean(emb, lengths):
@@ -187,10 +232,18 @@ def _load_records(fasta_path: str, max_len: int):
 # ---------------------------------------------------------------------------
 
 
-def _encode_one(client, sequence: str):
-    """Tokenize a single sequence -> ESMProteinTensor (CPU-cheap)."""
+def _encode_one(client, sequence: str, coordinates=None):
+    """Tokenize a single sequence (and optional atom37 coords) -> ESMProteinTensor."""
     from esm.sdk.api import ESMProtein
-    return client.encode(ESMProtein(sequence=sequence))
+    if coordinates is None:
+        return client.encode(ESMProtein(sequence=sequence))
+    import torch
+    from esm.utils.constants import esm3 as C
+
+    coordinates = torch.from_numpy(coordinates)
+    t = client.encode(ESMProtein(sequence=sequence, coordinates=coordinates))
+    t.structure = mask_unresolved_structure_tokens(t.structure, coordinates, C.STRUCTURE_MASK_TOKEN)
+    return t
 
 
 def _move_batch_to_device(bt, device):
@@ -244,6 +297,12 @@ def _stack_batch(tensors, device, pad_id):
     if len(tensors) == 1:
         bt = _BatchedESMProteinTensor.from_protein_tensor(tensors[0])
         return _move_batch_to_device(bt, device)
+    # Only `sequence` is padded below. ESM3 (the only model with these tracks)
+    # runs at batch size 1, so reaching here with one is a wiring error, and
+    # leaving it unpadded would be a shape error at best.
+    for name in ("structure", "secondary_structure", "sasa", "coordinates"):
+        if any(getattr(t, name, None) is not None for t in tensors):
+            raise ValueError(f"_stack_batch pads only `sequence`, but the batch carries `{name}`")
     max_len = max(t.sequence.shape[0] for t in tensors)
     padded = torch.full(
         (len(tensors), max_len), pad_id,
@@ -300,12 +359,16 @@ def _write_pooled(out_h5, ids, pooled):
         out_h5.create_dataset(sid, data=arr[i])
 
 
-def _process_esm_batch(client, seqs, ids, out_h5, device):
-    """Encode + forward one ESM batch and write the pooled vectors."""
+def _process_esm_batch(client, seqs, ids, out_h5, device, coords_by_id=None):
+    """Encode + forward one ESM batch and write the pooled vectors.
+
+    `coords_by_id` (esm3_structure only) maps instance id -> (L, 37, 3) array.
+    """
     import torch
     from esm.sdk.api import LogitsConfig
 
-    tensors = [_encode_one(client, s) for s in seqs]
+    coords_by_id = coords_by_id or {}
+    tensors = [_encode_one(client, s, coords_by_id.get(i)) for s, i in zip(seqs, ids)]
     batched = _stack_batch(tensors, device, _pad_token_id(client))
     # Per-item tokenized length, BOS+seq+EOS -- see the docstring for why the
     # terminal tokens stay in the ESM mean.
@@ -417,7 +480,7 @@ def _write_versions(versions_path: str, process_name: str, model: str) -> None:
         f.write(f"    python: {sys.version.split()[0]}\n")
         f.write(f"    torch: {torch.__version__}\n")
         f.write(f"    h5py: {h5py.__version__}\n")
-        if model in ("esm3", "esmc"):
+        if model in ESM_MODELS:
             import esm
             f.write(f"    esm: {esm.__version__}\n")
         else:
@@ -464,9 +527,15 @@ def main() -> int:
     parser.add_argument("--max-len", type=int, default=0, help="0 = no cap")
     parser.add_argument("--require-gpu", action="store_true",
                         help="abort instead of falling back to CPU when no GPU is visible")
+    parser.add_argument("--structures-h5", default=None,
+                        help="FETCH_AFDB_STRUCTURES' per-accession atom37 H5 (--model esm3_structure only)")
+    parser.add_argument("--min-coverage", type=float, default=0.8,
+                        help="fraction of a domain's residues that must be resolved (esm3_structure)")
     args = parser.parse_args()
+    if args.model == "esm3_structure" and not args.structures_h5:
+        parser.error("--model esm3_structure requires --structures-h5")
 
-    _setup_hf_cache(require_token=args.model in ("esm3", "esmc"))
+    _setup_hf_cache(require_token=args.model in ESM_MODELS)
 
     import h5py
     import torch
@@ -484,6 +553,23 @@ def main() -> int:
 
     records = _load_records(args.input_fasta, args.max_len)
     print(f"loaded {len(records)} records from {args.input_fasta}", flush=True)
+
+    coords_by_id = None
+    if args.model == "esm3_structure":
+        from utils_struct import extract_data_from_instance_id
+
+        coords_by_id = {}
+        with h5py.File(args.structures_h5, "r") as structures:
+            for sid, seq in records:
+                _family, acc, start, end = extract_data_from_instance_id(sid)
+                coords = domain_coords(structures[acc], start, end, args.min_coverage) \
+                    if acc in structures else None
+                if coords is not None and len(coords) == len(seq):
+                    coords_by_id[sid] = coords
+        print(f"{len(coords_by_id)}/{len(records)} domains reach {args.min_coverage:.0%} "
+              "structure coverage; the rest are left out of this model", flush=True)
+        records = [r for r in records if r[0] in coords_by_id]
+
     if not records:
         # Still write an empty H5 + versions so the export step doesn't crash.
         with h5py.File(args.output_h5, "w"):
@@ -493,10 +579,11 @@ def main() -> int:
 
     with h5py.File(args.output_h5, "w") as out_h5:
         print(f"loading {args.model}", flush=True)
-        if args.model == "esm3":
+        if args.model in ("esm3", "esm3_structure"):
             from esm.models.esm3 import ESM3
             client = ESM3.from_pretrained("esm3-open", device=device).to(device).eval()
-            process = lambda seqs, ids: _process_esm_batch(client, seqs, ids, out_h5, device)  # noqa: E731
+            process = lambda seqs, ids: _process_esm_batch(  # noqa: E731
+                client, seqs, ids, out_h5, device, coords_by_id)
         elif args.model == "esmc":
             from esm.models.esmc import ESMC
             client = ESMC.from_pretrained("esmc_600m", device=device).to(device).eval()

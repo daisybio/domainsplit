@@ -26,7 +26,9 @@ import pytest  # noqa: E402
 from run_embeddings import (  # noqa: E402
     _pad_token_id,
     _stack_batch,
+    domain_coords,
     effective_batch_size,
+    mask_unresolved_structure_tokens,
     prepare_prott5_sequence,
     real_token_lengths,
 )
@@ -84,6 +86,7 @@ def test_esm_and_prott5_pool_different_spans_on_purpose():
 def test_esm3_never_batches():
     """ESM3's logits path masks no padding, so only an unpadded batch of one is exact."""
     assert effective_batch_size("esm3", 32) == 1
+    assert effective_batch_size("esm3_structure", 32) == 1
     assert effective_batch_size("esmc", 32) == 32
     assert effective_batch_size("prott5", 16) == 16
 
@@ -124,7 +127,60 @@ def test_esm_batches_pad_with_the_tokenizer_pad_token():
     assert (pad_region == tok.pad_token_id).all(), batched.sequence
 
 
+def _protein(resolved):
+    """(L, 37, 3) coords: residue i has a backbone iff resolved[i]."""
+    import numpy as np
+    arr = np.full((len(resolved), 37, 3), np.nan, dtype=np.float32)
+    for i, ok in enumerate(resolved):
+        if ok:
+            arr[i, :3] = i
+    return arr
+
+
+def test_domain_coords_slices_uniprot_positions_and_gates_on_coverage():
+    import numpy as np
+    prot = _protein([True] * 10 + [False] * 2 + [True] * 8)  # L = 20
+    got = domain_coords(prot, 3, 12, 0.8)                     # 10 residues, 8 resolved
+    assert got.shape == (10, 37, 3)
+    assert got[0, 1, 0] == 2, "start is 1-based: position 3 is index 2"
+    assert np.isnan(got[-1]).all(), "partial: the unresolved tail stays NaN"
+    assert domain_coords(prot, 3, 12, 0.81) is None
+    assert domain_coords(prot, 15, 21, 0.0) is None, "a span past the protein end is not truncated"
+
+
+def test_unresolved_residues_get_the_structure_mask_token():
+    torch = pytest.importorskip("torch")
+    coords = torch.from_numpy(_protein([True, False, True]))
+    tokens = torch.tensor([0, 11, 12, 13, 2])  # BOS, 3 residues, EOS
+    out = mask_unresolved_structure_tokens(tokens, coords, 99)
+    assert out.tolist() == [0, 11, 99, 13, 2]
+    assert tokens.tolist() == [0, 11, 12, 13, 2], "input not modified in place"
+
+
+def test_structure_track_is_kept_alone_and_refused_in_a_batch():
+    """Batch-independence: a structure-conditioned tensor goes through unpadded
+    at batch size 1, and a multi-item batch carrying the track is an error, not
+    a silently sequence-only padding."""
+    torch = pytest.importorskip("torch")
+    pytest.importorskip("esm")
+    from esm.sdk.api import ESMProteinTensor
+    from esm.tokenization import EsmSequenceTokenizer
+
+    tok = EsmSequenceTokenizer()
+    seq = torch.tensor(tok.encode("MKV"))
+    struct = torch.tensor([1, 7, 8, 9, 2])
+    one = _stack_batch([ESMProteinTensor(sequence=seq, structure=struct)], torch.device("cpu"), tok.pad_token_id)
+    assert one.structure.tolist() == [struct.tolist()]
+    with pytest.raises(ValueError, match="structure"):
+        _stack_batch([ESMProteinTensor(sequence=seq, structure=struct),
+                      ESMProteinTensor(sequence=torch.tensor(tok.encode("MKVLA")))],
+                     torch.device("cpu"), tok.pad_token_id)
+
+
 if __name__ == "__main__":
+    test_domain_coords_slices_uniprot_positions_and_gates_on_coverage()
+    test_unresolved_residues_get_the_structure_mask_token()
+    test_structure_track_is_kept_alone_and_refused_in_a_batch()
     test_esm3_never_batches()
     test_pad_token_comes_from_either_model_family()
     test_esm_batches_pad_with_the_tokenizer_pad_token()

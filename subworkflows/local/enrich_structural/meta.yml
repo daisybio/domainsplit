@@ -1,0 +1,33 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/nf-core/modules/master/subworkflows/yaml-schema.json
+name: "enrich_structural"
+description: Slices every domain-instance pair of the selected methods out of its AF3-predicted complex into structures.h5 and sets ddi_split_membership.has_structure, for later DDI scoring (ANNOTATE_DDI).
+keywords:
+  - structural
+  - annotation
+  - alphafold
+components:
+  - enrich/structural/af
+input:
+  - domainsplit_db_in:
+      type: file
+      description: Enriched domainsplit SQLite database.
+      pattern: "*.sqlite3"
+  - af_metadata:
+      type: file
+      description: CSV uniprot_id_a,uniprot_id_b,path,source pointing at the AF3 complex files.
+  - methods:
+      type: string
+      description: Comma-separated methods whose instance pairs are sliced.
+output:
+  - domainsplit_db:
+      type: file
+      description: The database with has_structure set.
+      pattern: "*.sqlite3"
+  - structures:
+      type: file
+      description: HDF5 file of gzip-compressed two-chain PDB slices, keyed {pfam_id_a}_{pfam_id_b}/{instance_id_a}__{instance_id_b}.
+      pattern: "*.h5"
+authors:
+  - "@ChiaraThomas"
+maintainers:
+  - "@KonstantinPelz"

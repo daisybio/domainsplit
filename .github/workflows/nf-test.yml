@@ -42,6 +42,8 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           fetch-depth: 0
+          # ppi-splitting is a submodule; nextflow.config includes its params. Pinned commit, no remote update.
+          submodules: true
 
       - name: get number of shards
         id: set-shards
@@ -76,7 +78,7 @@ jobs:
           - isMain: false
             profile: "singularity"
         NXF_VER:
-          - "25.10.2"
+          - "26.04.0"
           - "latest-everything"
     env:
       NXF_ANSI_LOG: false
@@ -86,6 +88,8 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           fetch-depth: 0
+          # ppi-splitting is a submodule; nextflow.config includes its params. Pinned commit, no remote update.
+          submodules: true
 
       - name: Run nf-test
         id: run_nf_test

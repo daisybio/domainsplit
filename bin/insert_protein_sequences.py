@@ -49,23 +49,19 @@ def main() -> int:
 
         uniprot_records = SeqIO.parse(uniprot_text, "fasta")
         uniprot_records = map(
-            lambda record: (record.id.split("|")[1], str(record.seq)),
+            lambda record: (str(record.seq), record.id.split("|")[1]),
             uniprot_records,
         )
         uniprot_records = filter(
-            lambda record: record[0] in required_uniprot_ids, uniprot_records
+            lambda record: record[1] in required_uniprot_ids, uniprot_records
         )
         uniprot_records = tqdm(uniprot_records)
 
-        # An upsert, not a plain insert: INGEST_INSTANCES has already created a
-        # bare `protein` row for every parent protein of a domain instance, so a
-        # plain INSERT would hit UNIQUE(uniprot_id) on the first record. This step
-        # owns the sequence and fills it in.
+        # UPDATE only, never insert: INGEST_INSTANCES created the `protein` rows,
+        # and PRUNE_UNREPRESENTED_DDIS has since deleted the orphans. The map is
+        # pre-prune, so an insert here would resurrect them without taxon/review.
         conn.executemany(
-            """INSERT INTO protein (uniprot_id, sequence)
-            VALUES (?, ?)
-            ON CONFLICT(uniprot_id) DO UPDATE SET
-                sequence = excluded.sequence;""",
+            "UPDATE protein SET sequence = ? WHERE uniprot_id = ?",
             uniprot_records,
         )
     conn.commit()

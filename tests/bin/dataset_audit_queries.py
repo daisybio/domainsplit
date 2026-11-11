@@ -25,6 +25,13 @@ What each section decides, keyed to DATASET_AUDIT.md:
   F7  protein node/edge overlap between a method's splits
   F8  reversed rows vs unordered pairs in protein_protein_interaction, and the
       STRING score distribution
+  F11 structure: AF3 coverage per method / split / label (a label leak if it
+      differs), per af_metadata source when --af_metadata is given; z-score
+      separation and the AUC of z_score and of has_structure alone for the
+      label; confirmation rates; rows with a structure but no score; z-scores
+      that differ across the split rows of one instance pair (expect 0)
+
+Optional: ``--af_metadata /path/af_metadata.csv`` splits F11 coverage by source.
 """
 
 import argparse
@@ -36,7 +43,7 @@ import sys
 from collections import Counter, defaultdict
 
 MASTER = "domainsplit.sqlite3"
-INTERNAL = ["random", "minimal_leakage", "minimal_leakage_hcni"]
+INTERNAL = ["random", "random_ilp", "random_hcni", "minimal_leakage", "minimal_leakage_hcni"]
 # (1:1, 1:10) under every naming scheme a run may have published: the original
 # test_balanced/test_realistic, the first rename (test_matched_1_1 for every
 # method) and the current per-sampler names (test_uniform_1_1 for `random`).
@@ -215,15 +222,17 @@ def check_f1(rep, results):
 
 def check_f2(rep, results):
     rep.head("F2 -- are the _hcni and non-_hcni test sets identical")
-    plain = resolve_ratios(results, "minimal_leakage")
-    hcni = resolve_ratios(results, "minimal_leakage_hcni")
-    if plain is None or hcni is None:
-        rep.line("  missing DB(s) -- skipped")
-        return
-    for split, a, b in zip(("balanced 1:1", "uniform 1:10"), plain, hcni):
-        (ap, an), (bp, bn) = pair_sets(a), pair_sets(b)
-        rep.line(f"  {split}: positives identical = {ap == bp}; negatives identical = {an == bn}; "
-                 f"negatives differing = {len(an ^ bn)}")
+    # random_ilp/random_hcni (F9) exist only on runs after 2026-11; skipped otherwise.
+    for base in ("minimal_leakage", "random_ilp"):
+        plain = resolve_ratios(results, base)
+        hcni = resolve_ratios(results, base.replace("_ilp", "") + "_hcni")
+        if plain is None or hcni is None:
+            rep.line(f"  {base}: missing DB(s) -- skipped")
+            continue
+        for split, a, b in zip(("balanced 1:1", "uniform 1:10"), plain, hcni):
+            (ap, an), (bp, bn) = pair_sets(a), pair_sets(b)
+            rep.line(f"  {base} {split}: positives identical = {ap == bp}; negatives identical = {an == bn}; "
+                     f"negatives differing = {len(an ^ bn)}")
     rep.line("  Expected before the F2 fix: the 1:10 set identical, the 1:1 set differing.")
 
 
@@ -366,12 +375,109 @@ def check_f8(rep, master):
     rep.line("  A large frac_below_400 means text-mined / predicted edges dominate (F8(i)).")
 
 
+# ------------------------------------------------------------------------- F11
+
+def auc(scores_pos, scores_neg):
+    """P(score_pos > score_neg) + 0.5 * P(tie), by rank sum. None if a side is empty."""
+    if not scores_pos or not scores_neg:
+        return None
+    pooled = sorted([(v, 1) for v in scores_pos] + [(v, 0) for v in scores_neg])
+    rank_sum, i = 0.0, 0
+    while i < len(pooled):
+        j = i
+        while j < len(pooled) and pooled[j][0] == pooled[i][0]:
+            j += 1
+        mid = (i + 1 + j) / 2.0  # average 1-based rank of the tie block
+        rank_sum += mid * sum(1 for _, lab in pooled[i:j] if lab)
+        i = j
+    n_pos, n_neg = len(scores_pos), len(scores_neg)
+    return (rank_sum - n_pos * (n_pos + 1) / 2.0) / (n_pos * n_neg)
+
+
+def fmt(x):
+    return "-" if x is None else f"{x:.3f}"
+
+
+def check_f11(rep, master, af_metadata):
+    rep.head("F11 -- structure: coverage, label leakage, z-score separation")
+    cols = {r[1] for r in master.execute("PRAGMA table_info(ddi_split_membership)")}
+    if "has_structure" not in cols:
+        rep.line("  no has_structure column -- this run predates the structural steps; skipping")
+        return
+
+    rep.line("\n  (a) coverage: rows with an AF3 slice, per method / split / label")
+    rep.line("      A coverage gap between labels makes has_structure a label proxy.")
+    rep.rows(["method", "split", "negative", "rows", "with_structure", "frac", "scored", "scored_frac_of_struct"],
+             master.execute(
+        "SELECT method, split, d.negative, COUNT(*), SUM(has_structure), "
+        "ROUND(AVG(has_structure), 3), SUM(z_score IS NOT NULL), "
+        "ROUND(1.0 * SUM(z_score IS NOT NULL) / MAX(1, SUM(has_structure)), 3) "
+        "FROM ddi_split_membership m JOIN domain_domain_interaction d ON d.id = m.ddi_id "
+        "GROUP BY 1, 2, 3 ORDER BY 1, 2, 3"), limit=200)
+    rep.line("      scored < with_structure: < 5 interface contacts, or a slice that failed to parse.")
+
+    if af_metadata and os.path.exists(af_metadata):
+        rep.line("\n  (b) coverage by af_metadata source (unordered protein pair), per label")
+        src = {}
+        with open(af_metadata, newline="") as fh:
+            for r in csv.DictReader(fh):
+                src[frozenset((r["uniprot_id_a"], r["uniprot_id_b"]))] = r["source"]
+        counts = Counter()
+        for method, split, negative, ia, ib, has in master.execute(
+            "SELECT method, split, d.negative, instance_id_a, instance_id_b, has_structure "
+            "FROM ddi_split_membership m JOIN domain_domain_interaction d ON d.id = m.ddi_id"
+        ):
+            pair = frozenset((ia.split("_")[1], ib.split("_")[1]))
+            label = src.get(pair, "no_metadata") if has else ("no_slice" if pair in src else "no_metadata")
+            counts[(method, split, negative, label)] += 1
+        rep.rows(["method", "split", "negative", "source", "rows"],
+                 [(*k, n) for k, n in sorted(counts.items())], limit=300)
+    else:
+        rep.line("\n  (b) skipped: pass --af_metadata to split coverage by downloaded / inferred")
+
+    rep.line("\n  (c) label separation per method / split: AUC of z_score (scored rows only) and")
+    rep.line("      of has_structure alone (all rows). 0.5 = no signal. has_structure far from")
+    rep.line("      0.5 means the *presence* of a structure leaks the label.")
+    rep.line("  method | split | pos_scored | neg_scored | mean_z_pos | mean_z_neg | auc_z | auc_has_structure")
+    data = defaultdict(lambda: {"zp": [], "zn": [], "hp": [], "hn": []})
+    for method, split, negative, has, z in master.execute(
+        "SELECT method, split, d.negative, has_structure, z_score "
+        "FROM ddi_split_membership m JOIN domain_domain_interaction d ON d.id = m.ddi_id"
+    ):
+        d = data[(method, split)]
+        (d["hn"] if negative else d["hp"]).append(has)
+        if z is not None:
+            (d["zn"] if negative else d["zp"]).append(z)
+    for (method, split), d in sorted(data.items()):
+        mean = lambda xs: sum(xs) / len(xs) if xs else None  # noqa: E731
+        rep.line(f"  {method} | {split} | {len(d['zp'])} | {len(d['zn'])} | {fmt(mean(d['zp']))} | "
+                 f"{fmt(mean(d['zn']))} | {fmt(auc(d['zp'], d['zn']))} | {fmt(auc(d['hp'], d['hn']))}")
+
+    rep.line("\n  (d) ddi_interaction_confirmed rates per method / label")
+    rep.rows(["method", "negative", "ddis", "majority_confirmed", "mean_confirmed"], master.execute(
+        "SELECT c.method, d.negative, COUNT(*), ROUND(AVG(majority_confirmed), 3), "
+        "ROUND(AVG(mean_confirmed), 3) FROM ddi_interaction_confirmed c "
+        "JOIN domain_domain_interaction d ON d.id = c.ddi_id GROUP BY 1, 2 ORDER BY 1, 2"))
+    rep.line("      Positives (3did is crystal-derived) should mostly confirm; if not, check the slicing.")
+
+    rep.line("\n  (e) instance pairs whose z_score differs across split rows of one method -- expect 0")
+    n = master.execute(
+        "SELECT COUNT(*) FROM (SELECT 1 FROM ddi_split_membership WHERE has_structure = 1 "
+        "GROUP BY method, ddi_id, instance_id_a, instance_id_b "
+        "HAVING COUNT(DISTINCT z_score) > 1 OR (COUNT(z_score) > 0 AND COUNT(z_score) < COUNT(*)))"
+    ).fetchone()[0]
+    rep.line(f"      {n}")
+    if n:
+        rep.line("      ^ a run from before the dedupe fix scored the shared 1:1 / 1:10 positives twice.")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--results", required=True, help="published results directory")
     ap.add_argument("--log", default=None, help="the run's .nextflow.log")
     ap.add_argument("--out", default="audit_out")
+    ap.add_argument("--af_metadata", default=None, help="af_metadata.csv, for F11 coverage by source")
     args = ap.parse_args()
 
     os.makedirs(args.out, exist_ok=True)
@@ -386,7 +492,8 @@ def main():
         for fn, a in ((check_f3_log, (args.log,)), (check_f3, (args.results, master, args.out)),
                       (check_f1, (args.results,)), (check_f2, (args.results,)),
                       (check_f4, (master,)), (check_f5, (args.results,)), (check_f6, (master,)),
-                      (check_f7, (args.results,)), (check_f8, (master,))):
+                      (check_f7, (args.results,)), (check_f8, (master,)),
+                      (check_f11, (master, args.af_metadata))):
             try:
                 fn(rep, *a)
             except Exception as exc:  # one broken section must not lose the rest

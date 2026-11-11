@@ -44,17 +44,19 @@ input:
       pattern: "*.{tsv,txt}"
   - negative_ppi_parquet:
       type: file
-      description: High-confidence non-PPI pairs used to derive negative DDIs.
+      description: High-confidence non-PPI pairs used to derive negative DDIs; only read when want_candidates.
       pattern: "*.parquet"
+  - want_candidates:
+      type: boolean
+      description: Whether some split row samples `ilp_candidates` negatives; BUILD_CANDIDATE_NETWORK runs only then.
 output:
   - domainsplit_db:
       type: file
       description: Domainsplit SQLite populated with positive and negative DDIs.
       pattern: "*.sqlite3"
-  - pfam_mapping:
+  - candidate_network:
       type: file
-      description: SwissProt protein-to-Pfam domain mapping produced while building single-domain PPIs.
-      pattern: "*.{tsv,parquet}"
+      description: Candidate negative Pfam pairs for `ilp_candidates`, or the value 'none' when want_candidates is false.
 authors:
   - "@KonstantinPelz"
 maintainers:
