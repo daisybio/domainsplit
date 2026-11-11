@@ -37,7 +37,7 @@ include { SHARD_FASTA } from '../util/main.nf'
 // the H5 makes no network call. Runs only when `esm3_structure` is requested.
 process FETCH_AFDB_STRUCTURES {
     tag "afdb_v${params.afdb_version}"
-    label 'process_low'
+    label 'process_medium'
     label 'error_retry'
     // The gpu env for ESM's own PDB parser (same atom37 layout ESM3 encodes);
     // nothing here touches a GPU, and no `process_gpu` label routes it to one.
