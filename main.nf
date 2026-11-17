@@ -184,10 +184,15 @@ workflow {
     split_db   = DAISYBIO_DOMAINSPLIT.out.split_db
 }
 
+// `enabled false` under `-preview`: no process runs there, so a PublishOp never
+// completes, and Nextflow's on-complete output summary (OutputDsl.getOutput)
+// waits on it forever -- the preview wrote its DAG and then never exited.
 output {
     domainsplit_db {
+        enabled !workflow.preview
     }
     split_db {
+        enabled !workflow.preview
         path {
             it[1] >> "databases/${it[0].method}/${it[0].split}.sqlite3"
         }
