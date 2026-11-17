@@ -51,15 +51,15 @@ databases**:
 | ---------------------- | -------------------------------------------------------------- |
 | `random`               | `train`, `validation`, `test_uniform_1_1`, `test_uniform_1_10` |
 | `random_ilp`           | `train`, `validation`, `test_matched_1_1`, `test_uniform_1_10` |
-| `random_hcni`          | `train`, `validation`, `test_matched_1_1`, `test_uniform_1_10` |
+| `random_hrni`          | `train`, `validation`, `test_matched_1_1`, `test_uniform_1_10` |
 | `minimal_leakage`      | `train`, `validation`, `test_matched_1_1`, `test_uniform_1_10` |
-| `minimal_leakage_hcni` | `train`, `validation`, `test_matched_1_1`, `test_uniform_1_10` |
+| `minimal_leakage_hrni` | `train`, `validation`, `test_matched_1_1`, `test_uniform_1_10` |
 | `external_test`        | `train`, `validation`, `test`                                  |
-| `external_test_hcni`   | `train`, `validation`, `test`                                  |
+| `external_test_hrni`   | `train`, `validation`, `test`                                  |
 
 `random` is the naive baseline (random split, uniform negatives). `minimal_leakage` is the main
-product (ILP split, ILP negatives). `random_ilp` / `random_hcni` put the ILP negative sets on the
-random split, so HCNI can be compared without the family-disjoint split as a confounder. The `_hcni` directories are the same positive split with
+product (ILP split, ILP negatives). `random_ilp` / `random_hrni` put the ILP negative sets on the
+random split, so HRNI can be compared without the family-disjoint split as a confounder. The `_hrni` directories are the same positive split with
 **h**igh-**c**onfidence **n**egative **i**nstances: negatives drawn from the candidate network of
 Pfam pairs a Y2H/MS screen tested without finding an interaction. `external_test`'s `test` split is
 not an internal held-out slice at all — it is the external DDIs (PPIDM / single-domain-PPI /

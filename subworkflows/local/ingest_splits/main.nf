@@ -31,7 +31,7 @@
 
     Both split channels carry `[method, split, csv]`, where `method` is the
     output directory name -- the negative-set -> method mapping (`ilp` ->
-    `minimal_leakage`, `ilp_candidates` -> `minimal_leakage_hcni`, ...) is the
+    `minimal_leakage`, `ilp_candidates` -> `minimal_leakage_hrni`, ...) is the
     caller's job, because only the caller knows which dataset row produced which
     negative set.
 ----------------------------------------------------------------------------*/

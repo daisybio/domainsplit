@@ -46,7 +46,7 @@ FAMILY_SPLITS = {
 }
 # The same negative pair reappears in the second negative set; it must not
 # produce a second DDI row.
-FAMILY_SPLITS_HCNI = {
+FAMILY_SPLITS_HRNI = {
     "train": [("PF00001", "PF00002", 1), ("PF00001", "PF00003", 0)],
 }
 
@@ -98,7 +98,7 @@ def test_sampled_negatives_dedup_and_membership():
 
         specs = []
         for method, splits in (("minimal_leakage", FAMILY_SPLITS),
-                               ("minimal_leakage_hcni", FAMILY_SPLITS_HCNI)):
+                               ("minimal_leakage_hrni", FAMILY_SPLITS_HRNI)):
             for split, rows in splits.items():
                 path = os.path.join(tmp, f"{method}_{split}.csv")
                 write_family_csv(path, rows)
@@ -120,7 +120,7 @@ def test_sampled_negatives_dedup_and_membership():
         # Membership, over the same splits at instance level.
         specs = []
         for method, splits in (("minimal_leakage", FAMILY_SPLITS),
-                               ("minimal_leakage_hcni", FAMILY_SPLITS_HCNI)):
+                               ("minimal_leakage_hrni", FAMILY_SPLITS_HRNI)):
             for split, fam_rows in splits.items():
                 path = os.path.join(tmp, f"{method}_{split}_instances.csv")
                 write_instance_csv(path, [
@@ -140,7 +140,7 @@ def test_sampled_negatives_dedup_and_membership():
         assert seen == [
             ("minimal_leakage", "train", 2),
             ("minimal_leakage", "validation", 2),
-            ("minimal_leakage_hcni", "train", 2),
+            ("minimal_leakage_hrni", "train", 2),
         ], seen
 
         with open(unresolved) as fh:
