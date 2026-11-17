@@ -14,15 +14,19 @@ process WRITE_RUN_MANIFEST {
     path hippie_tsv,           stageAs: 'manual/hippie/*'
     path ppidm_tsv,            stageAs: 'manual/ppidm/*'
     path negative_ppi_parquet, stageAs: 'manual/negative_ppi/*'
+    // COMPUTE_PPIDM's ppidm_report.json and BUILD_PPIDM_SOURCES' ppidm_sources.tsv
+    // (both also published under reports/); [] when PPIDM is not computed.
+    path ppidm_reports,        stageAs: 'ppidm/*'
 
     output:
     path "run_manifest.json", emit: manifest
     path "versions.yml",      emit: versions
 
     script:
-    def hippie_arg = hippie_tsv ? "--input hippie_tsv=${hippie_tsv}" : ''
+    def hippie_arg = hippie_tsv ? "--input hippie=${hippie_tsv}" : ''
     def ppidm_arg  = ppidm_tsv ? "--input ppidm_tsv=${ppidm_tsv}" : ''
     def neg_arg    = negative_ppi_parquet ? "--input negative_ppi_parquet=${negative_ppi_parquet}" : ''
+    def ppidm_args = [ppidm_reports].flatten().findAll { f -> f }.collect { f -> "--input ${f.name}=${f}" }.join(' ')
     """
     write_run_manifest.py \\
         --base ${base_json} \\
@@ -30,6 +34,7 @@ process WRITE_RUN_MANIFEST {
         ${hippie_arg} \\
         ${ppidm_arg} \\
         ${neg_arg} \\
+        ${ppidm_args} \\
         --out run_manifest.json \\
         --versions versions.yml \\
         --process-name "${task.process}"

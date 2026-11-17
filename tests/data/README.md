@@ -39,8 +39,8 @@ Real subsets, cut from files supplied 2026-08-17 and **not** in git:
 | source file (`--sources`)             | fixture                                          | maps to                              |
 | ------------------------------------- | ------------------------------------------------ | ------------------------------------ |
 | `3did.sql` (1.3 GB)                   | `3did.sql.gz`                                    | `params.url_3did`                    |
-| `HIPPIE-current.txt` (170 MB)         | `hippie.tsv`                                     | `params.hippie_tsv`                  |
-| `predicted_ddi_ppi_ppidm.tsv` (36 MB) | `ppidm.tsv`                                      | `params.ppidm_tsv`                   |
+| `HIPPIE-current.txt` (170 MB)         | `hippie.tsv`                                     | copied into `ppidm/hippie.txt.gz`    |
+| `predicted_ddi_ppi_ppidm.tsv` (36 MB) | `ppidm.tsv`                                      | legacy `params.ppidm_tsv`, unset     |
 | `negatome_combined_pfam.txt` (45 KB)  | `negatome.txt`                                   | `params.url_negatome`                |
 | `negative_data_y2h_ms.pq` (2.7 GB)    | `negative_ppi.parquet`                           | `params.negative_ppi_parquet`        |
 | `Pfam-A.fasta.gz` (6.3 GB)            | `pfam/Pfam-A.fasta.gz`                           | ppi-splitting's `params.pfam_fasta`  |
@@ -161,6 +161,56 @@ The script is idempotent and is called at the end of `make_test_fixtures.py`, so
 regeneration reproduces them. It is also the only writer of
 `pfam/Pfam-A.regions.tsv.gz`, which the generator otherwise does not produce — see
 the section below.
+
+## The computed-PPIDM sources (`ppidm/`)
+
+The profile's external test set is the default `PPIDM_Gold,INVERSE_PPIDM_Gold`,
+computed in-pipeline, so `ppidm_tsv` (legacy, refuses the INVERSE tokens) is
+unset and every PPIDM input points here. All synthetic, written by
+
+```bash
+tests/bin/make_ppidm_fixtures.py
+```
+
+(seeded, byte-identical on rerun, ~80 KB). It reads `3did.sql.gz`,
+`pfam/Pfam-A.regions.tsv.gz`, `uniprot_universe.dat.gz` and `hippie.tsv`, so
+rerun it after regenerating any of those.
+
+| fixture                                     | maps to                          |
+| ------------------------------------------- | -------------------------------- |
+| `ppidm/uniprot_ppidm.dat.gz`                | `params.ppidm_uniprot_dat` (2nd) |
+| `ppidm/biogrid.mitab.txt.gz`                | `params.url_biogrid_mitab`       |
+| `ppidm/intact.mitab.txt.gz`                 | `params.url_intact_mitab`        |
+| `ppidm/hippie.txt.gz`                       | `params.url_hippie`              |
+| `ppidm/string/9606.protein.links.detailed.txt.gz` | `params.ppidm_string_url_template` |
+| `ppidm/pdb_chain_uniprot.tsv.gz`            | `params.url_sifts_chain_uniprot` |
+| `ppidm/3did_flat.gz`                        | `params.url_3did_flat`           |
+
+`ppidm_uniprot_dat` lists `uniprot_universe.dat.gz` first and
+`uniprot_ppidm.dat.gz` second. The universe alone cannot carry PPIDM: only its
+69 HIPPIE-derived entries have `DR Pfam`, one family each, and a co-occurrence
+over one protein per family is never significant. `uniprot_ppidm.dat.gz` adds
+195 reviewed human proteins `X1P###` over the 85 fixture families (2 per family,
+more for the planted ones, 10 with a second domain), each with a
+`DR STRING; 9606.FIXP#####` line. They exist only for PPIDM; no instance comes
+from them.
+
+Planted, on families with human instances and no 3did pair:
+
+- **PPIDM Gold**: two pairs whose proteins bind each other in 7 of the 8
+  sources (all but `string_rest`), high confidence.
+- **INVERSE_PPIDM Gold**: four hub families, 6 proteins each at degree 10 in
+  the six large sources, that never touch each other, so all six of their
+  pairs are powered and depleted. One protein carries two hubs (a same-protein
+  co-occurrence `K` must ignore), and trap rows that the extractor must drop
+  (IntAct `Negative=true`, BioGRID genetic, cross-taxon, ambiguous Swiss-Prot)
+  join two hubs: a trap that leaks turns a negative into an observed pair.
+- Background: PPIs on 200 3did pairs (weight-search AUC about 0.64) and random
+  PPIs, about 450 per large source.
+
+The profile runs `ppidm_alpha = 0.5`: at the production 0.05 the
+smallest-degree hub pair loses power. The planted family accessions are printed
+by the generator.
 
 ## Not a fixture
 

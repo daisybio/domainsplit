@@ -21,9 +21,15 @@ drawn per family before pairs are formed, which caps the cross product at
 ``(target * pool_factor)^2`` for families with thousands of instances.
 
 The result is written as the ``test`` split of every method named by
-``--method``, i.e. both ``external_test`` and ``external_test_hcni`` -- their test
+``--method``, i.e. both ``external_test`` and ``external_test_hrni`` -- their test
 sets are identical by design, the two differ only in their train/validation
 negatives.  A DDI that yields no valid pair is dropped and reported.
+
+``--balance uniform`` makes the set label-balanced: after the instance checks
+homo pairs are dropped, then the larger label is subsampled to the size of the
+smaller one (seeded from ``"{seed}:balance"`` over the class sorted by pair, so
+the choice does not depend on DDI ids).  ``--balance-out`` reports offered/kept
+DDIs per label and source token in both modes.
 """
 
 import argparse
@@ -37,6 +43,8 @@ from collections import Counter, defaultdict
 from ddi_db_utils import is_protected, split_sources
 
 DROPPED_COLUMNS = ["pfam_a", "pfam_b", "negative", "source", "reason"]
+BALANCE_COLUMNS = ["label", "source_token", "offered", "kept"]
+LABELS = ("positive", "negative")
 
 _T0 = time.monotonic()
 
@@ -64,7 +72,10 @@ def parse_args():
     p.add_argument("--sources", default="",
                    help="comma-separated source tokens (e.g. 'PPIDM_Gold,negatome'); a DDI enters the "
                         "test set if any of its tokens is listed. Empty = every external source.")
+    p.add_argument("--balance", choices=["none", "uniform"], default="none")
     p.add_argument("--dropped-out", required=True)
+    # Optional only so direct callers (tests) need not name it; the module always passes it.
+    p.add_argument("--balance-out")
     p.add_argument("--versions", required=True)
     p.add_argument("--process-name", required=True)
     return p.parse_args()
@@ -133,6 +144,36 @@ def sample_pairs(rng, inst_a, inst_b, target, pool_size, same_family):
     return ordered[:target]
 
 
+def tally(counter, negative, source):
+    """Count one DDI under its label's ``__total__`` and each of its source tokens."""
+    label = LABELS[int(bool(negative))]
+    counter[(label, "__total__")] += 1
+    for token in split_sources(source):
+        counter[(label, token)] += 1
+
+
+def balance(candidates, seed, dropped):
+    """Subsample the larger class to the smaller; returns the kept DDIs, sorted.
+
+    ``candidates`` maps label -> ``[(pfam_a, pfam_b, ...), ...]``.
+    """
+    for label in LABELS:
+        if not candidates[label]:
+            sys.exit(f"--balance uniform: no {label} external DDI survived the instance checks "
+                     f"({len(candidates['positive'])} positive, {len(candidates['negative'])} negative); "
+                     "a one-class test set cannot be balanced")
+    k = min(len(c) for c in candidates.values())
+    kept = []
+    for label in LABELS:
+        ordered = sorted(candidates[label])
+        if len(ordered) > k:
+            chosen = set(random.Random(f"{seed}:balance").sample(ordered, k))
+            dropped.extend((*d[:2], d[5], d[6], "balance_subsampled") for d in ordered if d not in chosen)
+            ordered = [d for d in ordered if d in chosen]
+        kept.extend(ordered)
+    return kept
+
+
 def main():
     args = parse_args()
 
@@ -169,6 +210,25 @@ def main():
     log("scanning DDIs for non-protected sources")
     membership, dropped, stats = [], [], Counter()
     inserted = 0
+    # Explicit zeros so both labels always get a __total__ row.
+    offered = Counter({(label, "__total__"): 0 for label in LABELS})
+    kept = Counter({(label, "__total__"): 0 for label in LABELS})
+    candidates = {label: [] for label in LABELS}
+
+    def emit(ddi_id, negative, source, pairs):
+        nonlocal inserted
+        tally(kept, negative, source)
+        if len(pairs) < args.target:
+            stats["partial"] += 1
+        stats["pairs"] += len(pairs)
+        for method in args.method:
+            for first, second in pairs:
+                membership.append((ddi_id, method, args.split, first, second))
+        if len(membership) >= BATCH:
+            writer_cur.executemany(INSERT, membership)
+            inserted += len(membership)
+            membership.clear()
+
     for ddi_id, pfam_a, pfam_b, id_a, id_b, negative, source in external_ddis(conn):
         stats["ddis"] += 1
         tokens = split_sources(source)
@@ -189,16 +249,17 @@ def main():
             dropped.append((pfam_a, pfam_b, negative, source, "no_distinct_parent_pair"))
             stats["dropped_no_distinct_parent"] += 1
             continue
-        if len(pairs) < args.target:
-            stats["partial"] += 1
-        stats["pairs"] += len(pairs)
-        for method in args.method:
-            for first, second in pairs:
-                membership.append((ddi_id, method, args.split, first, second))
-        if len(membership) >= BATCH:
-            writer_cur.executemany(INSERT, membership)
-            inserted += len(membership)
-            membership.clear()
+        tally(offered, negative, source)
+        if args.balance == "none":
+            emit(ddi_id, negative, source, pairs)
+            continue
+        if pfam_a == pfam_b:
+            dropped.append((pfam_a, pfam_b, negative, source, "homo_pair"))
+            stats["dropped_homo_pair"] += 1
+            continue
+        # Pairs are not kept: the per-DDI seed reproduces them after selection,
+        # so memory holds one tuple per candidate DDI, not target of them.
+        candidates[LABELS[int(bool(negative))]].append((pfam_a, pfam_b, ddi_id, id_a, id_b, negative, source))
 
     # A misspelt token (`PPIDM_gold`) would otherwise publish an empty or
     # one-class test set from a green run.
@@ -206,6 +267,18 @@ def main():
     if unknown:
         sys.exit(f"--sources names {sorted(unknown)}, which no external DDI carries; "
                  f"tokens present: {sorted(seen_tokens)}")
+
+    if args.balance == "uniform":
+        log(f"balancing {len(candidates['positive'])} positive / {len(candidates['negative'])} negative DDIs")
+        selected = balance(candidates, args.seed, dropped)
+        stats["dropped_balance_subsampled"] = sum(len(c) for c in candidates.values()) - len(selected)
+        for pfam_a, pfam_b, ddi_id, id_a, id_b, negative, source in selected:
+            rng = random.Random(f"{args.seed}:{pfam_a}:{pfam_b}")
+            emit(ddi_id, negative, source,
+                 sample_pairs(rng, by_domain[id_a], by_domain[id_b], args.target, pool_size, same_family=(id_a == id_b)))
+        if kept[("positive", "__total__")] != kept[("negative", "__total__")]:
+            sys.exit(f"--balance uniform: kept {kept[('positive', '__total__')]} positive vs "
+                     f"{kept[('negative', '__total__')]} negative DDIs")
 
     writer_cur.executemany(INSERT, membership)
     inserted += len(membership)
@@ -218,9 +291,19 @@ def main():
         writer = csv.writer(fh, delimiter="\t", lineterminator="\n")
         writer.writerow(DROPPED_COLUMNS)
         writer.writerows(sorted(dropped))
+    if args.balance_out:
+        with open(args.balance_out, "w", newline="") as fh:
+            writer = csv.writer(fh, delimiter="\t", lineterminator="\n")
+            writer.writerow(BALANCE_COLUMNS)
+            writer.writerows((label, token, offered[(label, token)], kept[(label, token)])
+                             for label, token in sorted(offered, key=lambda k: (LABELS.index(k[0]), k[1])))
 
-    for key in ("ddis", "excluded_by_source", "pairs", "partial", "dropped_no_instances", "dropped_no_distinct_parent"):
+    for key in ("ddis", "excluded_by_source", "pairs", "partial", "dropped_no_instances",
+                "dropped_no_distinct_parent", "dropped_homo_pair", "dropped_balance_subsampled"):
         log(f"{key} = {stats[key]}")
+    for label in LABELS:
+        log(f"{label}: offered = {offered[(label, '__total__')]} kept = {kept[(label, '__total__')]}")
+    log(f"balance = {args.balance}")
     log(f"methods = {','.join(args.method)} split = {args.split}")
     conn.close()
 

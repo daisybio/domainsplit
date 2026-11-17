@@ -8,7 +8,7 @@ include { softwareVersionsToYAML      } from '../subworkflows/nf-core/utils_nfco
 include { methodsDescriptionText      } from '../subworkflows/local/utils_nfcore_domainsplit_pipeline'
 include { INIT_DOMAINSPLIT_DB         } from '../modules/local/init_domainsplit_db/main.nf'
 include { PARSE_SWISSPROT             } from '../modules/local/parse_swissprot/main.nf'
-include { COLLECT_DDI_DATA; externalSourceWanted } from '../subworkflows/local/collect_ddi_data/main.nf'
+include { COLLECT_DDI_DATA; externalSourceWanted; ppidmComputed; ppidmInputUrls } from '../subworkflows/local/collect_ddi_data/main.nf'
 include { EXPORT_UNION_FAMILIES       } from '../modules/local/export_union_families/main.nf'
 include { EXPORT_SPLIT_DDIS           } from '../modules/local/export_split_ddis/main.nf'
 include { INGEST_SPLITS               } from '../subworkflows/local/ingest_splits/main.nf'
@@ -52,8 +52,8 @@ include { ANNOTATE_DDI                } from '../subworkflows/local/annotate_ddi
                        which are unseen by construction (see §2 of the plan).
 
     `ilp_candidates` is the ILP sampler restricted to the candidate network of
-    experimentally-tested-but-not-interacting Pfam pairs, so it yields
-    high-confidence negative instances -- hence the `_hcni` directories. It needs
+    Pfam pairs tested together often but never reported interacting, so it yields
+    high-replication non-interacting (HRNI) instances -- hence the `_hrni` directories. It needs
     ppi-splitting's comma-separated `negative_sampling_method` fan-out, which the
     pinned submodule has (`parseNegsets` in its main.nf), so both ILP rows produce
     two negative sets on one positive split, `random` produces three, and the
@@ -67,24 +67,24 @@ def splitRows() {
         [
             id            : 'random',
             split_method  : 'random',
-            // `random_ilp`/`random_hcni` share this positive split and the ILP
+            // `random_ilp`/`random_hrni` share this positive split and the ILP
             // sampler, so the candidate pool is their only difference: they
-            // separate the HCNI effect from the family-disjoint split effect
+            // separate the HRNI effect from the family-disjoint split effect
             // (DATASET_AUDIT.md F9). `uniform` stays first so a single-negset
             // run keeps the naive baseline.
-            negsets       : ['uniform': 'random', 'ilp': 'random_ilp', 'ilp_candidates': 'random_hcni'],
+            negsets       : ['uniform': 'random', 'ilp': 'random_ilp', 'ilp_candidates': 'random_hrni'],
             internal_test : true,
         ],
         [
             id            : 'minimal_leakage',
             split_method  : 'ilp',
-            negsets       : ['ilp': 'minimal_leakage', 'ilp_candidates': 'minimal_leakage_hcni'],
+            negsets       : ['ilp': 'minimal_leakage', 'ilp_candidates': 'minimal_leakage_hrni'],
             internal_test : true,
         ],
         [
             id            : 'external_test',
             split_method  : 'ilp',
-            negsets       : ['ilp': 'external_test', 'ilp_candidates': 'external_test_hcni'],
+            negsets       : ['ilp': 'external_test', 'ilp_candidates': 'external_test_hrni'],
             internal_test : false,
         ],
     ]
@@ -94,7 +94,7 @@ def splitRows() {
 // `params.ppi_splitting_multi_negset` exists so a `--split_only` debug run can
 // drop back to one, because ppi-splitting rejects `--split_only` unless
 // `negative_sampling_method` is exactly "ilp" (its main.nf). With the param off,
-// each row keeps only its *first* negative set and the `_hcni` directories are
+// each row keeps only its *first* negative set and the `_hrni` directories are
 // not produced.
 def activeNegsets(row) {
     // `.toString().toBoolean()`, not the raw param: a CLI `--ppi_splitting_multi_negset
@@ -221,13 +221,25 @@ def manifestBase(uniprot_dats) {
     // Only the URLs this run reads: the manifest HEADs each one, and a request
     // to a source the run never uses (Negatome, when not selected) is a request
     // that can only fail.
+    def ppidm = ppidmComputed()
     def unused = [
-        url_negatome    : !externalSourceWanted('negatome'),
-        url_pfam_regions: params.pfam_regions as boolean,
+        url_negatome           : !externalSourceWanted('negatome'),
+        url_pfam_regions       : params.pfam_regions as boolean,
+        url_hippie             : !(ppidm || externalSourceWanted('single_domain_ppi')),
+        url_biogrid_mitab      : !ppidm,
+        url_intact_mitab       : !ppidm,
+        url_sifts_chain_uniprot: !ppidm,
+        url_3did_flat          : !ppidm,
     ]
     def urls = params.findAll { k, v -> k.toString().startsWith('url_') && v && !unused[k.toString()] }
         .collectEntries { k, v -> [(k.toString()): v.toString()] }
     uniprot_dats.eachWithIndex { u, i -> urls["uniprot_dat_" + i] = u.toString() }
+    // PPIDM's inputs that are not `url_*` params (the all-species UniProt flat
+    // file and the per-organism STRING files); duplicates of the above are
+    // harmless, the manifest HEADs each key once.
+    if (ppidm) {
+        ppidmInputUrls().eachWithIndex { u, i -> urls["ppidm_input_" + i] = u.toString() }
+    }
     return groovy.json.JsonOutput.toJson([
         params        : params.collectEntries { k, v -> [(k.toString()): v instanceof Collection ? v.collect { x -> jsonScalar(x) } : jsonScalar(v)] },
         urls          : urls,
@@ -373,7 +385,7 @@ Use all_species_reviewed or human_any_review_status.""")
         params.url_3did,
         params.url_negatome,
         input_swissprot_pfam,
-        params.hippie_tsv,
+        params.url_hippie,
         params.ppidm_tsv,
         params.negative_ppi_parquet,
         splitRows().any { row -> 'ilp_candidates' in activeNegsets(row) },
@@ -720,9 +732,12 @@ Use all_species_reviewed or human_any_review_status.""")
         channel.of(manifestBase(uniprot_dats)).collectFile(name: 'manifest_base.json'),
         enriched_db,
         // [] when --external_test_sources left that source out.
-        params.hippie_tsv ? file(params.hippie_tsv, checkIfExists: true) : [],
+        (ppidmComputed() || externalSourceWanted('single_domain_ppi')) && params.url_hippie ? file(params.url_hippie) : [],
         params.ppidm_tsv ? file(params.ppidm_tsv, checkIfExists: true) : [],
         params.negative_ppi_parquet ? file(params.negative_ppi_parquet, checkIfExists: true) : [],
+        // COMPUTE_PPIDM's report and per-source counts, hashed and summarised;
+        // [] when PPIDM is not computed.
+        COLLECT_DDI_DATA.out.ppidm_report.mix(COLLECT_DDI_DATA.out.ppidm_sources).collect().ifEmpty([]),
     )
 
     //

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build the candidate network of high-confidence non-interacting domain pairs.
+"""Build the candidate network of high-replication non-interacting domain pairs.
 
 Streams a Y2H/MS PPI parquet, maps bait/prey genes to UniProt + Pfam via the
 UniProt REST API, and writes every Pfam pair the screen tested without finding an

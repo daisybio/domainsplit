@@ -27,6 +27,7 @@ import argparse
 import json
 import sys
 
+from build_swissprot_pfam_map import open_maybe_gzip
 from external_ddi_tsv import write_external_tsv
 
 
@@ -96,7 +97,7 @@ def main():
 
     pairs = []
     n_rows = n_kept = n_unresolved = n_unscored = 0
-    with open(args.hippie) as fh:
+    with open_maybe_gzip(args.hippie) as fh:
         first = fh.readline()
         col_a, col_b, col_score = detect_layout(first)
         print(

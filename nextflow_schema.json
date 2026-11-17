@@ -208,11 +208,11 @@
                     "default": true,
                     "fa_icon": "fas fa-clone"
                 },
-                "hippie_tsv": {
-                    "type": ["string"],
-                    "format": "file-path",
-                    "description": "Path to a HIPPIE PPI TSV; required unless --external_test_sources leaves out single_domain_ppi. COLLECT_DDI_DATA adds positive DDIs inferred from PPIs between two single-domain proteins.",
-                    "fa_icon": "fas fa-file-import"
+                "url_hippie": {
+                    "type": "string",
+                    "description": "HIPPIE PPI file (URL or local path, gzipped or plain). Read by single_domain_ppi and, as one of eight sources, by the computed PPIDM.",
+                    "default": "https://cbdm-01.zdv.uni-mainz.de/hippie/downloads/HIPPIE-current.txt.gz",
+                    "fa_icon": "fas fa-link"
                 },
                 "hippie_min_score": {
                     "type": "number",
@@ -225,7 +225,7 @@
                 "ppidm_tsv": {
                     "type": ["string"],
                     "format": "file-path",
-                    "description": "Path to a PPIDM predictions TSV, required unless --external_test_sources leaves out every PPIDM token (columns: domain_1, domain_2, class). PARSE_PPIDM emits each DDI twice, under the umbrella source 'PPIDM' and under 'PPIDM_<Class>'; both merge onto one database row.",
+                    "description": "Legacy precomputed PPIDM predictions TSV (domain_1, domain_2, class). Unset (default) computes PPIDM in-pipeline; set, it replaces the computed positives and INVERSE_PPIDM tokens are refused.",
                     "fa_icon": "fas fa-file-import"
                 },
                 "ppidm_classes": {
@@ -234,11 +234,108 @@
                     "default": "Bronze,Silver,Gold",
                     "fa_icon": "fas fa-tags"
                 },
+                "url_biogrid_mitab": {
+                    "type": "string",
+                    "description": "BioGRID ALL MITAB zip (URL or path), a PPIDM source.",
+                    "default": "https://downloads.thebiogrid.org/Download/BioGRID/Release-Archive/BIOGRID-5.0.263/BIOGRID-ALL-5.0.263.mitab.zip",
+                    "fa_icon": "fas fa-link"
+                },
+                "url_intact_mitab": {
+                    "type": "string",
+                    "description": "IntAct MITAB 2.7 zip (URL or path); split into the IntAct, MINT and DIP PPIDM sources.",
+                    "default": "https://ftp.ebi.ac.uk/pub/databases/intact/current/psimitab/intact.zip",
+                    "fa_icon": "fas fa-link"
+                },
+                "url_sifts_chain_uniprot": {
+                    "type": "string",
+                    "description": "SIFTS pdb_chain_uniprot.tsv.gz (URL or path), maps 3did chain pairs to UniProt for the SIFTS PPIDM source.",
+                    "default": "https://ftp.ebi.ac.uk/pub/databases/msd/sifts/flatfiles/tsv/pdb_chain_uniprot.tsv.gz",
+                    "fa_icon": "fas fa-link"
+                },
+                "url_3did_flat": {
+                    "type": "string",
+                    "description": "3did flat file (URL or path); its chain ids feed the SIFTS PPIDM source.",
+                    "default": "https://3did.irbbarcelona.org/download/current/3did_flat.gz",
+                    "fa_icon": "fas fa-link"
+                },
+                "ppidm_uniprot_dat": {
+                    "type": "string",
+                    "description": "Reviewed UniProt flat file(s), comma-separated, all species: the accession->Pfam map PPIDM is computed on, independent of --instance_tier.",
+                    "default": "https://ftp.uniprot.org/pub/databases/uniprot/current_release/knowledgebase/complete/uniprot_sprot.dat.gz",
+                    "fa_icon": "fas fa-link"
+                },
+                "ppidm_string_url_template": {
+                    "type": "string",
+                    "description": "Per-organism STRING detailed links URL or path, with {taxid} and {release} (= --string_release) placeholders.",
+                    "default": "https://stringdb-downloads.org/download/protein.links.detailed.v{release}/{taxid}.protein.links.detailed.v{release}.txt.gz",
+                    "fa_icon": "fas fa-link"
+                },
+                "ppidm_string_taxa": {
+                    "type": "string",
+                    "description": "Comma-separated NCBI taxon ids whose STRING networks are PPIDM sources.",
+                    "default": "9606,4932,10090,7227,6239,3702,511145",
+                    "fa_icon": "fas fa-filter"
+                },
+                "ppidm_alpha": {
+                    "type": "number",
+                    "description": "Family-wise alpha of both hypergeometric tails (Bonferroni).",
+                    "default": 0.05,
+                    "fa_icon": "fas fa-sliders-h"
+                },
+                "ppidm_weight_iterations": {
+                    "type": "integer",
+                    "description": "Seeded random-search iterations for the PPIDM source weights.",
+                    "default": 10000,
+                    "minimum": 0,
+                    "fa_icon": "fas fa-sliders-h"
+                },
+                "ppidm_source_weights": {
+                    "type": ["string", "null"],
+                    "description": "Pin the source weights instead of searching: 'intact=0.5,mint=1,...' for all eight sources.",
+                    "fa_icon": "fas fa-sliders-h"
+                },
+                "ppidm_score_threshold": {
+                    "type": ["number", "null"],
+                    "description": "Pin the consensus-score threshold instead of tuning it on 3did.",
+                    "fa_icon": "fas fa-sliders-h"
+                },
+                "ppidm_hippie_min_score": {
+                    "type": "number",
+                    "description": "PPIDM positive side: HIPPIE score must be strictly greater.",
+                    "default": 0.72,
+                    "fa_icon": "fas fa-sliders-h"
+                },
+                "ppidm_string_min_score": {
+                    "type": "number",
+                    "description": "PPIDM positive side: STRING combined_score must be strictly greater.",
+                    "default": 900,
+                    "fa_icon": "fas fa-sliders-h"
+                },
+                "ppidm_intact_min_miscore": {
+                    "type": "number",
+                    "description": "PPIDM positive side: IntAct/MINT/DIP intact-miscore must be strictly greater.",
+                    "default": 0.4,
+                    "fa_icon": "fas fa-sliders-h"
+                },
+                "ppidm_biogrid_min_pubs": {
+                    "type": "integer",
+                    "description": "PPIDM positive side: BioGRID pair must be reported in at least this many publications.",
+                    "default": 2,
+                    "minimum": 1,
+                    "fa_icon": "fas fa-sliders-h"
+                },
                 "external_test_sources": {
                     "type": "string",
-                    "description": "Comma-separated source tokens the external test set is built from (single_domain_ppi, PPIDM, PPIDM_<Class>, negatome). A DDI enters if any of its tokens is listed, e.g. 'PPIDM_Gold,negatome'. Empty = every external source. A source not selected is neither downloaded nor parsed (e.g. no Negatome download without negatome), and its input file is then optional. A token no external DDI carries fails the run.",
-                    "default": "",
+                    "description": "Comma-separated source tokens the external test set is built from (single_domain_ppi, PPIDM, PPIDM_<Gold|Silver|Bronze>, INVERSE_PPIDM, INVERSE_PPIDM_<Gold|Silver>, negatome). A DDI enters if any of its tokens is listed. Empty = every external source. A source not selected is neither downloaded nor parsed. A token no external DDI carries fails the run.",
+                    "default": "PPIDM_Gold,INVERSE_PPIDM_Gold",
                     "fa_icon": "fas fa-filter"
+                },
+                "external_test_balance": {
+                    "type": "string",
+                    "description": "'uniform' drops homo pairs and subsamples the larger class (positives vs negatives) to the smaller, seeded; fails if a class is empty. 'none' keeps every selected DDI.",
+                    "default": "uniform",
+                    "enum": ["uniform", "none"],
+                    "fa_icon": "fas fa-balance-scale"
                 }
             }
         },

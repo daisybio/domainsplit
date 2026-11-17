@@ -8,7 +8,10 @@ column itself) as accessions, resolves nothing and reports zero DDIs with exit 0
 Run directly (`python3 tests/python/test_parse_single_domain_ppi.py`) or via pytest.
 """
 
+import gzip
+import json
 import os
+import subprocess
 import sys
 
 import pytest
@@ -46,6 +49,29 @@ def test_header_with_one_accession_column_is_fatal():
 def test_header_without_score_is_fatal():
     with pytest.raises(SystemExit):
         detect_layout("AL1A1_HUMAN\t216\tAL1A1_HUMAN\t216\t0.76\tinfo\n")
+
+
+@pytest.mark.parametrize("gz", [False, True])
+def test_hippie_plain_and_gzip_read_alike(tmp_path, gz):
+    """Format is sniffed from the magic bytes, so a gzip named `.txt` still reads."""
+    hippie = tmp_path / "HIPPIE-current.txt"
+    text = CURRENT + "P00001\tA_HUMAN\t1\tP00002\tB_HUMAN\t2\t0.9\tinfo\n"
+    if gz:
+        with gzip.open(hippie, "wt") as fh:
+            fh.write(text)
+    else:
+        hippie.write_text(text)
+    smap = tmp_path / "map.json"
+    smap.write_text(json.dumps({"accession_to_pfams": {"P00001": ["PF00001"], "P00002": ["PF00002"]}}))
+    out = tmp_path / "out.tsv"
+    bin_dir = os.path.join(REPO, "bin")
+    subprocess.run(
+        [sys.executable, os.path.join(bin_dir, "parse_single_domain_ppi.py"),
+         "--hippie", str(hippie), "--swissprot-map", str(smap), "--min-score", "0.5",
+         "--out", str(out), "--versions", str(tmp_path / "v.yml"), "--process-name", "T"],
+        check=True, env=dict(os.environ, PYTHONPATH=bin_dir),
+    )
+    assert out.read_text().splitlines()[1:] == ["PF00001\tPF00002\t0\tsingle_domain_ppi"]
 
 
 if __name__ == "__main__":

@@ -17,7 +17,7 @@ What each section decides, keyed to DATASET_AUDIT.md:
       ``domain_domain_interaction.negative`` -- the mislabel this audit predicts
   F1  is the 1:1 test set's negative set a subset of the 1:10 one's, and
       are the positives identical
-  F2  are the ``_hcni`` and non-``_hcni`` test sets identical, per ratio
+  F2  are the ``_hrni`` and non-``_hrni`` test sets identical, per ratio
   F4  external_test label composition by source; contamination count (expect 0);
       abundance of negatome vs single_domain_ppi families
   F5  true prevalence of the test domain universe
@@ -31,11 +31,18 @@ What each section decides, keyed to DATASET_AUDIT.md:
       label; confirmation rates; rows with a structure but no score; z-scores
       that differ across the split rows of one instance pair (expect 0)
 
+  P1  computed PPIDM external test: label balance per method (expect equal),
+      homo pairs (expect 0 under --external_test_balance uniform), the
+      family-degree confound (AUC of a degree-only score for the label;
+      0.5 = no shortcut), INVERSE_PPIDM pairs 3did held (the measured
+      false-negative floor), and the ppidm_report.json summary
+
 Optional: ``--af_metadata /path/af_metadata.csv`` splits F11 coverage by source.
 """
 
 import argparse
 import csv
+import json
 import os
 import re
 import sqlite3
@@ -43,7 +50,7 @@ import sys
 from collections import Counter, defaultdict
 
 MASTER = "domainsplit.sqlite3"
-INTERNAL = ["random", "random_ilp", "random_hcni", "minimal_leakage", "minimal_leakage_hcni"]
+INTERNAL = ["random", "random_ilp", "random_hrni", "minimal_leakage", "minimal_leakage_hrni"]
 # (1:1, 1:10) under every naming scheme a run may have published: the original
 # test_balanced/test_realistic, the first rename (test_matched_1_1 for every
 # method) and the current per-sampler names (test_uniform_1_1 for `random`).
@@ -221,15 +228,15 @@ def check_f1(rep, results):
 
 
 def check_f2(rep, results):
-    rep.head("F2 -- are the _hcni and non-_hcni test sets identical")
-    # random_ilp/random_hcni (F9) exist only on runs after 2026-11; skipped otherwise.
+    rep.head("F2 -- are the _hrni and non-_hrni test sets identical")
+    # random_ilp/random_hrni (F9) exist only on runs after 2026-11; skipped otherwise.
     for base in ("minimal_leakage", "random_ilp"):
         plain = resolve_ratios(results, base)
-        hcni = resolve_ratios(results, base.replace("_ilp", "") + "_hcni")
-        if plain is None or hcni is None:
+        hrni = resolve_ratios(results, base.replace("_ilp", "") + "_hrni")
+        if plain is None or hrni is None:
             rep.line(f"  {base}: missing DB(s) -- skipped")
             continue
-        for split, a, b in zip(("balanced 1:1", "uniform 1:10"), plain, hcni):
+        for split, a, b in zip(("balanced 1:1", "uniform 1:10"), plain, hrni):
             (ap, an), (bp, bn) = pair_sets(a), pair_sets(b)
             rep.line(f"  {base} {split}: positives identical = {ap == bp}; negatives identical = {an == bn}; "
                      f"negatives differing = {len(an ^ bn)}")
@@ -471,6 +478,75 @@ def check_f11(rep, master, af_metadata):
         rep.line("      ^ a run from before the dedupe fix scored the shared 1:1 / 1:10 positives twice.")
 
 
+def check_p1(rep, master, results):
+    rep.head("P1 -- computed PPIDM / INVERSE_PPIDM external test set")
+
+    rep.line("\n  (a) external test DDIs per method and label -- expect positives == negatives")
+    rows = master.execute(
+        "SELECT m.method, d.negative, COUNT(DISTINCT d.id) FROM ddi_split_membership m "
+        "JOIN domain_domain_interaction d ON d.id = m.ddi_id "
+        "WHERE m.method LIKE 'external_test%' AND m.split = 'test' GROUP BY 1, 2").fetchall()
+    rep.rows(["method", "negative", "ddis"], rows)
+    per = defaultdict(dict)
+    for method, neg, n in rows:
+        per[method][neg] = n
+    bad = [m for m, c in per.items() if c.get(0, 0) != c.get(1, 0)]
+    rep.line(f"      unbalanced methods: {bad or 'none'}")
+
+    rep.line("\n  (b) homo pairs (pfam_a == pfam_b) in the external test -- expect 0 under uniform balance")
+    rep.line("      " + str(master.execute(
+        "SELECT COUNT(DISTINCT d.id) FROM ddi_split_membership m "
+        "JOIN domain_domain_interaction d ON d.id = m.ddi_id "
+        "WHERE m.method LIKE 'external_test%' AND m.split = 'test' "
+        "AND d.domain_id_a = d.domain_id_b").fetchone()[0]))
+
+    rep.line("\n  (c) degree confound: AUC of a degree-only score for the label (1 = positives have higher")
+    rep.line("      degree; 0.5 = no shortcut). INVERSE_PPIDM is known to favour high-degree families;")
+    rep.line("      report a degree-only baseline next to every model when this is far from 0.5")
+    deg3 = Counter()
+    for a, b in master.execute("SELECT domain_id_a, domain_id_b FROM domain_domain_interaction "
+                               "WHERE source LIKE '%3did%' AND negative = 0"):
+        deg3[a] += 1
+        deg3[b] += 1
+    inst = dict(master.execute("SELECT domain_id, COUNT(*) FROM domain_protein_map "
+                               "WHERE instance_id IS NOT NULL GROUP BY 1"))
+    pairs = master.execute(
+        "SELECT DISTINCT d.id, d.domain_id_a, d.domain_id_b, d.negative FROM ddi_split_membership m "
+        "JOIN domain_domain_interaction d ON d.id = m.ddi_id "
+        "WHERE m.method = 'external_test' AND m.split = 'test'").fetchall()
+    for name, deg in (("3did degree", deg3), ("instances", inst)):
+        for agg_name, agg in (("min", min), ("max", max)):
+            pos = [agg(deg.get(a, 0), deg.get(b, 0)) for _, a, b, neg in pairs if not neg]
+            negs = [agg(deg.get(a, 0), deg.get(b, 0)) for _, a, b, neg in pairs if neg]
+            rep.line(f"      {agg_name} {name:12s} AUC {fmt(auc(pos, negs))}  "
+                     f"(n pos {len(pos)}, n neg {len(negs)})")
+
+    rep.line("\n  (d) INVERSE_PPIDM pairs 3did already held (dropped as protected) -- the false-negative floor")
+    path = os.path.join(results, "reports", "source_conflicts.tsv")
+    if os.path.exists(path):
+        with open(path) as fh:
+            c = Counter(r["source"] for r in csv.DictReader(fh, delimiter="\t")
+                        if r.get("action") == "dropped_protected_label_conflict"
+                        and r.get("source", "").startswith("INVERSE_PPIDM"))
+        rep.rows(["source", "dropped_protected_label_conflict"], sorted(c.items()))
+    else:
+        rep.line(f"      {path} not found")
+
+    rep.line("\n  (e) ppidm_report.json")
+    path = os.path.join(results, "reports", "ppidm", "ppidm_report.json")
+    if not os.path.exists(path):
+        rep.line(f"      {path} not found (PPIDM not computed in this run?)")
+        return
+    with open(path) as fh:
+        r = json.load(fh)
+    rep.line(f"      threshold {r.get('threshold')} ({r.get('threshold_how')}), test F1 "
+             f"{fmt(r.get('threshold_test_f1'))}; weight AUC {fmt(r.get('weight_auc_best'))} "
+             f"(equal {fmt(r.get('weight_auc_equal'))})")
+    for label, classes in r.get("classes", {}).items():
+        for cls, v in classes.items():
+            rep.line(f"      {label} {cls}: {v['pairs']} pairs, {v['in_3did']} in 3did")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -493,7 +569,7 @@ def main():
                       (check_f1, (args.results,)), (check_f2, (args.results,)),
                       (check_f4, (master,)), (check_f5, (args.results,)), (check_f6, (master,)),
                       (check_f7, (args.results,)), (check_f8, (master,)),
-                      (check_f11, (master, args.af_metadata))):
+                      (check_f11, (master, args.af_metadata)), (check_p1, (master, args.results))):
             try:
                 fn(rep, *a)
             except Exception as exc:  # one broken section must not lose the rest

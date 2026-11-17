@@ -12,6 +12,7 @@ process BUILD_EXTERNAL_TEST {
     output:
     path "domainsplit.sqlite3",           emit: domainsplit_db
     path "external_test_dropped.tsv",     emit: dropped
+    path "external_test_balance.tsv",     emit: balance
     path "versions.yml",                  emit: versions
 
     script:
@@ -39,6 +40,8 @@ process BUILD_EXTERNAL_TEST {
         --pool-factor ${params.ddi_examples_pool_factor} \\
         --seed ${params.seed} \\
         --sources '${params.external_test_sources}' \\
+        --balance ${params.external_test_balance} \\
+        --balance-out external_test_balance.tsv \\
         --dropped-out external_test_dropped.tsv \\
         --versions versions.yml \\
         --process-name "${task.process}"

@@ -114,7 +114,9 @@ def test_retired_vocabulary_is_rejected_with_the_mapping(tmp_path):
 # on a run that never uses Negatome is the bug this pins). The preview stops at
 # the absent local gurobi.lic, but -with-dag is written before that.
 SOURCE_PROCESSES = {"DOWNLOAD_NEGATOME", "PARSE_NEGATOME", "PARSE_SINGLE_DOMAIN_PPI",
-                    "BUILD_SWISSPROT_PFAM_MAP", "PARSE_PPIDM"}
+                    "BUILD_SWISSPROT_PFAM_MAP", "PARSE_PPIDM", "PARSE_INVERSE_PPIDM",
+                    "EXTRACT_PPI_MITAB", "BUILD_PPIDM_SOURCES", "COMPUTE_PPIDM"}
+PPIDM_CHAIN = {"EXTRACT_PPI_MITAB", "BUILD_PPIDM_SOURCES", "COMPUTE_PPIDM"}
 
 
 def dag_processes(tmp_path, *args):
@@ -125,14 +127,33 @@ def dag_processes(tmp_path, *args):
     return {p for p in SOURCE_PROCESSES if p in text}
 
 
+# None = the pipeline default (PPIDM_Gold,INVERSE_PPIDM_Gold); "" = every source,
+# passed through a params file because a bare `--external_test_sources ''` on
+# the command line arrives as Boolean true.
 @pytest.mark.parametrize("sources, expected", [
+    (None, PPIDM_CHAIN | {"PARSE_PPIDM", "PARSE_INVERSE_PPIDM"}),
     ("", SOURCE_PROCESSES),
-    ("PPIDM_Gold", {"PARSE_PPIDM"}),
-    ("PPIDM_Gold,negatome", {"PARSE_PPIDM", "DOWNLOAD_NEGATOME", "PARSE_NEGATOME"}),
+    ("PPIDM_Gold", PPIDM_CHAIN | {"PARSE_PPIDM"}),
+    ("INVERSE_PPIDM_Silver", PPIDM_CHAIN | {"PARSE_INVERSE_PPIDM"}),
+    ("PPIDM_Gold,negatome", PPIDM_CHAIN | {"PARSE_PPIDM", "DOWNLOAD_NEGATOME", "PARSE_NEGATOME"}),
+    ("negatome", {"DOWNLOAD_NEGATOME", "PARSE_NEGATOME"}),
 ])
 def test_external_test_sources_prunes_fetches(sources, expected, tmp_path):
-    args = ["--external_test_sources", sources] if sources else []
+    if sources is None:
+        args = []
+    elif sources == "":
+        pf = tmp_path / "params.yml"
+        pf.write_text('external_test_sources: ""\n')
+        args = ["-params-file", str(pf)]
+    else:
+        args = ["--external_test_sources", sources]
     assert dag_processes(tmp_path, *args) == expected
+
+
+def test_inverse_ppidm_refused_with_legacy_ppidm_tsv(tmp_path):
+    proc = preview(tmp_path, "--ppidm_tsv", str(tmp_path / "x.tsv"))
+    assert proc.returncode != 0
+    assert "--ppidm_tsv is set" in proc.stdout + proc.stderr
 
 
 def test_external_test_sources_rejects_unknown_token(tmp_path):

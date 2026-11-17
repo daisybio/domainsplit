@@ -17,6 +17,7 @@ Run directly (`python3 tests/python/test_build_external_test.py`) or via pytest.
 
 import csv
 import os
+from collections import Counter
 import sqlite3
 import subprocess
 import sys
@@ -34,7 +35,7 @@ from domainsplit_schema import add_instance, make_db  # noqa: E402
 
 ENV = dict(os.environ, PYTHONPATH=BIN + os.pathsep + os.environ.get("PYTHONPATH", ""))
 
-METHODS = ["external_test", "external_test_hcni"]
+METHODS = ["external_test", "external_test_hrni"]
 
 
 def build_db(path):
@@ -66,16 +67,19 @@ def build_db(path):
     conn.close()
 
 
-def run_builder(db, tmp, seed=42, target=3, tag="", sources=None):
+def run_builder(db, tmp, seed=42, target=3, tag="", sources=None, balance=None):
     dropped = os.path.join(tmp, f"dropped{tag}.tsv")
     args = [sys.executable, BUILDER, "--db", db]
     for method in METHODS:
         args += ["--method", method]
     args += ["--split", "test", "--target", str(target), "--pool-factor", "2",
              "--seed", str(seed), "--dropped-out", dropped,
+             "--balance-out", os.path.join(tmp, f"balance{tag}.tsv"),
              "--versions", os.path.join(tmp, f"versions{tag}.yml"), "--process-name", "TEST"]
     if sources is not None:
         args += ["--sources", sources]
+    if balance is not None:
+        args += ["--balance", balance]
     subprocess.run(args, check=True, env=ENV, capture_output=True, text=True)
     return dropped
 
@@ -189,8 +193,94 @@ def test_sources_filter_and_unknown_token():
         assert {(r[2], r[3]) for r in membership(db)} == {("PF00010", "PF00011")}
 
 
+def build_unbalanced_db(path):
+    """build_db plus two hetero positives, one homo positive and one usable negative.
+
+    After the instance checks: 3 hetero positives + 1 homo positive, 1 negative
+    (the negatome pair from build_db shares a parent and is dropped).
+    """
+    build_db(path)
+    conn = sqlite3.connect(path)
+    conn.execute("PRAGMA foreign_keys=ON")
+    merge_external_ddis(conn, [
+        ("PF00030", "PF00031", 0, "PPIDM_Gold"),
+        ("PF00040", "PF00041", 0, "PPIDM_Gold"),
+        ("PF00050", "PF00050", 0, "PPIDM_Gold"),
+        ("PF00060", "PF00061", 1, "negatome"),
+    ])
+    for pfam in ("PF00030", "PF00031", "PF00040", "PF00041", "PF00050", "PF00060", "PF00061"):
+        for i in (1, 2):
+            add_instance(conn, pfam, f"{pfam[-2:]}P{i}", 10, 60)
+    conn.commit()
+    conn.close()
+
+
+def read_tsv(path):
+    with open(path) as fh:
+        return list(csv.DictReader(fh, delimiter="\t"))
+
+
+def test_balance_uniform_equal_counts_homo_dropped_deterministic():
+    with tempfile.TemporaryDirectory() as tmp:
+        results = []
+        for tag in ("a", "b"):
+            db = os.path.join(tmp, f"{tag}.sqlite3")
+            build_unbalanced_db(db)
+            dropped = run_builder(db, tmp, tag=tag, balance="uniform")
+            conn = sqlite3.connect(db)
+            labels = dict(conn.execute(
+                "SELECT ddi.negative, COUNT(DISTINCT ddi.id) FROM ddi_split_membership AS m "
+                "JOIN domain_domain_interaction AS ddi ON ddi.id = m.ddi_id GROUP BY ddi.negative"
+            ))
+            conn.close()
+            assert labels == {0: 1, 1: 1}, labels
+            results.append((membership(db), read_tsv(dropped), read_tsv(os.path.join(tmp, f"balance{tag}.tsv"))))
+        assert results[0] == results[1], "same seed must give the same balanced set"
+
+        rows, dropped, balance = results[0]
+        assert {(r[2], r[3]) for r in rows} >= {("PF00060", "PF00061")}
+        reasons = Counter(d["reason"] for d in dropped)
+        assert reasons == {"no_distinct_parent_pair": 1, "homo_pair": 1, "balance_subsampled": 2}, reasons
+        assert [(d["pfam_a"], d["pfam_b"]) for d in dropped if d["reason"] == "homo_pair"] == [("PF00050", "PF00050")]
+
+        report = {(r["label"], r["source_token"]): (int(r["offered"]), int(r["kept"])) for r in balance}
+        # offered counts before the homo drop; kept = DDIs with membership rows
+        assert report[("positive", "__total__")] == (4, 1), report
+        assert report[("negative", "__total__")] == (1, 1), report
+        assert report[("negative", "negatome")] == (1, 1), report
+        assert report[("positive", "PPIDM_Gold")][0] == 3, report
+
+
+def test_balance_uniform_fails_on_empty_class():
+    with tempfile.TemporaryDirectory() as tmp:
+        db = os.path.join(tmp, "domainsplit.sqlite3")
+        build_unbalanced_db(db)
+        try:
+            run_builder(db, tmp, sources="PPIDM", balance="uniform")
+        except subprocess.CalledProcessError as e:
+            assert "no negative external DDI" in e.stderr, e.stderr
+        else:
+            raise AssertionError("--balance uniform with no negatives must fail the run")
+        assert membership(db) == [], "a failed balance must not write membership rows"
+
+
+def test_balance_none_reports_without_dropping():
+    with tempfile.TemporaryDirectory() as tmp:
+        db = os.path.join(tmp, "domainsplit.sqlite3")
+        build_unbalanced_db(db)
+        run_builder(db, tmp, balance="none")
+        report = {(r["label"], r["source_token"]): (int(r["offered"]), int(r["kept"]))
+                  for r in read_tsv(os.path.join(tmp, "balance.tsv"))}
+        assert report[("positive", "__total__")] == (4, 4), report
+        assert report[("negative", "__total__")] == (1, 1), report
+        assert ("PF00050", "PF00050") in {(r[2], r[3]) for r in membership(db)}
+
+
 if __name__ == "__main__":
     test_external_only_distinct_parents_and_report()
     test_seed_is_per_ddi_and_deterministic()
     test_sources_filter_and_unknown_token()
+    test_balance_uniform_equal_counts_homo_dropped_deterministic()
+    test_balance_uniform_fails_on_empty_class()
+    test_balance_none_reports_without_dropping()
     print("OK: external test set is external-only, parent-distinct and seed-deterministic")

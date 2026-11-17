@@ -19,6 +19,11 @@ Checked:
    pairs whose parent proteins differ;
 7. the reports exist, and reports/run_manifest.json's per-split counts match
    the master's membership;
+7b. the computed PPIDM ran: reports/ppidm/ppidm_report.json has Gold pairs on
+   both sides (the profile selects `PPIDM_Gold,INVERSE_PPIDM_Gold`), and
+   reports/external_test_balance.tsv keeps equal, non-zero positive and
+   negative totals (`external_test_balance = uniform`); the external test split
+   holds both PPIDM and INVERSE_PPIDM DDIs;
 8. every published embedding HDF5 satisfies the benchmark's own key contract --
    `h5[pfam_id][COALESCE(instance_id, 'r' || rowid)]` resolves for the
    master's domain instances -- and carries its root attributes. This is the seam
@@ -49,8 +54,8 @@ import sys
 
 # `params.ppi_splitting_multi_negset = true` (the default) asks ppi-splitting for
 # both ILP negative sets per ILP row, so each of those rows yields a plain
-# directory and an `_hcni` one; `random` additionally gets `random_ilp` and
-# `random_hcni` next to its uniform baseline: 7 method directories, 26 split
+# directory and an `_hrni` one; `random` additionally gets `random_ilp` and
+# `random_hrni` next to its uniform baseline: 7 method directories, 26 split
 # databases. Set `--ppi_splitting_multi_negset false` and this drops back to 3 / 11.
 # Published names, i.e. after publishedSplit() in workflows/domainsplit.nf: the
 # 1:1 test set is named for its negative set's sampler -- uniform for `random`,
@@ -62,13 +67,15 @@ EXTERNAL_SPLITS = ["train", "validation", "test"]
 EXPECTED = {
     "random": UNIFORM_SPLITS,
     "random_ilp": MATCHED_SPLITS,
-    "random_hcni": MATCHED_SPLITS,
+    "random_hrni": MATCHED_SPLITS,
     "minimal_leakage": MATCHED_SPLITS,
-    "minimal_leakage_hcni": MATCHED_SPLITS,
+    "minimal_leakage_hrni": MATCHED_SPLITS,
     "external_test": EXTERNAL_SPLITS,
-    "external_test_hcni": EXTERNAL_SPLITS,
+    "external_test_hrni": EXTERNAL_SPLITS,
 }
-EXTERNAL_SOURCES = ("single_domain_ppi", "PPIDM", "negatome")
+EXTERNAL_SOURCES = ("single_domain_ppi", "PPIDM", "INVERSE_PPIDM", "negatome")
+# Token prefixes: PPIDM_<Class>, INVERSE_PPIDM_<Class>.
+EXTERNAL_PREFIXES = ("PPIDM", "INVERSE_PPIDM")
 # Root attributes export_domain_embeddings.py writes. There is no run identifier:
 # the files key on the Pfam accession, which needs no cross-run guard.
 EMBEDDING_ATTRS = ("model", "pooling", "dim", "dtype", "key_layout",
@@ -126,7 +133,7 @@ def check_master(path):
         sources = sources_of(source)
         check(sources, f"{pfam_a}/{pfam_b} has an empty source list")
         protected = {s for s in sources if s in ("3did", "sampled_negative")}
-        external = {s for s in sources if s.split("_")[0] in ("PPIDM",) or s in EXTERNAL_SOURCES}
+        external = {s for s in sources if s.startswith(EXTERNAL_PREFIXES) or s in EXTERNAL_SOURCES}
         check(not (protected and external),
               f"{pfam_a}/{pfam_b} mixes protected {sorted(protected)} with external {sorted(external)}")
         if len(sources) > 1:
@@ -171,10 +178,15 @@ def check_master(path):
         "JOIN domain_domain_interaction AS ddi ON ddi.id = m.ddi_id "
         "WHERE m.split = 'test' AND m.method LIKE 'external_test%'"
     ).fetchall()
+    labels = set()
     for (source,) in external_test_ddis:
         sources = sources_of(source)
         check("3did" not in sources and "sampled_negative" not in sources,
               f"external test split holds a protected-source DDI ({source})")
+        labels |= {"INVERSE_PPIDM" if s.startswith("INVERSE_PPIDM") else "PPIDM"
+                   for s in sources if s.startswith(EXTERNAL_PREFIXES)}
+    check(labels == {"PPIDM", "INVERSE_PPIDM"},
+          f"the external test split's PPIDM labels are {sorted(labels)}, expected PPIDM and INVERSE_PPIDM")
     if not external_test_ddis:
         notes.append("the external test split is empty: no external DDI survived the fixture's "
                      "family selection")
@@ -260,6 +272,25 @@ def check_manifest(outdir, master):
         got = manifest.get(method, {}).get(split, {}).get(key)
         check(got == n, f"run_manifest.json says {method}/{split} has {got} {key}, the master has {n}")
     conn.close()
+
+
+def check_ppidm(outdir):
+    path = os.path.join(outdir, "reports", "ppidm", "ppidm_report.json")
+    if os.path.exists(path):  # missing: reported in main()
+        with open(path) as fh:
+            classes = json.load(fh).get("classes", {})
+        for label in ("PPIDM", "INVERSE_PPIDM"):
+            n = classes.get(label, {}).get("Gold", {}).get("pairs", 0)
+            check(n > 0, f"ppidm_report.json: {label} has no Gold pair; the fixture's planted "
+                         "pairs did not come out (tests/bin/make_ppidm_fixtures.py)")
+    path = os.path.join(outdir, "reports", "external_test_balance.tsv")
+    if not os.path.exists(path):
+        return
+    with open(path) as fh:
+        totals = {r["label"]: int(r["kept"]) for r in csv.DictReader(fh, delimiter="\t")
+                  if r["source_token"] == "__total__"}
+    check(totals.get("positive", 0) > 0 and totals.get("positive") == totals.get("negative"),
+          f"external_test_balance.tsv keeps {totals}, expected equal non-zero positive and negative")
 
 
 def structure_key(instance_id_a, instance_id_b):
@@ -422,9 +453,13 @@ def main():
                    "reports/external_test_dropped.tsv",
                    "reports/ddi_source_attrition.tsv",
                    "reports/ddi_tier_breakdown.tsv",
+                   "reports/external_test_balance.tsv",
+                   "reports/ppidm/ppidm_report.json",
+                   "reports/ppidm/ppidm_sources.tsv",
                    "reports/run_manifest.json"):
         check(os.path.exists(os.path.join(args.outdir, report)), f"missing {report}")
 
+    check_ppidm(args.outdir)
     found = check_layout(args.outdir)
     if os.path.exists(master):
         master_pairs = check_master(master)
