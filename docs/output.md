@@ -41,6 +41,9 @@ The master carries **no BLOBs**: embeddings are published separately (see below)
 - `databases/<method>/<split>.sqlite3`
   - One database per (method, split), each a self-contained subset of the master holding only its
     own split's DDIs and everything they reach.
+  - Only `ddi_split_membership` is the split assignment. `domain_protein_map`, `protein` and PPI
+    rows of a kept family can include proteins ppi-splitting placed in another split, so do not
+    form new evaluation pairs from them.
 
 </details>
 
@@ -60,7 +63,7 @@ databases**:
 `random` is the naive baseline (random split, uniform negatives). `minimal_leakage` is the main
 product (ILP split, ILP negatives). `random_ilp` / `random_hrni` put the ILP negative sets on the
 random split, so HRNI can be compared without the family-disjoint split as a confounder. The `_hrni` directories are the same positive split with
-**h**igh-**c**onfidence **n**egative **i**nstances: negatives drawn from the candidate network of
+**h**igh-**r**eplication **n**on-**i**nteractions: negatives drawn from the candidate network of
 Pfam pairs a Y2H/MS screen tested without finding an interaction. `external_test`'s `test` split is
 not an internal held-out slice at all — it is the external DDIs (PPIDM / single-domain-PPI /
 Negatome), unseen by construction.
@@ -113,8 +116,8 @@ Root attributes on each file: `model`, `pooling`, `dim`, `dtype`, `key_layout`, 
 > accession keys a lookup either finds the family or does not, so pairing an embedding file with the
 > databases it belongs to is the caller's business.
 
-Which models run is `--embedding_models_domainbench` (default `esm3,esmc,prott5`); set it empty to
-skip embedding entirely. ESM3 and ESMC need `HF_TOKEN`; ProtT5 does not.
+Which models run is `--embedding_models_domainbench` (default `esm3,esmc,prott5`); set it empty
+(`--embedding_models_domainbench=`, or a params file) to skip embedding entirely. ESM3 and ESMC need `HF_TOKEN`; ProtT5 does not.
 
 ### Reports
 

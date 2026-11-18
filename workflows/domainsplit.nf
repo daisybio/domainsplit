@@ -3,9 +3,7 @@
     IMPORT MODULES / SUBWORKFLOWS / FUNCTIONS
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 */
-include { paramsSummaryMap            } from 'plugin/nf-schema'
 include { softwareVersionsToYAML      } from '../subworkflows/nf-core/utils_nfcore_pipeline'
-include { methodsDescriptionText      } from '../subworkflows/local/utils_nfcore_domainsplit_pipeline'
 include { INIT_DOMAINSPLIT_DB         } from '../modules/local/init_domainsplit_db/main.nf'
 include { PARSE_SWISSPROT             } from '../modules/local/parse_swissprot/main.nf'
 include { COLLECT_DDI_DATA; externalSourceWanted; ppidmComputed; ppidmInputUrls } from '../subworkflows/local/collect_ddi_data/main.nf'
@@ -90,12 +88,12 @@ def splitRows() {
     ]
 }
 
-// The negative sets a row actually produces on this run. Normally all of them:
-// `params.ppi_splitting_multi_negset` exists so a `--split_only` debug run can
-// drop back to one, because ppi-splitting rejects `--split_only` unless
-// `negative_sampling_method` is exactly "ilp" (its main.nf). With the param off,
-// each row keeps only its *first* negative set and the `_hrni` directories are
-// not produced.
+// The negative sets a row actually produces on this run. Normally all of them;
+// with `params.ppi_splitting_multi_negset` off, each row keeps only its *first*
+// negative set and the `_hrni` directories are not produced. That does not make
+// ppi-splitting's `--split_only` reachable: its embedded-caller contract needs
+// non-empty partition/node_mapping and an "ilp"-only negative method, while these
+// rows carry empty ones and the random row samples random/uniform.
 def activeNegsets(row) {
     // `.toString().toBoolean()`, not the raw param: a CLI `--ppi_splitting_multi_negset
     // false` arrives as the *String* "false", and every non-empty String is truthy in
@@ -150,8 +148,19 @@ def splitsOf(row, negset) {
     return labels.collect { label -> publishedSplit(negset, label) }
 }
 
+// The three comma-list params whose empty value is an off-switch. Nextflow 26
+// parses `--x ''` as the String "true" (older parsers: Boolean true), which
+// would otherwise surface as an "unknown method/model/source 'true'" error.
+// `--x=` passes a real empty string.
+def rejectBareFlag(name) {
+    def v = params[name]
+    if (v instanceof Boolean || v.toString() == 'true') {
+        error("--${name} arrived as '${v}': Nextflow parses `--${name} ''` as a bare flag. To pass an empty value (off), write `--${name}=` or set it in a -params-file.")
+    }
+}
+
 // Methods ENRICH_STRUCTURAL / ANNOTATE_DDI slice and score. 'all' = every
-// method this run publishes; '' = structure off. Anything else must name
+// method this run publishes; '' (`--structure_data_methods=`) = structure off. Anything else must name
 // published methods: an unknown name would score nothing, silently.
 def structureMethods(all_methods) {
     def wanted = params.structure_data_methods.toString().tokenize(',')*.trim().findAll { m -> m }
@@ -160,7 +169,7 @@ def structureMethods(all_methods) {
     }
     def unknown = wanted - all_methods
     if (unknown) {
-        error("--structure_data_methods names ${unknown.join(', ')}, which this run does not publish (methods: ${all_methods.join(', ')}; or 'all', or '' for no structure).")
+        error("--structure_data_methods names ${unknown.join(', ')}, which this run does not publish (methods: ${all_methods.join(', ')}; or 'all', or `--structure_data_methods=` for no structure).")
     }
     return wanted
 }
@@ -303,6 +312,10 @@ Use all_species_reviewed or human_any_review_status.""")
     }
     if (!params.instance_tiers) {
         error("--instance_tier '${tier}' is not a known protein universe. One of: human_reviewed, all_species_reviewed, human_any_review_status, all_species_any_review_status (unimplemented, see daisybio/domainsplit#4).")
+    }
+
+    ['structure_data_methods', 'embedding_models_domainbench', 'external_test_sources'].each { name ->
+        rejectBareFlag(name)
     }
 
     // `--swissprot_taxon_ids ''` on the command line is parsed by Nextflow as a
@@ -669,13 +682,10 @@ Use all_species_reviewed or human_any_review_status.""")
     //
     // Enrichment, on the master database, before any subsetting.
     //
-    protein_domain_map = ingested.protein_domain_map
-
     ENRICH_DDI_DATABASE(
         external.domainsplit_db,
         input_pfam2go,
         input_uniprot_sequences,
-        protein_domain_map,
         input_uniprot_go_terms,
         input_string,
         input_string_map,
@@ -696,7 +706,7 @@ Use all_species_reviewed or human_any_review_status.""")
     // out of its AF3 complex (ENRICH_STRUCTURAL -> structures.h5,
     // has_structure), then score it under each method's own train-split contact
     // potential (ANNOTATE_DDI -> z_score, ddi_interaction_confirmed). Off with
-    // `--structure_data_methods ''`, in which case af_metadata is never opened.
+    // `--structure_data_methods=` (a bare `''` parses as "true"), in which case af_metadata is never opened.
     //
     def structure_methods = structureMethods(subset_targets*.method.unique())
     if (structure_methods) {
@@ -738,6 +748,7 @@ Use all_species_reviewed or human_any_review_status.""")
         // COMPUTE_PPIDM's report and per-source counts, hashed and summarised;
         // [] when PPIDM is not computed.
         COLLECT_DDI_DATA.out.ppidm_report.mix(COLLECT_DDI_DATA.out.ppidm_sources).collect().ifEmpty([]),
+        COLLECT_DDI_DATA.out.candidate_pfam_mapping,
     )
 
     //
@@ -776,12 +787,6 @@ emit:
     // including the external test set BUILD_EXTERNAL_TEST wrote upstream.
     domainsplit_db    = scored_db
     split_db          = split_dbs.split_db
-    domain_embeddings = generate_domain_embeddings.out.embeddings
-    candidate_network = candidate_network
-    source_conflicts  = inserted.conflicts
-    ddi_attrition     = attrition.report
-    bias_analysis     = ppi.multiqc_report
-    dropped_families  = dropped_families
 }
 
 /*

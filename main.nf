@@ -78,6 +78,13 @@ params {
     split_train_fraction: Float
     split_val_fraction: Float
     split_test_fraction: Float
+    ppidm_alpha: Float
+    ppidm_hippie_min_score: Float
+    ppidm_intact_min_miscore: Float
+    ppidm_string_min_score: Float
+    ppidm_score_threshold: Float  // default null (= auto); a Float declaration keeps the null
+    ppidm_biogrid_min_pubs: Integer
+    ppidm_weight_iterations: Integer
     ddi_mode: Boolean
     embedding_require_gpu: Boolean
     ppi_splitting_multi_negset: Boolean

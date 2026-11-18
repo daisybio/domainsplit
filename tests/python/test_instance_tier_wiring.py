@@ -128,15 +128,18 @@ def dag_processes(tmp_path, *args):
 
 
 # None = the pipeline default (PPIDM_Gold,INVERSE_PPIDM_Gold); "" = every source,
-# passed through a params file because a bare `--external_test_sources ''` on
-# the command line arrives as Boolean true.
+# through a params file and through `--external_test_sources=` (a bare
+# `--external_test_sources ''` arrives as the String "true"). -profile test's
+# url_negatome is a local file, so it is staged straight into PARSE_NEGATOME and
+# DOWNLOAD_NEGATOME (URLs only) must not appear.
 @pytest.mark.parametrize("sources, expected", [
     (None, PPIDM_CHAIN | {"PARSE_PPIDM", "PARSE_INVERSE_PPIDM"}),
-    ("", SOURCE_PROCESSES),
+    ("", SOURCE_PROCESSES - {"DOWNLOAD_NEGATOME"}),
+    ("=", SOURCE_PROCESSES - {"DOWNLOAD_NEGATOME"}),
     ("PPIDM_Gold", PPIDM_CHAIN | {"PARSE_PPIDM"}),
     ("INVERSE_PPIDM_Silver", PPIDM_CHAIN | {"PARSE_INVERSE_PPIDM"}),
-    ("PPIDM_Gold,negatome", PPIDM_CHAIN | {"PARSE_PPIDM", "DOWNLOAD_NEGATOME", "PARSE_NEGATOME"}),
-    ("negatome", {"DOWNLOAD_NEGATOME", "PARSE_NEGATOME"}),
+    ("PPIDM_Gold,negatome", PPIDM_CHAIN | {"PARSE_PPIDM", "PARSE_NEGATOME"}),
+    ("negatome", {"PARSE_NEGATOME"}),
 ])
 def test_external_test_sources_prunes_fetches(sources, expected, tmp_path):
     if sources is None:
@@ -145,6 +148,8 @@ def test_external_test_sources_prunes_fetches(sources, expected, tmp_path):
         pf = tmp_path / "params.yml"
         pf.write_text('external_test_sources: ""\n')
         args = ["-params-file", str(pf)]
+    elif sources == "=":
+        args = ["--external_test_sources="]
     else:
         args = ["--external_test_sources", sources]
     assert dag_processes(tmp_path, *args) == expected
@@ -160,3 +165,12 @@ def test_external_test_sources_rejects_unknown_token(tmp_path):
     proc = preview(tmp_path, "--external_test_sources", "PPIDM_gold")
     assert proc.returncode != 0
     assert "unknown source PPIDM_gold" in proc.stdout + proc.stderr
+
+
+@pytest.mark.parametrize("name", ["structure_data_methods", "embedding_models_domainbench",
+                                  "external_test_sources"])
+def test_bare_empty_off_switch_fails_with_the_working_form(name, tmp_path):
+    proc = preview(tmp_path, f"--{name}", "")
+    out = proc.stdout + proc.stderr
+    assert proc.returncode != 0
+    assert f"`--{name}=`" in out, out

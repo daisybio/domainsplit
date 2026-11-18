@@ -204,7 +204,7 @@
                 },
                 "ppi_splitting_multi_negset": {
                     "type": "boolean",
-                    "description": "Ask ppi-splitting for every negative set of each split row \u2014 plain `ilp` plus `ilp_candidates`, the same sampler restricted to the candidate network, and for `random` also its `uniform` baseline \u2014 which turns 3 method directories into 7 and 11 split databases into 26. On by default: the comma-separated `negative_sampling_method` fan-out it needs is in the pinned submodule. The candidate network must be dense enough that every split can cover itself from it: survival is quadratic in a split's share, because both families of a pair have to land in the same split. Set false for a `--split_only` debug run, which ppi-splitting refuses unless `negative_sampling_method` is exactly \"ilp\".",
+                    "description": "Ask ppi-splitting for every negative set of each split row \u2014 plain `ilp` plus `ilp_candidates`, the same sampler restricted to the candidate network, and for `random` also its `uniform` baseline \u2014 which turns 3 method directories into 7 and 11 split databases into 26. On by default: the comma-separated `negative_sampling_method` fan-out it needs is in the pinned submodule. The candidate network must be dense enough that every split can cover itself from it: survival is quadratic in a split's share, because both families of a pair have to land in the same split. Set false to keep one negative set per row (drops the `_hrni` methods). This does not enable ppi-splitting's `--split_only`, which is unsupported from domainsplit.",
                     "default": true,
                     "fa_icon": "fas fa-clone"
                 },
@@ -326,7 +326,7 @@
                 },
                 "external_test_sources": {
                     "type": "string",
-                    "description": "Comma-separated source tokens the external test set is built from (single_domain_ppi, PPIDM, PPIDM_<Gold|Silver|Bronze>, INVERSE_PPIDM, INVERSE_PPIDM_<Gold|Silver>, negatome). A DDI enters if any of its tokens is listed. Empty = every external source. A source not selected is neither downloaded nor parsed. A token no external DDI carries fails the run.",
+                    "description": "Comma-separated source tokens the external test set is built from (single_domain_ppi, PPIDM, PPIDM_<Gold|Silver|Bronze>, INVERSE_PPIDM, INVERSE_PPIDM_<Gold|Silver>, negatome). A DDI enters if any of its tokens is listed. Empty (`--external_test_sources=` on the CLI; a bare `''` parses as \"true\") = every external source. A source not selected is neither downloaded nor parsed. A token no external DDI carries fails the run.",
                     "default": "PPIDM_Gold,INVERSE_PPIDM_Gold",
                     "fa_icon": "fas fa-filter"
                 },
@@ -348,7 +348,7 @@
             "properties": {
                 "embedding_models_domainbench": {
                     "type": "string",
-                    "description": "Comma-separated domain-embedding models to run (`esm3`, `esmc`, `prott5`, `esm3_structure`). One GPU task per (model, shard). `esm3_structure` is opt-in: ESM3 conditioned on AlphaFold DB monomer coordinates, fetched only when it is listed. Set empty to produce no embeddings at all.",
+                    "description": "Comma-separated domain-embedding models to run (`esm3`, `esmc`, `prott5`, `esm3_structure`). One GPU task per (model, shard). `esm3_structure` is opt-in: ESM3 conditioned on AlphaFold DB monomer coordinates, fetched only when it is listed. Set empty (`--embedding_models_domainbench=` on the CLI; a bare `''` parses as \"true\") to produce no embeddings at all.",
                     "default": "esm3,esmc,prott5",
                     "pattern": "^$|^(esm3_structure|esm3|esmc|prott5)(,(esm3_structure|esm3|esmc|prott5))*$",
                     "fa_icon": "fas fa-vector-square"
@@ -454,7 +454,7 @@
             "properties": {
                 "structure_data_methods": {
                     "type": "string",
-                    "description": "Comma-separated methods whose instance pairs are sliced and scored, each against its own train-split potential. 'all' = every published method; '' turns structure off (af_metadata is then not read).",
+                    "description": "Comma-separated methods whose instance pairs are sliced and scored, each against its own train-split potential. 'all' = every published method; empty (`--structure_data_methods=` on the CLI; a bare `''` parses as \"true\") turns structure off (af_metadata is then not read).",
                     "default": "all",
                     "fa_icon": "fas fa-list"
                 },

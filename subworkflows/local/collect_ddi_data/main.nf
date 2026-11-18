@@ -201,8 +201,16 @@ workflow COLLECT_DDI_DATA {
         ch_versions = ch_versions.mix(PARSE_INVERSE_PPIDM.out.versions)
     }
     if (want_negatome) {
-        parsed << PARSE_NEGATOME(DOWNLOAD_NEGATOME(url_negatome).negatome).ddis
-        ch_versions = ch_versions.mix(DOWNLOAD_NEGATOME.out.versions, PARSE_NEGATOME.out.versions)
+        // A local path is staged (so -resume sees its content); a URL keeps the
+        // download process, whose cert fallback the default host needs (missing intermediate).
+        def remote_negatome = url_negatome.toString() ==~ /^(https?|ftp):\/\/.*/
+        parsed << PARSE_NEGATOME(
+            remote_negatome ? DOWNLOAD_NEGATOME(url_negatome).negatome : file(url_negatome, checkIfExists: true)
+        ).ddis
+        ch_versions = ch_versions.mix(PARSE_NEGATOME.out.versions)
+        if (remote_negatome) {
+            ch_versions = ch_versions.mix(DOWNLOAD_NEGATOME.out.versions)
+        }
     }
 
     // Fixed order (single_domain_ppi, PPIDM, INVERSE_PPIDM, negatome) so the merged source
@@ -226,12 +234,14 @@ workflow COLLECT_DDI_DATA {
                 ? file(params.negative_ppi_gene_mapping, checkIfExists: true)
                 : [],
         ).candidate_network
+        candidate_pfam_mapping = BUILD_CANDIDATE_NETWORK.out.pfam_mapping
         ch_versions = ch_versions.mix(BUILD_CANDIDATE_NETWORK.out.versions)
     }
     else {
         // A placeholder value, never staged: the caller hands the network only
         // to rows that want `ilp_candidates`, and here none does.
         candidate_network = channel.value('none')
+        candidate_pfam_mapping = channel.value([])
     }
 
     ch_versions = ch_versions.mix(
@@ -246,6 +256,9 @@ workflow COLLECT_DDI_DATA {
     // REPORT_DDI_ATTRITION is the only consumer and reads it from the channel.
     offered_counts    = INSERT_3DID.out.counts
     candidate_network
+    // The gene->Pfam JSON the network was built from (live UniProt unless pinned),
+    // for the manifest's SHA-256; [] when no row samples `ilp_candidates`.
+    candidate_pfam_mapping
     // COMPUTE_PPIDM's report and BUILD_PPIDM_SOURCES' per-source counts, for
     // the manifest; empty channels when PPIDM is not computed.
     ppidm_report
