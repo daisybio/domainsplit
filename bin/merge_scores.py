@@ -4,6 +4,7 @@ of the struct-enriched master. Each method's files touch only its own
 ddi_split_membership rows and ddi_interaction_confirmed rows, so the merges
 are disjoint and order-independent."""
 import argparse as ap
+import os
 import shutil
 import sqlite3
 import sys
@@ -62,12 +63,23 @@ def main():
     total_confirmed = sum(apply_confirmed(conn, p) for p in args.confirmed)
     conn.commit()
 
-    unscored = conn.execute("SELECT COUNT(*) FROM ddi_split_membership WHERE z_score IS NULL").fetchone()[0]
-    scored = conn.execute("SELECT COUNT(*) FROM ddi_split_membership WHERE z_score IS NOT NULL").fetchone()[0]
-    if unscored:
-        print(f"[merge_scores] WARNING: {unscored} ddi_split_membership rows still unscored", flush=True)
-
-    print(f"[merge_scores] {scored} ddi_split_membership rows scored", flush=True)
+    # Low-contact pairs are skipped by design, so only a method with eligible
+    # pairs and not one score is worth a warning (e.g. T_DB=0 in score_ddi.py).
+    # The method is in the file name MERGE_SCORE_SHARDS gives: <method>.scores.tsv.
+    requested = [os.path.basename(p)[:-len(".scores.tsv")] for p in args.scores
+                 if p.endswith(".scores.tsv")]
+    counts = {m: (e, s) for m, e, s in conn.execute(
+        "SELECT method, COUNT(*), SUM(scored) FROM ("
+        "  SELECT method, MAX(z_score IS NOT NULL) AS scored FROM ddi_split_membership"
+        "  WHERE has_structure = 1 GROUP BY method, ddi_id, instance_id_a, instance_id_b"
+        ") GROUP BY method")}
+    for method in requested:
+        eligible, scored = counts.get(method, (0, 0))
+        print(f"[merge_scores] method={method}: {scored}/{eligible} instance pairs "
+              f"with structure scored", flush=True)
+        if eligible and not scored:
+            print(f"[merge_scores] WARNING: method={method} has {eligible} instance pairs "
+                  f"with structure but none scored", file=sys.stderr, flush=True)
 
     conn.close()
     print(f"[merge_scores] done -> {total_scores} z_scores merged, {total_confirmed} confirmed rows merged", flush=True)

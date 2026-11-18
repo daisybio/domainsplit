@@ -33,8 +33,10 @@ workflow ANNOTATE_DDI {
     ch_versions = ch_versions.mix(BUILD_SCORING_MATRIX.out.versions)
 
     // Group each method's shard outputs back together: groupTuple() on
-    // (method, c_ab_counts, surface_counts) yields (method, [c_ab...], [surface...])
-    matrix_shards_grouped = BUILD_SCORING_MATRIX.out.shard.groupTuple(by: 0)
+    // (method, c_ab_counts, surface_counts) yields (method, [c_ab...], [surface...]).
+    // Sorted by file name (carries the shard id), not completion order, so the
+    // staged inputs and the -resume cache key are stable.
+    matrix_shards_grouped = BUILD_SCORING_MATRIX.out.shard.groupTuple(by: 0, sort: { a, b -> a.name <=> b.name })
 
     MERGE_SCORING_MATRIX(matrix_shards_grouped)
     // MERGE_SCORING_MATRIX.out.matrix: (method, c_ab_matrix, db_freq, t_db)
@@ -52,7 +54,7 @@ workflow ANNOTATE_DDI {
     ch_versions = ch_versions.mix(SCORE_DDI.out.versions)
 
     // Combine shards for each method
-    score_shards_grouped = SCORE_DDI.out.shard.groupTuple(by: 0)
+    score_shards_grouped = SCORE_DDI.out.shard.groupTuple(by: 0, sort: { a, b -> a.name <=> b.name })
 
     MERGE_SCORE_SHARDS(score_shards_grouped)
     // MERGE_SCORE_SHARDS.out.merged: (method, scores, confirmed)
@@ -60,8 +62,8 @@ workflow ANNOTATE_DDI {
     // Add scores to db, together with interaction annotations (majority_confirmed, mean_confirmed)
     MERGE_SCORES(
         database,
-        MERGE_SCORE_SHARDS.out.merged.map { it[1] }.collect(),
-        MERGE_SCORE_SHARDS.out.merged.map { it[2] }.collect(),
+        MERGE_SCORE_SHARDS.out.merged.map { it[1] }.collect(sort: { a, b -> a.name <=> b.name }),
+        MERGE_SCORE_SHARDS.out.merged.map { it[2] }.collect(sort: { a, b -> a.name <=> b.name }),
     )
     ch_versions = ch_versions.mix(MERGE_SCORES.out.versions)
 

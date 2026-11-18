@@ -128,6 +128,30 @@ def test_enrich_slices_in_row_orientation_and_flags_every_row():
         assert [r.id[1] for r in b] == list(range(3, 10))
         assert a[5]["CA"].coord[1] == 0.0, "chain A must be P1 (y=0) after the swap"
         assert b[3]["CA"].coord[1] == 4.0
+        with open(out_db, "rb") as fh:
+            assert fh.read(20)[18:20] == b"\x01\x01", "handed-off DB must not be in WAL mode"
+
+
+def test_af_metadata_rejects_conflicts_and_blank_paths_but_collapses_exact_duplicates():
+    import pytest
+
+    import enrich_structural_af
+
+    def index(rows):
+        with tempfile.TemporaryDirectory() as tmp:
+            meta = os.path.join(tmp, "af_metadata.csv")
+            with open(meta, "w") as fh:
+                fh.write("uniprot_id_a,uniprot_id_b,path,source\n" + "".join(r + "\n" for r in rows))
+            return enrich_structural_af.build_meta_index(meta)
+
+    assert len(index(["P1,P2,x.pdb.zst,downloaded", "P1,P2,x.pdb.zst,downloaded"])) == 1
+    for rows in (["P1,P2,x.pdb.zst,downloaded", "P3,P4,y.cif,inferred", "P2,P1,z.cif,inferred"],
+                 ["P1,P2,x.pdb.zst,downloaded", "P3,P4,y.cif,inferred", "P1,P2,x.pdb.zst,inferred"],
+                 ["P1,P2,x.pdb.zst,downloaded", "P3,P4,y.cif,inferred", "P2,P1,x.pdb.zst,downloaded"]):
+        with pytest.raises(SystemExit, match="rows 2 and 4"):
+            index(rows)
+    with pytest.raises(SystemExit, match=r"row\(s\) 3"):
+        index(["P1,P2,x.pdb.zst,downloaded", "P3,P4,,inferred"])
 
 
 def test_slice_with_an_empty_domain_window_is_rejected():

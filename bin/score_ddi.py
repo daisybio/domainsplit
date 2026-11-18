@@ -348,7 +348,14 @@ def main():
     SCORE_LOOKUP = build_score_lookup()
     print("  Built global (20,20,3) score lookup table", flush=True)
 
-    method_structures = get_structures_for_method(args.db_in, args.method)
+    if T_DB == 0:
+        # No train contacts -> no potential: scoring would give AA-independent
+        # fallback scores and a fake z=0.0 with a negative vote. Leave z_score NULL.
+        print(f"[score_ddi] WARNING: method={args.method} has T_DB=0 (no train-positive "
+              f"structure contacts); not scoring this method", file=sys.stderr, flush=True)
+        method_structures = []
+    else:
+        method_structures = get_structures_for_method(args.db_in, args.method)
     print(f"[score_ddi] method={args.method}: {len(method_structures)} structures total", flush=True)
 
     if args.n_shards > 1:

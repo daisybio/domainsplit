@@ -82,10 +82,22 @@ def build_meta_index(meta_path: str) -> dict:
     # A relative path is relative to the CSV's real location: Nextflow stages
     # the CSV as a symlink, and a fixture cannot know the absolute path.
     base = os.path.dirname(os.path.realpath(meta_path))
-    index = {}
-    for row in meta.itertuples(index=False):
+    # Row numbers as a spreadsheet shows them: header is row 1.
+    blank = meta.index[meta["path"].isna() | (meta["path"].str.strip() == "")]
+    if len(blank):
+        sys.exit(f"af_metadata {meta_path}: blank path on row(s) "
+                 f"{', '.join(str(i + 2) for i in blank)}")
+    index, first_row = {}, {}
+    for i, row in zip(meta.index, meta.itertuples(index=False)):
         key = frozenset({row.uniprot_id_a, row.uniprot_id_b})
-        index[key] = (os.path.join(base, row.path), row.uniprot_id_a, row.source)
+        entry = (os.path.join(base, row.path), row.uniprot_id_a, row.source)
+        if key in index and index[key] != entry:
+            # No rule says which of two predictions of one pair is right, so neither wins.
+            sys.exit(f"af_metadata {meta_path}: rows {first_row[key]} and {i + 2} give "
+                     f"conflicting (path, chain-A protein, source) for protein pair "
+                     f"{'/'.join(sorted(key))}")
+        index.setdefault(key, entry)
+        first_row.setdefault(key, i + 2)
     return index
 
 
@@ -341,6 +353,9 @@ def main():
                       f"({time.time() - t0:.0f}s)", flush=True)
 
     inserter.flush()
+    # Hand off one self-contained file: a WAL-mode DB makes every later reader
+    # (even mode=ro) create -wal/-shm sidecars next to it.
+    conn.execute("PRAGMA journal_mode = DELETE")
     conn.close()
     print(f"enrich_structural_af: done -> sliced={n_ok} "
           f"missing_meta={n_missing_meta} missing_file={n_missing_file} "
