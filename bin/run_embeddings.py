@@ -447,9 +447,10 @@ def _run_batches(records, batch_size, process_batch):
     n = len(records)
     i = 0
     while i < n:
-        # Try the current `batch_size`. On OOM, halve until 1, then skip.
+        # Try the current `batch_size`. On OOM, halve until 1; an OOM at 1 fails
+        # the task, since skipping would silently drop the domain from the H5.
         attempted = batch_size
-        while attempted >= 1:
+        while True:
             end = min(i + attempted, n)
             ids = [r[0] for r in records[i:end]]
             seqs = [r[1] for r in records[i:end]]
@@ -460,16 +461,15 @@ def _run_batches(records, batch_size, process_batch):
             except torch.OutOfMemoryError:
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
+                if attempted == 1:
+                    print(f"OOM: {ids[0]} cannot fit at batch_size=1 (len={len(seqs[0])})", flush=True)
+                    raise
                 print(
                     f"OOM at batch_size={attempted}, range [{i},{end}), "
                     f"len_range=[{len(seqs[0])},{len(seqs[-1])}]; halving",
                     flush=True,
                 )
                 attempted //= 2
-        if attempted < 1:
-            sid, seq = records[i]
-            print(f"skip {sid}: cannot fit at batch_size=1 (len={len(seq)})", flush=True)
-            i += 1
 
 
 def _write_versions(versions_path: str, process_name: str, model: str) -> None:

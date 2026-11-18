@@ -82,6 +82,38 @@ def test_input_parsers():
         assert uniprot_sequences(uni, {"P12345"}) == {"P12345": "MKTAYI"}
 
 
+def _run_main(monkeypatch, tmp, statuses):
+    """main() with downloads stubbed: `statuses` maps accession -> download status."""
+    import types
+    import fetch_afdb_structures as fas
+
+    dom = os.path.join(tmp, "d.fasta")
+    uni = os.path.join(tmp, "u.fasta")
+    with open(dom, "w") as f:
+        f.writelines(f">PF00001_{a}_1_5\nAAAAA\n" for a in statuses)
+    with open(uni, "w") as f:
+        f.writelines(f">sp|{a}|X\n{UNIPROT}\n" for a in statuses)
+    monkeypatch.setattr(fas, "download", lambda a, *_a, **_k: (
+        (os.path.join(tmp, a), statuses[a]) if statuses[a] == "cached" else (None, statuses[a])))
+    monkeypatch.setattr(fas, "parse_model", lambda _p: chain(1, UNIPROT))
+    monkeypatch.setitem(sys.modules, "esm", types.SimpleNamespace(__version__="0"))
+    monkeypatch.setattr(sys, "argv", [
+        "x", "--domain-fasta", dom, "--uniprot-fasta", uni, "--output-h5", os.path.join(tmp, "o.h5"),
+        "--report", os.path.join(tmp, "r.tsv"), "--version", "6", "--min-plddt", "70",
+        "--max-mismatch-rate", "0.1", "--cache-dir", tmp, "--versions", os.path.join(tmp, "v.yml"),
+        "--process-name", "P"])
+    return fas.main()
+
+
+def test_non_404_download_failure_fails_the_task(monkeypatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        assert _run_main(monkeypatch, tmp, {"P1": "cached", "P2": "404"}) == 0
+    with tempfile.TemporaryDirectory() as tmp:
+        assert _run_main(monkeypatch, tmp, {"P1": "cached", "P2": "error:ConnectionError"}) == 1
+    with tempfile.TemporaryDirectory() as tmp:  # the all-unusable guard still holds
+        assert _run_main(monkeypatch, tmp, {"P1": "404"}) == 1
+
+
 if __name__ == "__main__":
     test_numbering_offset_places_residues_at_their_uniprot_position()
     test_shifted_sequence_is_counted_as_mismatch()

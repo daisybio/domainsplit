@@ -249,6 +249,10 @@ def main() -> int:
     if accs and n_written == 0:
         print("[afdb] ERROR: no protein got a structure; see the report", file=sys.stderr)
         return 1
+    # A non-404 failure is transient, not data: dropping the protein would make the H5 set vary by run.
+    if n_errors:
+        print(f"[afdb] ERROR: {n_errors} non-404 download failure(s); see the report", file=sys.stderr)
+        return 1
     return 0
 
 

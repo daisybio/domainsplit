@@ -177,6 +177,29 @@ def test_structure_track_is_kept_alone_and_refused_in_a_batch():
                      torch.device("cpu"), tok.pad_token_id)
 
 
+def test_oom_halves_then_fails_at_batch_size_one():
+    """Halving above 1 keeps every record; an OOM at 1 fails the task instead of
+    silently dropping the record from the H5."""
+    torch = pytest.importorskip("torch")
+    from run_embeddings import _run_batches
+
+    done = []
+
+    def fits_two(seqs, ids):
+        if len(ids) > 2:
+            raise torch.OutOfMemoryError()
+        done.extend(ids)
+
+    _run_batches([(f"r{i}", "M") for i in range(5)], 4, fits_two)
+    assert done == ["r0", "r1", "r2", "r3", "r4"]
+
+    def never_fits(seqs, ids):
+        raise torch.OutOfMemoryError()
+
+    with pytest.raises(torch.OutOfMemoryError):
+        _run_batches([("r0", "M")], 4, never_fits)
+
+
 if __name__ == "__main__":
     test_domain_coords_slices_uniprot_positions_and_gates_on_coverage()
     test_unresolved_residues_get_the_structure_mask_token()
