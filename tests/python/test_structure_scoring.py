@@ -99,6 +99,7 @@ def run_enrich(tmp, **kw):
         [sys.executable, os.path.join(BIN, "enrich_structural_af.py"),
          "--db_in", db, "--db_out", out_db, "--structures_h5", h5_path,
          "--af_metadata", meta, "--methods", "random", "--cpus", "1", "--max_mismatch_rate", "0.02",
+         "--coverage", os.path.join(tmp, "coverage.tsv"), "--af3_to_model_dir", os.path.join(tmp, "af3"),
          "--versions", os.path.join(tmp, "versions.yml"), "--process_name", "TEST"],
         check=True, env=ENV, capture_output=True, text=True,
     )

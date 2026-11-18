@@ -25,8 +25,15 @@ output:
       pattern: "*.sqlite3"
   - structures:
       type: file
-      description: HDF5 file of gzip-compressed two-chain PDB slices, keyed {pfam_id_a}_{pfam_id_b}/{instance_id_a}__{instance_id_b}.
+      description: HDF5 file of gzip-compressed two-chain PDB slices, keyed {pfam_id_a}_{pfam_id_b}/{instance_id_a}__{instance_id_b}. Each slice carries attrs iptm, ptm, ranking_score (NaN when absent), af_source and, when the AF3 summary has it, chain_pair_iptm (2x2, row orientation). The float16 PAE submatrix over the two sliced windows ([domain A residues, domain B residues]) is at pae/{pfam_id_a}_{pfam_id_b}/{instance_id_a}__{instance_id_b}, with attrs residues_a/residues_b.
       pattern: "*.h5"
+  - coverage:
+      type: file
+      description: structure_coverage.tsv -- per (method, split, label) instance_pairs, with_structure, fraction, with_pae, with_iptm.
+      pattern: "structure_coverage.tsv"
+  - af3_to_model:
+      type: directory
+      description: One <method>.tsv per method plus all_methods.tsv, one row per unordered UniProt pair with at least one membership instance pair without structure (uniprot_id_a, uniprot_id_b, reason, n_instance_pairs, labels, splits[, methods]).
 authors:
   - "@ChiaraThomas"
 maintainers:

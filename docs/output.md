@@ -119,6 +119,55 @@ Root attributes on each file: `model`, `pooling`, `dim`, `dtype`, `key_layout`, 
 Which models run is `--embedding_models_domainbench` (default `esm3,esmc,prott5`); set it empty
 (`--embedding_models_domainbench=`, or a params file) to skip embedding entirely. ESM3 and ESMC need `HF_TOKEN`; ProtT5 does not.
 
+### Structures
+
+<details markdown="1">
+<summary>Output files</summary>
+
+- `structures/structures.h5`
+- `structures/structure_coverage.tsv`
+- `structures/af3_to_model/<method>.tsv`, `structures/af3_to_model/all_methods.tsv`
+
+</details>
+
+Written only for the methods in `--structure_data_methods`.
+
+`structures.h5` holds each instance pair's sliced two-chain PDB as gzip bytes at
+`{pfam_id_a}_{pfam_id_b}/{instance_id_a}__{instance_id_b}`. Each slice dataset carries these attrs:
+
+- `iptm`, `ptm`, `ranking_score`: float, NaN when absent.
+- `af_source`: `inferred` for own AF3 runs, `downloaded` for AlphaFold DB complexes.
+- `chain_pair_iptm`: 2×2, AF3 only, in the row's orientation (index 0 is the row's protein A).
+
+AlphaFold DB models have no confidence summary. Their `ptm` and `ranking_score` are always NaN, and
+their `iptm` is NaN unless the PDB header carries one. pLDDT is in the PDB B-factor column.
+
+The PAE submatrix over the two sliced domain windows is at
+`pae/{pfam_id_a}_{pfam_id_b}/{instance_id_a}__{instance_id_b}`:
+
+- float16 and square, with rows and columns ordered [domain A residues, domain B residues].
+- Rows are aligned residues and columns are scored residues, as in AlphaFold.
+- Attrs `residues_a` and `residues_b` give the UniProt residue numbers.
+- The dataset is absent when the PAE file is missing.
+
+A confidence file that is missing is not fatal: it leaves NaN attrs and no PAE. One that is present
+but cannot be parsed, or does not fit its model, stops the run.
+
+`structure_coverage.tsv` has one row per (`method`, `split`, `label`), with columns
+`instance_pairs`, `with_structure`, `fraction`, `with_pae` and `with_iptm`. Positives and negatives
+are covered at very different rates, which makes structure features a label leak, so check this
+file before using them.
+
+`af3_to_model/` lists the protein pairs to run AF3 on: one row per unordered UniProt pair
+(`uniprot_id_a` < `uniprot_id_b`) with at least one membership instance pair that has no structure.
+
+- `reason`: comma-joined, from `no_af_metadata_entry`, `file_missing`, `file_unreadable` and
+  `slice_failed`.
+- Also `n_instance_pairs`, `labels` and `splits`.
+- `all_methods.tsv` adds a `methods` column.
+
+Nothing is hidden to equalise coverage. The task log only warns about the gaps.
+
 ### Reports
 
 <details markdown="1">
@@ -135,6 +184,37 @@ Which models run is `--embedding_models_domainbench` (default `esm3,esmc,prott5`
   repo and the ppi-splitting submodule, SHA-256 of the three manual inputs, `Last-Modified`/`ETag`
   of every download URL, and the positive/negative count of every (method, split). ILP solver
   status is not recorded: ppi-splitting does not publish it.
+- `reports/split_qc/` (`REPORT_SPLIT_QC`, on the final master; every count is over
+  `ddi_split_membership` rows, family/protein taken from the instance id, label from
+  `domain_domain_interaction.negative`):
+  - `split_overlap.tsv` — per method and unordered split pair, for each `unit` (`family`,
+    `family_pair_positive`, `family_pair_negative`, `protein`, `instance`): the size of each split's
+    set (`n_a`, `n_b`) and how many they share (`n_shared`).
+  - `family_leaks.tsv` — `method, pfam_id, splits`: families that appear in more than one of
+    `train`, `validation` and the test partition (all `test_*` splits together: the 1:1 and 1:10
+    sets share their positives) of a method split by the ILP (every `split_method: 'ilp'` row of
+    `workflows/domainsplit.nf`; the external `test` split is not part of that partition). The ILP
+    guarantees there are none, so **any row fails the task** — and a failed task publishes nothing,
+    so the leaks are also printed (first 50) to the task's stderr, which Nextflow shows in the error
+    report. Other methods are reported in `split_overlap.tsv` only.
+  - `test_variant_overlap.tsv` — per method with internal tests: its 1:1 test (`split_1_1`) vs
+    `test_uniform_1_10`, per label, at `ddi_row` (DDI + instance pair) and `family_pair`
+    granularity. Expected: positives identical, ILP negatives near-disjoint.
+  - `external_test_profile.tsv` — per external-test method, its `test` split per label and source
+    token (`__total__` = the whole label): family pairs, instance pairs, families, families also
+    in the other label, families and family pairs also in train, and the min/median/max of the
+    families' **train-positive degree** (distinct positive family pairs a family has in train)
+    plus the median of each pair's smaller degree. High-degree families in one label only is the
+    hub shortcut a model can score on without learning the interaction.
+  - Only with `esm3_structure` in `--embedding_models_domainbench`:
+    `esm3_structure_coverage.tsv` (per method, split, label: instance pairs with both instances in
+    `esm3_structure_domain_embeddings.h5` vs total), `esm3_structure_missing_instances.tsv`
+    (`instance_id, uniprot_id, reason, n_membership_rows`) and
+    `esm3_structure_missing_accessions.tsv` (`accession, reason, n_instances`). `reason` is the
+    protein's `afdb_structures_report.tsv` status (`not_in_afdb`, `sequence_mismatch`,
+    `no_uniprot_sequence`, `download_failed`, `parse_failed`), `below_min_coverage` when the
+    protein is `ok` (the domain fell under the structure-coverage or length cutoff), or
+    `not_in_afdb_report`. Missing coverage only warns.
 - `external_ddis/*.tsv` — each external source normalized, as the record of what it contributed
   before the merge/drop rules ran.
 

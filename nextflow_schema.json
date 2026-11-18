@@ -181,7 +181,7 @@
                 "split_train_fraction": {
                     "type": "number",
                     "description": "Fraction of positive DDIs in the train split, for the `random` and `minimal_leakage` strategies. The `external_test` strategy has no internal test set and uses 1 - split_val_fraction instead.",
-                    "default": 0.7,
+                    "default": 0.65,
                     "minimum": 0,
                     "maximum": 1,
                     "fa_icon": "fas fa-percent"
@@ -189,7 +189,7 @@
                 "split_val_fraction": {
                     "type": "number",
                     "description": "Fraction of positive DDIs in the validation split, for every splitting strategy.",
-                    "default": 0.1,
+                    "default": 0.15,
                     "minimum": 0,
                     "maximum": 1,
                     "fa_icon": "fas fa-percent"

@@ -19,5 +19,7 @@ workflow ENRICH_STRUCTURAL {
     emit:
     domainsplit_db = ENRICH_STRUCTURAL_AF.out.dbstruct
     structures     = ENRICH_STRUCTURAL_AF.out.structures
+    coverage       = ENRICH_STRUCTURAL_AF.out.coverage     // structure_coverage.tsv
+    af3_to_model   = ENRICH_STRUCTURAL_AF.out.af3_to_model // dir: <method>.tsv + all_methods.tsv
     versions       = ENRICH_STRUCTURAL_AF.out.versions
 }

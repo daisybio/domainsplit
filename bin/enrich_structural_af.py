@@ -18,13 +18,26 @@ version or a renumbered construct would otherwise be sliced at the wrong
 residues (see check_window). has_structure is a property of the instance pair, so it is set for
 every method's rows of that triple, not only the --methods ones: the
 structure is in structures.h5 either way.
+
+AF confidence is stored next to each slice (see load_confidence): scalar
+attrs iptm/ptm/ranking_score/af_source[/chain_pair_iptm] on the structure
+dataset, and the PAE submatrix over the two sliced windows (rows/cols =
+[domain A residues, domain B residues], row orientation) at
+pae/<group_key>/<dset_key>. A missing confidence file leaves NaN / no PAE
+and is counted; a present but unparsable or inconsistent one is fatal.
+
+Every --methods membership row without structure gets a reason, reported in
+--coverage (per method, split, label) and --af3_to_model_dir (one TSV per
+method plus all_methods.tsv: the protein pairs to run AF3 on).
 """
 import argparse as ap
 import gzip
 import io
 import itertools
+import json
 import multiprocessing
 import os
+import re
 import shutil
 import sqlite3
 import sys
@@ -77,6 +90,10 @@ def parse_args():
     p.add_argument("--max_mismatch_rate", type=float, required=True,
                    help="max fraction of a window's residues whose type differs from "
                         "protein.sequence at their number (as afdb_max_mismatch_rate)")
+    p.add_argument("--coverage", required=True,
+                   help="TSV: structure coverage per (method, split, label)")
+    p.add_argument("--af3_to_model_dir", required=True,
+                   help="directory for <method>.tsv + all_methods.tsv of protein pairs without structure")
     p.add_argument("--versions", required=True)
     p.add_argument("--process_name", required=True)
     p.add_argument("--cpus", type=int, default=None,
@@ -118,25 +135,164 @@ def build_meta_index(meta_path: str) -> dict:
 # Worker-side code (runs in child processes)
 # ---------------------------------------------------------------------------
 
+def read_zst(path: str) -> bytes:
+    """Stream-decompress a .zst file (frames need not record their content size)."""
+    chunks = []
+    with open(path, "rb") as fh:
+        reader = zstandard.ZstdDecompressor().stream_reader(fh)
+        while True:
+            chunk = reader.read(1 << 20)
+            if not chunk:
+                break
+            chunks.append(chunk)
+    return b"".join(chunks)
+
+
 def load_structure(path: str, source: str):
-    """Return a parsed Biopython Structure, fully in memory (no scratch files).
-       source 'downloaded': `path` is a .pdb.zst AF3 model, decompressed on the fly
+    """Return (Biopython Structure, PDB text or None), fully in memory (no scratch files).
+       source 'downloaded': `path` is a .pdb.zst AFDB model, decompressed on the fly
        source 'inferred':   `path` is a .cif file"""
     if source == "downloaded":
-        dctx = zstandard.ZstdDecompressor()
-        chunks = []
-        with open(path, "rb") as fh:
-            reader = dctx.stream_reader(fh)
-            while True:
-                chunk = reader.read(1 << 20)
-                if not chunk:
-                    break
-                chunks.append(chunk)
-        handle = io.StringIO(b"".join(chunks).decode("utf-8"))
-        return PDBParser(QUIET=True).get_structure("complex", handle)
+        text = read_zst(path).decode("utf-8")
+        return PDBParser(QUIET=True).get_structure("complex", io.StringIO(text)), text
     if source == "inferred":
-        return MMCIFParser(QUIET=True).get_structure("complex", path)
+        return MMCIFParser(QUIET=True).get_structure("complex", path), None
     raise ValueError(f"Unknown source {source} for path {path}")
+
+
+# ---------------------------------------------------------------------------
+# AF confidence (ipTM / pTM / ranking_score / PAE)
+# ---------------------------------------------------------------------------
+
+AF3_MODEL_SUFFIX = "_model.cif"
+AFDB_MODEL_RE = re.compile(r"-model_v(\d+)\.pdb\.zst$")
+# shortcut: format not verified against a real AFDB heterodimer PDB; an
+# ipTM in a REMARK line is read if present, otherwise ipTM stays NaN.
+HEADER_IPTM_RE = re.compile(r"\bip_?tm\b\D{0,5}?(\d*\.\d+|\d+)", re.IGNORECASE)
+
+
+def confidence_paths(path: str, source: str):
+    """(summary_json, pae_json) siblings of a model file; None where the
+    layout has no such file or `path` is not in the expected form."""
+    if source == "inferred" and path.endswith(AF3_MODEL_SUFFIX):
+        stem = path[:-len(AF3_MODEL_SUFFIX)]
+        return stem + "_summary_confidences.json", stem + "_confidences.json"
+    if source == "downloaded" and AFDB_MODEL_RE.search(path):
+        return None, AFDB_MODEL_RE.sub(r"-predicted_aligned_error_v\1.json.zst", path)
+    return None, None
+
+
+def read_json(path: str):
+    try:
+        raw = read_zst(path) if path.endswith(".zst") else open(path, "rb").read()
+        return json.loads(raw)
+    except Exception as exc:
+        raise ValueError(f"{path}: unparsable confidence file: {exc!r}") from exc
+
+
+def _float_or_nan(value, what):
+    if value is None:
+        return float("nan")
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        raise ValueError(f"{what}: not a number: {value!r}")
+
+
+def header_iptm(text):
+    for line in (text or "").splitlines():
+        if line.startswith("REMARK"):
+            m = HEADER_IPTM_RE.search(line)
+            if m:
+                return float(m.group(1))
+    return float("nan")
+
+
+def load_confidence(path: str, source: str, model, pdb_text):
+    """Per protein pair: {"scalars", "chain_pair_iptm", "pae", "index", "missing"}.
+    index maps (chain_id, residue.id) of `model` to a PAE row (None = no unique
+    token). Missing files land in "missing"; a present file that does not
+    parse or does not fit `model` raises ValueError (fatal for the run)."""
+    summary_path, pae_path = confidence_paths(path, source)
+    out = {"scalars": {"iptm": float("nan"), "ptm": float("nan"), "ranking_score": float("nan")},
+           "chain_pair_iptm": None, "pae": None, "index": None, "missing": []}
+    if source == "downloaded":
+        out["scalars"]["iptm"] = header_iptm(pdb_text)
+    else:
+        if summary_path is None or not os.path.exists(summary_path):
+            out["missing"].append(summary_path or f"{path} (summary_confidences not derivable)")
+        else:
+            summary = read_json(summary_path)
+            if not isinstance(summary, dict):
+                raise ValueError(f"{summary_path}: expected a JSON object")
+            for k in out["scalars"]:
+                out["scalars"][k] = _float_or_nan(summary.get(k), f"{summary_path} {k}")
+            cpi = summary.get("chain_pair_iptm")
+            if cpi is not None:
+                try:
+                    cpi = np.array(cpi, dtype=float)
+                except (TypeError, ValueError) as exc:
+                    raise ValueError(f"{summary_path}: chain_pair_iptm not numeric: {exc!r}")
+                if cpi.shape != (2, 2) or not np.isfinite(cpi).all():
+                    raise ValueError(f"{summary_path}: chain_pair_iptm is not a finite 2x2 matrix: {cpi.tolist()}")
+                out["chain_pair_iptm"] = cpi
+
+    if pae_path is None or not os.path.exists(pae_path):
+        out["missing"].append(pae_path or f"{path} (PAE file not derivable)")
+        return out
+    data = read_json(pae_path)
+    residues = [(chain.id, r.id) for chain in model for r in chain]
+    try:
+        if source == "inferred":
+            pae = np.array(data["pae"], dtype=float)
+            chain_ids, res_ids = list(data["token_chain_ids"]), [int(x) for x in data["token_res_ids"]]
+            if len(chain_ids) != len(res_ids):
+                raise ValueError(f"{len(chain_ids)} token_chain_ids vs {len(res_ids)} token_res_ids")
+            tokens = {}
+            for i, key in enumerate(zip(chain_ids, res_ids)):
+                tokens.setdefault(key, []).append(i)
+            # A modified residue / ligand spans several tokens: no single PAE row.
+            index = {(c, rid): (tokens[(c, rid[1])][0]
+                                if rid[2] == " " and len(tokens.get((c, rid[1]), ())) == 1 else None)
+                     for c, rid in residues}
+            n = len(chain_ids)
+        else:
+            entry = data[0] if isinstance(data, list) else data
+            pae = np.array(entry["predicted_aligned_error"], dtype=float)
+            # AFDB PAE rows follow the PDB's chain order and residue order.
+            index = {key: i for i, key in enumerate(residues)}
+            n = len(residues)
+    except (KeyError, IndexError, TypeError, ValueError) as exc:
+        raise ValueError(f"{pae_path}: unparsable confidence file: {exc!r}") from exc
+    if pae.shape != (n, n):
+        raise ValueError(f"{pae_path}: PAE shape {pae.shape} does not fit the model's {n} "
+                         f"{'tokens' if source == 'inferred' else 'residues'} ({path})")
+    # A JSON null becomes NaN under dtype=float and would pass the shape check.
+    if not np.isfinite(pae).all():
+        raise ValueError(f"{pae_path}: PAE has non-finite entries ({path})")
+    out["pae"], out["index"] = pae, index
+    return out
+
+
+def slice_confidence(conf, model, chain_a, start_a, end_a, chain_b, start_b, end_b, source):
+    """(attrs, pae_sub or None, residues_a, residues_b) for one slice, in the
+    row's orientation: chain_a is the row's protein A whatever its file chain."""
+    attrs = dict(conf["scalars"], af_source=source)
+    if conf["chain_pair_iptm"] is not None:
+        order = [0, 1] if chain_a == "A" else [1, 0]
+        attrs["chain_pair_iptm"] = conf["chain_pair_iptm"][np.ix_(order, order)]
+    if conf["pae"] is None:
+        return attrs, None, None, None
+    rows, resnums = [], []
+    for chain, start, end in ((chain_a, start_a, end_a), (chain_b, start_b, end_b)):
+        sel = [r for r in model[chain] if start <= r.id[1] <= end]  # what DdiPairSelect keeps
+        idx = [conf["index"].get((chain, r.id)) for r in sel]
+        if any(i is None for i in idx):
+            raise ValueError(f"chain {chain} {start}-{end}: residue(s) without a unique PAE token")
+        rows += idx
+        resnums.append(np.array([r.id[1] for r in sel], dtype=np.int32))
+    pae = conf["pae"][np.ix_(rows, rows)].astype(np.float16)
+    return attrs, pae, resnums[0], resnums[1]
 
 
 def check_window(chain, start: int, end: int, sequence, max_mismatch_rate: float):
@@ -189,13 +345,17 @@ def process_pair(task):
     """One protein pair: load the complex once, slice every instance pair."""
     path, source, file_uniprot_a, rows, sequences, max_mismatch_rate = task
     try:
-        structure = load_structure(path, source)
+        structure, pdb_text = load_structure(path, source)
     except Exception as exc:  # missing / corrupt file -> no structure
         return {"unreadable_rows": [(r[0], r[1], r[2]) for r in rows],
+                "unreadable_reason": "file_missing" if not os.path.exists(path) else "file_unreadable",
                 "error": f"{path}: {exc!r}",
-                "slices": {}, "ok_rows": [], "failed": []}
+                "slices": {}, "confidence": {}, "conf_missing": [], "ok_rows": [], "failed": []}
+    # Outside any try: an unparsable confidence file must stop the run.
+    conf = load_confidence(path, source, structure[0], pdb_text)
 
     slices = {}    # (group_key, dset_key) -> gzip PDB bytes
+    confidence = {}  # (group_key, dset_key) -> slice_confidence() tuple
     errors = {}    # (group_key, dset_key) -> error string
     ok_rows, failed = [], []
     for (ddi_id, ia, ib, uni_a, sa, ea, uni_b, sb, eb) in rows:
@@ -203,20 +363,27 @@ def process_pair(task):
         if key not in slices and key not in errors:
             # Row's protein A is chain A in the file unless the file has the pair swapped.
             chain_a, chain_b = ("B", "A") if file_uniprot_a != uni_a else ("A", "B")
+            model = structure[0]
             try:
-                model = structure[0]
                 check_window(model[chain_a], int(sa), int(ea), sequences.get(uni_a), max_mismatch_rate)
                 check_window(model[chain_b], int(sb), int(eb), sequences.get(uni_b), max_mismatch_rate)
                 slices[key] = slice_pair(structure, chain_a, int(sa), int(ea),
                                          chain_b, int(sb), int(eb))
             except Exception as exc:
                 errors[key] = f"{exc!r} (from {path})"
+            else:
+                try:
+                    confidence[key] = slice_confidence(conf, model, chain_a, int(sa), int(ea),
+                                                       chain_b, int(sb), int(eb), source)
+                except ValueError as exc:
+                    raise ValueError(f"{path} {ia}/{ib}: {exc}") from exc
         if key in errors:
             failed.append((ddi_id, ia, ib, errors[key]))
         else:
             ok_rows.append((ddi_id, ia, ib))
-    return {"unreadable_rows": [], "error": None,
-            "slices": slices, "ok_rows": ok_rows, "failed": failed}
+    return {"unreadable_rows": [], "unreadable_reason": None, "error": None,
+            "slices": slices, "confidence": confidence, "conf_missing": conf["missing"],
+            "ok_rows": ok_rows, "failed": failed}
 
 
 # ---------------------------------------------------------------------------
@@ -306,6 +473,66 @@ class BatchedInserter:
         self._buf.clear()
 
 
+def _join(values):
+    return ",".join(sorted(set(values)))
+
+
+def write_reports(db_path, methods, reasons, with_pae, with_iptm, coverage_path, to_model_dir):
+    """structure_coverage.tsv and af3_to_model/{<method>,all_methods}.tsv from
+    the output DB's membership rows of `methods`. reasons / with_pae /
+    with_iptm are keyed by (instance_id_a, instance_id_b). Returns the
+    coverage DataFrame."""
+    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    placeholders = ",".join("?" for _ in methods)
+    df = pd.read_sql_query(
+        "SELECT m.method, m.split, m.instance_id_a, m.instance_id_b, m.has_structure, d.negative "
+        "FROM ddi_split_membership m JOIN domain_domain_interaction d ON d.id = m.ddi_id "
+        "WHERE m.instance_id_a IS NOT NULL AND m.instance_id_b IS NOT NULL "
+        f"AND m.method IN ({placeholders})", conn, params=methods)
+    conn.close()
+    # Same rule as write_run_manifest.py: the DDI's `negative` flag is the label.
+    df["label"] = np.where(df["negative"].astype(bool), "negative", "positive")
+    pairs = list(zip(df["instance_id_a"], df["instance_id_b"]))
+    df["with_structure"] = df["has_structure"].astype(int)
+    df["with_pae"] = [int(p in with_pae) for p in pairs]
+    df["with_iptm"] = [int(p in with_iptm) for p in pairs]
+
+    cov = (df.groupby(["method", "split", "label"])
+             .agg(instance_pairs=("with_structure", "size"), with_structure=("with_structure", "sum"),
+                  with_pae=("with_pae", "sum"), with_iptm=("with_iptm", "sum"))
+             .reset_index())
+    cov.insert(5, "fraction", (cov["with_structure"] / cov["instance_pairs"]).round(4))
+    cov.to_csv(coverage_path, sep="\t", index=False)
+
+    miss = df[df["with_structure"] == 0].copy()
+    miss["reason"] = [reasons.get((a, b)) for a, b in zip(miss["instance_id_a"], miss["instance_id_b"])]
+    if miss["reason"].isna().any():
+        bad = miss[miss["reason"].isna()].iloc[0]
+        raise RuntimeError(f"row without structure and without a recorded reason: "
+                           f"{bad.method} {bad.split} {bad.instance_id_a}/{bad.instance_id_b}")
+    ua = miss["instance_id_a"].map(lambda i: utils_struct.extract_data_from_instance_id(i)[1])
+    ub = miss["instance_id_b"].map(lambda i: utils_struct.extract_data_from_instance_id(i)[1])
+    miss["uniprot_id_a"], miss["uniprot_id_b"] = np.where(ua <= ub, ua, ub), np.where(ua <= ub, ub, ua)
+    miss["instance_pair"] = miss["instance_id_a"] + "__" + miss["instance_id_b"]
+
+    cols = ["uniprot_id_a", "uniprot_id_b", "reason", "n_instance_pairs", "labels", "splits"]
+    os.makedirs(to_model_dir, exist_ok=True)
+
+    def to_model(frame, extra):
+        agg = dict(reason=("reason", _join), n_instance_pairs=("instance_pair", "nunique"),
+                   labels=("label", _join), splits=("split", _join), **extra)
+        out = (frame.groupby(["uniprot_id_a", "uniprot_id_b"]).agg(**agg).reset_index()
+               if len(frame) else pd.DataFrame(columns=cols + list(extra)))
+        return out[cols + list(extra)].sort_values(["uniprot_id_a", "uniprot_id_b"])
+
+    for method in methods:
+        to_model(miss[miss["method"] == method], {}).to_csv(
+            os.path.join(to_model_dir, f"{method}.tsv"), sep="\t", index=False)
+    to_model(miss, {"methods": ("method", _join)}).to_csv(
+        os.path.join(to_model_dir, "all_methods.tsv"), sep="\t", index=False)
+    return cov
+
+
 def main():
     args = parse_args()
     n_workers = max(1, args.cpus if args.cpus else default_cpus())
@@ -340,6 +567,9 @@ def main():
 
     n_ok = n_missing_meta = n_missing_file = n_failed_slice = 0
     inserter = BatchedInserter(conn)
+    reasons = {}                       # (instance_id_a, instance_id_b) -> why no structure
+    with_pae, with_iptm = set(), set()  # (instance_id_a, instance_id_b) with that confidence
+    conf_missing = []                  # confidence files that do not exist
 
     # Pass 1 (main process): pairs with a metadata entry become worker tasks;
     # the rest keep has_structure = 0.
@@ -349,6 +579,8 @@ def main():
         entry = meta_index.get(frozenset((first.uniprot_id_a, first.uniprot_id_b)))
         if entry is None:
             n_missing_meta += len(group)
+            for ia, ib in zip(group["instance_id_a"], group["instance_id_b"]):
+                reasons[(ia, ib)] = "no_af_metadata_entry"
             continue
         path, file_uniprot_a, source = entry
         rows = list(group[ROW_COLS].itertuples(index=False, name=None))
@@ -372,19 +604,34 @@ def main():
                 print(f"  WARNING: {res['error']} -- {len(res['unreadable_rows'])} "
                       f"rows left without structure", flush=True)
                 n_missing_file += len(res["unreadable_rows"])
+                for _, ia, ib in res["unreadable_rows"]:
+                    reasons[(ia, ib)] = res["unreadable_reason"]
+            conf_missing += res["conf_missing"]
 
             for (group_key, dset_key), pdb_gz in res["slices"].items():
                 grp = h5file.require_group(group_key)
                 if dset_key not in grp:
                     # pdb_gz is already gzip-compressed, no h5 compression filter here
-                    grp.create_dataset(dset_key, data=np.frombuffer(pdb_gz, dtype="uint8"),
-                                       compression=None)
+                    dset = grp.create_dataset(dset_key, data=np.frombuffer(pdb_gz, dtype="uint8"),
+                                              compression=None)
+                    attrs, pae, res_a, res_b = res["confidence"][(group_key, dset_key)]
+                    dset.attrs.update(attrs)
+                    pair = tuple(dset_key.split("__"))
+                    if not np.isnan(attrs["iptm"]):
+                        with_iptm.add(pair)
+                    if pae is not None:
+                        # Own top-level group: never collides with a {pfam_a}_{pfam_b} key.
+                        pdset = h5file.require_group(f"pae/{group_key}").create_dataset(
+                            dset_key, data=pae, compression="gzip")
+                        pdset.attrs["residues_a"], pdset.attrs["residues_b"] = res_a, res_b
+                        with_pae.add(pair)
 
             for ddi_id, ia, ib in res["ok_rows"]:
                 inserter.add(ddi_id, ia, ib)
                 n_ok += 1
 
             for ddi_id, ia, ib, err in res["failed"]:
+                reasons[(ia, ib)] = "slice_failed"
                 n_failed_slice += 1
                 print(f"  WARNING: could not slice ddi_id={ddi_id} "
                       f"instances=({ia},{ib}): {err}", flush=True)
@@ -401,6 +648,19 @@ def main():
     print(f"enrich_structural_af: done -> sliced={n_ok} "
           f"missing_meta={n_missing_meta} missing_file={n_missing_file} "
           f"failed_slice={n_failed_slice}", flush=True)
+    print(f"enrich_structural_af: confidence -> {len(with_pae)} sliced instance pairs with PAE, "
+          f"{len(with_iptm)} with ipTM; {len(conf_missing)} confidence file(s) missing", flush=True)
+    for missing in conf_missing[:20]:
+        print(f"  WARNING: missing confidence file {missing}", flush=True)
+
+    cov = write_reports(args.db_out, methods, reasons, with_pae, with_iptm,
+                        args.coverage, args.af3_to_model_dir)
+    for (method, label), g in cov.groupby(["method", "label"]):
+        n_missing = int(g["instance_pairs"].sum() - g["with_structure"].sum())
+        if n_missing:
+            print(f"WARNING: enrich_structural_af: {n_missing}/{int(g['instance_pairs'].sum())} "
+                  f"membership rows without structure (method={method}, label={label}); "
+                  f"see af3_to_model/{method}.tsv", flush=True)
 
     with open(args.versions, "w") as f:
         f.write(f'"{args.process_name}":\n')

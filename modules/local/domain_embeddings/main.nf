@@ -193,6 +193,7 @@ workflow generate_domain_embeddings {
     if (!models) {
         log.info "embedding_models_domainbench is empty -- no domain embeddings will be produced."
         embeddings = Channel.empty()
+        afdb_report = Channel.empty()
         ch_versions = Channel.empty()
     }
     else {
@@ -205,11 +206,13 @@ workflow generate_domain_embeddings {
         if ('esm3_structure' in models) {
             FETCH_AFDB_STRUCTURES(domain_sequences, uniprot_sequences, cache_dir)
             structures  = FETCH_AFDB_STRUCTURES.out.structures
+            afdb_report = FETCH_AFDB_STRUCTURES.out.report
             ch_versions = FETCH_AFDB_STRUCTURES.out.versions
         }
         else {
             // A placeholder, not `[]`: combine() would splice an empty list away.
             structures  = channel.value('none')
+            afdb_report = Channel.empty()
             ch_versions = Channel.empty()
         }
 
@@ -234,5 +237,6 @@ workflow generate_domain_embeddings {
 
     emit:
     embeddings
+    afdb_report  // FETCH_AFDB_STRUCTURES' per-protein report; empty without esm3_structure
     versions = ch_versions
 }

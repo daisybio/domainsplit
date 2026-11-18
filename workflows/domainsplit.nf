@@ -15,6 +15,7 @@ include { PRUNE_UNREPRESENTED_DDIS    } from '../modules/local/prune_unrepresent
 include { FETCH_STRING_LINKS          } from '../modules/local/fetch_string_links/main.nf'
 include { REPORT_DDI_ATTRITION        } from '../modules/local/report_ddi_attrition/main.nf'
 include { WRITE_RUN_MANIFEST          } from '../modules/local/write_run_manifest/main.nf'
+include { REPORT_SPLIT_QC             } from '../modules/local/report_split_qc/main.nf'
 include { generate_domain_embeddings  } from '../modules/local/domain_embeddings/main.nf'
 include { ENRICH_DDI_DATABASE         } from '../subworkflows/local/enrich_ddi_database/main.nf'
 include { BUILD_EXTERNAL_TEST         } from '../modules/local/build_external_test/main.nf'
@@ -734,6 +735,25 @@ Use all_species_reviewed or human_any_review_status.""")
         channel.fromList(subset_targets).combine(scored_db)
     )
 
+    //
+    // Split QC on the master, which holds every method's membership rows. The
+    // family-disjointness check covers every method the ILP split, derived from
+    // splitRows() so a new ILP row is checked without touching this.
+    //
+    def ilp_methods = splitRows()
+        .findAll { row -> row.split_method == 'ilp' }
+        .collectMany { row -> activeNegsets(row).collect { negset -> row.negsets[negset] } }
+    REPORT_SPLIT_QC(
+        scored_db,
+        ilp_methods.join(','),
+        external_methods.join(','),
+        // [] without esm3_structure.
+        generate_domain_embeddings.out.embeddings
+            .filter { h5 -> h5.name == 'esm3_structure_domain_embeddings.h5' }
+            .collect().ifEmpty([]),
+        generate_domain_embeddings.out.afdb_report.collect().ifEmpty([]),
+    )
+
     // A `url_*` given as a local path cannot be HEADed: stage it so its content is
     // hashed (each distinct file once). A missing path stays a recorded HEAD error.
     // toUnique, not unique: unique() mutates in place and a map's values view refuses that.
@@ -776,6 +796,7 @@ Use all_species_reviewed or human_any_review_status.""")
         BUILD_EXTERNAL_TEST.out.versions,
         SUBSET_SPLIT_DB.out.versions,
         WRITE_RUN_MANIFEST.out.versions,
+        REPORT_SPLIT_QC.out.versions,
     )
 
     softwareVersionsToYAML(ch_versions)
