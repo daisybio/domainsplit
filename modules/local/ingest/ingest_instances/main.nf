@@ -12,7 +12,6 @@ process INGEST_INSTANCES {
 
     output:
     path "domainsplit.sqlite3",             emit: domainsplit_db
-    path "protein_domain_mapping.csv.gz",   emit: protein_domain_map
     path "versions.yml",                    emit: versions
 
     script:
@@ -30,7 +29,6 @@ process INGEST_INSTANCES {
         --instances ${instances_tsv} \\
         --sequences ${sequences_fasta} \\
         --taxon-ids "${taxon_ids.toString().trim()}" \\
-        --mapping-out protein_domain_mapping.csv.gz \\
         --versions versions.yml \\
         --process-name "${task.process}"
     """

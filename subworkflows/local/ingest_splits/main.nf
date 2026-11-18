@@ -6,10 +6,6 @@
 
       1. INGEST_INSTANCES        instances.tsv + sequences.fasta -> domain,
                                  protein, domain_protein_map (instance level).
-                                 Also emits the protein_domain_mapping.csv.gz
-                                 view that the ESM and ENRICH steps consume,
-                                 replacing CURATE_DOMAINS' output byte-for-byte
-                                 in shape.
       2. INGEST_SAMPLED_NEGATIVES  every label=0 family pair, from every split of
                                  every negative set, as source='sampled_negative'.
                                  Must run before INSERT_EXTERNAL_SOURCES -- see
@@ -89,7 +85,6 @@ workflow INGEST_SPLITS {
 
     emit:
     domainsplit_db     = membership.domainsplit_db
-    protein_domain_map = instances.protein_domain_map
     unresolved         = membership.unresolved
     versions           = ch_versions
 }

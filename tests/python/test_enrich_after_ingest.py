@@ -50,7 +50,7 @@ SEQUENCES = {"P11111": "M" * 80, "Q22222": "K" * 40}
 
 
 def build_inputs(tmp):
-    """`(db, protein_domain_map, uniprot_fasta)` for the instances above."""
+    """`(db, uniprot_fasta)` for the instances above."""
     db = os.path.join(tmp, "domainsplit.sqlite3")
     make_db(db)
     conn = sqlite3.connect(db)
@@ -60,21 +60,15 @@ def build_inputs(tmp):
     conn.commit()
     conn.close()
 
-    pd_map = os.path.join(tmp, "protein_domain_mapping.csv.gz")
-    with gzip.open(pd_map, "wt", newline="") as fh:
-        fh.write("pfam_id,uniprot_id,start_pos,end_pos,sequence\n")
-        for pfam, uniprot, start, end in INSTANCES:
-            fh.write(f"{pfam},{uniprot},{start},{end},{'A' * (end - start + 1)}\n")
-
     fasta = os.path.join(tmp, "uniprot_sequences.fasta.gz")
     with gzip.open(fasta, "wt") as fh:
         for uniprot, seq in SEQUENCES.items():
             fh.write(f">sp|{uniprot}|{uniprot}_HUMAN test protein\n{seq}\n")
 
-    return db, pd_map, fasta
+    return db, fasta
 
 
-def run_insert_proteins(tmp, db, pd_map, fasta):
+def run_insert_proteins(tmp, db, fasta):
     """Run the real script the way the process does, and return the output DB."""
     # The script copies --db-in to ./domainsplit.sqlite3 in the cwd, so stage the
     # input under a different name.
@@ -85,7 +79,6 @@ def run_insert_proteins(tmp, db, pd_map, fasta):
             sys.executable, INSERT_PROTEINS,
             "--db-in", staged,
             "--uniprot-db", fasta,
-            "--protein-domain-map", pd_map,
             "--versions", os.path.join(tmp, "v1.yml"),
             "--process-name", "TEST:INSERT_PROTEIN_SEQUENCES",
         ],
@@ -97,8 +90,8 @@ def run_insert_proteins(tmp, db, pd_map, fasta):
 
 def test_protein_sequences_fill_ingested_rows_without_duplicating_them():
     with tempfile.TemporaryDirectory() as tmp:
-        db, pd_map, fasta = build_inputs(tmp)
-        out = run_insert_proteins(tmp, db, pd_map, fasta)
+        db, fasta = build_inputs(tmp)
+        out = run_insert_proteins(tmp, db, fasta)
 
         conn = sqlite3.connect(out)
         assert conn.execute("SELECT COUNT(*) FROM protein").fetchone()[0] == len(SEQUENCES)
@@ -125,21 +118,39 @@ def test_protein_sequences_fill_ingested_rows_without_duplicating_them():
 
 
 def test_protein_pruned_after_ingest_is_not_resurrected():
-    """The map is pre-prune: a protein PRUNE_UNREPRESENTED_DDIS deleted is in it
-    and in the FASTA, and must stay deleted."""
+    """A protein PRUNE_UNREPRESENTED_DDIS deleted is still in the FASTA, and
+    must stay deleted."""
     with tempfile.TemporaryDirectory() as tmp:
-        db, pd_map, fasta = build_inputs(tmp)
+        db, fasta = build_inputs(tmp)
         conn = sqlite3.connect(db)
         conn.execute("DELETE FROM domain_protein_map WHERE protein_id = "
                      "(SELECT id FROM protein WHERE uniprot_id = 'Q22222')")
         conn.execute("DELETE FROM protein WHERE uniprot_id = 'Q22222'")
         conn.commit()
         conn.close()
-        out = run_insert_proteins(tmp, db, pd_map, fasta)
+        out = run_insert_proteins(tmp, db, fasta)
 
         conn = sqlite3.connect(out)
         assert [r[0] for r in conn.execute("SELECT uniprot_id FROM protein")] == ["P11111"]
         assert conn.execute("SELECT sequence FROM protein").fetchone()[0] == SEQUENCES["P11111"]
+        conn.close()
+
+
+def test_protein_without_instances_still_gets_its_sequence():
+    """The required set is the `protein` table: a row with no domain instance
+    (e.g. its instances had no FASTA record) is still filled, not left NULL."""
+    with tempfile.TemporaryDirectory() as tmp:
+        db, fasta = build_inputs(tmp)
+        conn = sqlite3.connect(db)
+        conn.execute("INSERT INTO protein (uniprot_id) VALUES ('R33333')")
+        conn.commit()
+        conn.close()
+        with gzip.open(fasta, "at") as fh:
+            fh.write(">sp|R33333|R33333_HUMAN test protein\nGGGG\n")
+        out = run_insert_proteins(tmp, db, fasta)
+
+        conn = sqlite3.connect(out)
+        assert conn.execute("SELECT sequence FROM protein WHERE uniprot_id = 'R33333'").fetchone()[0] == "GGGG"
         conn.close()
 
 

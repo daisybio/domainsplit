@@ -13,16 +13,9 @@ writes:
 * ``domain_protein_map`` -- one row per *instance*: ``domain_id, protein_id,
   domain_sequence, start_pos, end_pos, instance_id, clan, taxon_id``.
 
-It also emits ``protein_domain_mapping.csv.gz`` in exactly the format
-CREATE_PROTEIN_DOMAIN_MAPPING used to produce (``pfam_id,uniprot_id,start_pos,
-end_pos,sequence``). Its one remaining consumer is
-``insert_protein_sequences.py``, which reads only ``uniprot_id`` to pick the
-UniProt records worth storing -- the ``sequence`` column is dead weight, kept
-because the file is asserted line-for-line by
-``tests/python/test_ingest_instances.py`` and an unused column is cheaper than a
-churned interface. Domain embeddings are keyed by ``instance_id`` and read
-ppi-splitting's ``sequences.fasta`` directly, so nothing reconstructs keys from
-this file any more.
+Nothing else is written: ``insert_protein_sequences.py`` takes its accessions
+from the ``protein`` table itself, and domain embeddings are keyed by
+``instance_id`` and read ppi-splitting's ``sequences.fasta`` directly.
 
 **Hard fail on any instance outside the configured taxon universe**
 (``--taxon-ids``, from ``params.swissprot_taxon_ids``; empty accepts every
@@ -43,15 +36,11 @@ only because the universe was widened to TrEMBL", which is the question
 """
 
 import argparse
-import gzip
 import sqlite3
 import sys
 from collections import Counter
 
 from split_io import read_fasta, read_instances_tsv
-
-MAPPING_HEADER = "pfam_id,uniprot_id,start_pos,end_pos,sequence\n"
-
 
 def parse_args():
     p = argparse.ArgumentParser()
@@ -64,7 +53,6 @@ def parse_args():
         help="comma-separated NCBI taxon ids the run's protein universe covers; "
         "an instance outside them is fatal. Empty accepts every taxon",
     )
-    p.add_argument("--mapping-out", required=True, help="protein_domain_mapping.csv.gz to write")
     p.add_argument("--versions", required=True)
     p.add_argument("--process-name", required=True)
     return p.parse_args()
@@ -170,20 +158,6 @@ def ingest(conn, rows, seqs):
     return stats
 
 
-def write_mapping_csv(path, rows, seqs):
-    """Write the CSV view INSERT_PROTEIN_SEQUENCES consumes, sorted for determinism."""
-    written = 0
-    with gzip.open(path, "wt", newline="") as out:
-        out.write(MAPPING_HEADER)
-        for row in sorted(rows, key=lambda r: (r["family"], r["protein_id"], int(r["start"]), int(r["end"]))):
-            seq = seqs.get(row["instance_id"].strip())
-            if not seq:
-                continue
-            out.write(f"{row['family']},{row['protein_id']},{row['start']},{row['end']},{seq}\n")
-            written += 1
-    return written
-
-
 def main():
     args = parse_args()
 
@@ -206,19 +180,16 @@ def main():
     conn.commit()
     conn.close()
 
-    written = write_mapping_csv(args.mapping_out, rows, seqs)
-
     for key in ("families", "proteins", "instances", "no_sequence"):
         print(f"[ingest] {key} = {stats[key]}", flush=True)
     # The whole point of a widened universe: how much of it is not human-reviewed.
     for key in sorted(k for k in stats if k.startswith("proteins_")):
         print(f"[ingest] {key} = {stats[key]}", flush=True)
-    print(f"[ingest] mapping_rows = {written}", flush=True)
     if stats["no_sequence"]:
         print(
             f"[ingest] WARNING: {stats['no_sequence']} instances have no sequence in "
-            f"{args.sequences}; they are stored with a NULL domain_sequence and omitted "
-            "from the mapping CSV, so they get no embedding.",
+            f"{args.sequences}; they are stored with a NULL domain_sequence and get no "
+            "embedding.",
             flush=True,
         )
 
