@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Stream a BioGRID or IntAct MITAB release into a compact PPI TSV.
 
-Output (gzip TSV): ``acc_a acc_b taxid method source_db score pmids``, one row
+Output (gzip TSV): ``acc_a acc_b source_db score pmids``, one row
 per kept input row. Accessions are suffix-stripped but not yet mapped to the
 primary accession; that happens in build_ppidm_sources.py against UniProt.
 
@@ -84,7 +84,7 @@ def main():
     n_rows = n_kept = 0
     with open_text(args.input, args.format) as fh, \
             gzip.open(args.out, "wt", compresslevel=6) as out:
-        out.write("acc_a\tacc_b\ttaxid\tmethod\tsource_db\tscore\tpmids\n")
+        out.write("acc_a\tacc_b\tsource_db\tscore\tpmids\n")
         for line in fh:
             if line.startswith("#"):
                 continue
@@ -134,7 +134,7 @@ def main():
             if a > b:
                 a, b = b, a
             pmids = ";".join(sorted(set(PUBMED.findall(c[8]))))
-            out.write(f"{a}\t{b}\t{ta}\t{mi(c[6])}\t{source_db}\t{score}\t{pmids}\n")
+            out.write(f"{a}\t{b}\t{source_db}\t{score}\t{pmids}\n")
             n_kept += 1
 
     log(f"{args.format}: rows={n_rows} kept={n_kept} dropped={dict(sorted(drops.items()))}")

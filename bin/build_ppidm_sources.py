@@ -4,7 +4,7 @@
 Universe: every reviewed UniProt entry (all species) with >= 1 Pfam domain.
 Writes into --outdir:
 
-  protein_pfam.tsv.gz        acc taxid pfams      (accession -> Pfam map)
+  protein_pfam.tsv.gz        acc pfams            (accession -> Pfam map)
   source_<name>.tsv.gz       acc_a acc_b hi_conf  (one per source, unique canonical pairs)
   ppidm_sources.tsv          source raw_rows mapped_pairs hi_conf_pairs unmapped_rows
 
@@ -279,9 +279,9 @@ def main():
     if not proteins:
         raise SystemExit("ERROR: no reviewed entry with a Pfam cross-reference in --sprot-dat")
     with gzip.open(os.path.join(args.outdir, "protein_pfam.tsv.gz"), "wt", compresslevel=6) as out:
-        out.write("acc\ttaxid\tpfams\n")
+        out.write("acc\tpfams\n")
         for a in sorted(proteins):
-            out.write(f"{a}\t{proteins[a][0]}\t{';'.join(proteins[a][1])}\n")
+            out.write(f"{a}\t{';'.join(proteins[a][1])}\n")
     uni = Universe(proteins, reviewed, sec_owner)
     del proteins, reviewed, sec_owner
 

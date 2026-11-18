@@ -2,8 +2,7 @@
 """Build a UniProt -> Pfam map for single-domain detection.
 
 Reads the ``Entry/Entry Name/Gene Names/Pfam`` TSV that ``PARSE_SWISSPROT``
-carves out of the SwissProt flat file (a URL is still accepted, for the same TSV
-served over http) and emits ``swissprot_pfam_map.json``:
+carves out of the SwissProt flat file and emits ``swissprot_pfam_map.json``:
 
     {"accession_to_pfams": {accession: [Pfam, ...]}}
 
@@ -24,45 +23,16 @@ disagreement that switching the instance source already removed.
 import argparse
 import gzip
 import json
-import os
-import shutil
-import ssl
 import sys
-import urllib.error
-import urllib.request
 
 
 def parse_args():
     p = argparse.ArgumentParser()
-    p.add_argument("--source", required=True, dest="url",
-                   help="local TSV(.gz) from PARSE_SWISSPROT, or a URL serving the same TSV")
+    p.add_argument("--source", required=True, help="local TSV(.gz) from PARSE_SWISSPROT")
     p.add_argument("--out", required=True, help="Output JSON path")
     p.add_argument("--versions", required=True)
     p.add_argument("--process-name", required=True)
     return p.parse_args()
-
-
-def fetch(url, out_path):
-    def _download(ctx):
-        req = urllib.request.Request(url, headers={"User-Agent": "domainsplit-pipeline"})
-        with urllib.request.urlopen(req, context=ctx, timeout=600) as resp, open(out_path, "wb") as fh:
-            while True:
-                chunk = resp.read(1024 * 1024)
-                if not chunk:
-                    break
-                fh.write(chunk)
-
-    if url.startswith(("http://", "https://", "ftp://", "file://")):
-        try:
-            _download(ssl.create_default_context())
-        except (urllib.error.URLError, ssl.SSLError) as exc:
-            print(f"WARNING: SSL validation failed for {url} ({exc!r}); retrying unverified.",
-                  file=sys.stderr, flush=True)
-            _download(ssl._create_unverified_context())
-    elif os.path.exists(url):
-        shutil.copy(url, out_path)
-    else:
-        raise SystemExit(f"--source '{url}' is neither a URL nor a local file")
 
 
 def open_maybe_gzip(path):
@@ -76,13 +46,10 @@ def open_maybe_gzip(path):
 def main():
     args = parse_args()
 
-    raw = "swissprot.tsv"
-    fetch(args.url, raw)
-
     accession_to_pfams = {}
 
     n_lines = 0
-    with open_maybe_gzip(raw) as fh:
+    with open_maybe_gzip(args.source) as fh:
         for i, line in enumerate(fh):
             line = line.rstrip("\n")
             if i == 0 and line.lower().startswith("entry"):

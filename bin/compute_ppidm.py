@@ -232,6 +232,8 @@ def grid(lo, hi, step):
 def main():
     args = parse_args()
     out = lambda name: os.path.join(args.outdir, name)  # noqa: E731
+    # weight draws map to sources by position, so fix the order independent of staging
+    args.source = sorted(args.source, key=source_name)
     names = [source_name(p) for p in args.source]
     if len(set(names)) != len(names):
         fail(f"duplicate source names: {names}")

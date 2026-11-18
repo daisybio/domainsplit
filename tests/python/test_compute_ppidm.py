@@ -78,9 +78,9 @@ def toy_edges():
 
 def write_inputs(tmp):
     with gzip.open(os.path.join(tmp, "protein_pfam.tsv.gz"), "wt") as fh:
-        fh.write("acc\ttaxid\tpfams\n")
+        fh.write("acc\tpfams\n")
         for acc, pf in sorted(toy_proteins().items()):
-            fh.write(f"{acc}\t9606\t{';'.join(sorted(pf))}\n")
+            fh.write(f"{acc}\t{';'.join(sorted(pf))}\n")
     for s, rows in toy_edges().items():
         with gzip.open(os.path.join(tmp, f"source_{s}.tsv.gz"), "wt") as fh:
             fh.write("acc_a\tacc_b\thi_conf\n")
@@ -99,10 +99,10 @@ def write_inputs(tmp):
     conn.close()
 
 
-def run(tmp, out, *extra):
+def run(tmp, out, *extra, sources=SOURCES):
     os.makedirs(out, exist_ok=True)
     args = [sys.executable, SCRIPT, "--protein-pfam", os.path.join(tmp, "protein_pfam.tsv.gz")]
-    for s in SOURCES:
+    for s in sources:
         args += ["--source", os.path.join(tmp, f"source_{s}.tsv.gz")]
     args += ["--gold-db", os.path.join(tmp, "gold.sqlite3"), "--alpha", ALPHA,
              "--weight-iterations", "30", "--seed", "7", "--outdir", out,
@@ -197,6 +197,16 @@ def test_seed_determinism():
     with tempfile.TemporaryDirectory() as tmp:
         write_inputs(tmp)
         a, b = run(tmp, os.path.join(tmp, "a")), run(tmp, os.path.join(tmp, "b"))
+        for f in ("ppidm_computed.tsv", "inverse_ppidm_computed.tsv", "ppidm_scores.tsv.gz", "ppidm_report.json"):
+            assert open(os.path.join(a, f), "rb").read() == open(os.path.join(b, f), "rb").read(), f
+
+
+def test_source_order_does_not_matter():
+    """Nextflow stages --source in no guaranteed order; the weight draws must not follow it."""
+    with tempfile.TemporaryDirectory() as tmp:
+        write_inputs(tmp)
+        a = run(tmp, os.path.join(tmp, "a"))
+        b = run(tmp, os.path.join(tmp, "b"), sources=list(reversed(SOURCES)))
         for f in ("ppidm_computed.tsv", "inverse_ppidm_computed.tsv", "ppidm_scores.tsv.gz", "ppidm_report.json"):
             assert open(os.path.join(a, f), "rb").read() == open(os.path.join(b, f), "rb").read(), f
 

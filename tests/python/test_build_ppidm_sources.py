@@ -35,24 +35,24 @@ DAT = "\n".join([
     entry("G_HUMAN", "Reviewed", ["R88888"], 9606),  # no Pfam: outside the universe
 ]) + "\n"
 
-EXTRACT_HEADER = "acc_a\tacc_b\ttaxid\tmethod\tsource_db\tscore\tpmids"
+EXTRACT_HEADER = "acc_a\tacc_b\tsource_db\tscore\tpmids"
 BIOGRID = [
-    "P11111\tQ22222\t9606\t0018\tbiogrid\t-\t100;200",
-    "O00001\tQ22222\t9606\t0018\tbiogrid\t-\t200;300",  # secondary -> same pair, 3 distinct pubs
-    "P44444\tP55555\t9606\t0018\tbiogrid\t-\t100",
-    "P44444\tP55555\t9606\t0018\tbiogrid\t-\t100",      # same pub twice -> 1 distinct
-    "O00002\tP11111\t9606\t0018\tbiogrid\t-\t1",        # shared secondary -> unmapped
-    "A77777\tP11111\t9606\t0018\tbiogrid\t-\t1",        # unreviewed -> unmapped
-    "O00003\tP11111\t9606\t0018\tbiogrid\t-\t1",        # secondary of unreviewed -> unmapped
-    "O00001\tP11111\t9606\t0018\tbiogrid\t-\t1",        # self after mapping
+    "P11111\tQ22222\tbiogrid\t-\t100;200",
+    "O00001\tQ22222\tbiogrid\t-\t200;300",  # secondary -> same pair, 3 distinct pubs
+    "P44444\tP55555\tbiogrid\t-\t100",
+    "P44444\tP55555\tbiogrid\t-\t100",      # same pub twice -> 1 distinct
+    "O00002\tP11111\tbiogrid\t-\t1",        # shared secondary -> unmapped
+    "A77777\tP11111\tbiogrid\t-\t1",        # unreviewed -> unmapped
+    "O00003\tP11111\tbiogrid\t-\t1",        # secondary of unreviewed -> unmapped
+    "O00001\tP11111\tbiogrid\t-\t1",        # self after mapping
 ]
 INTACT = [
-    "P11111\tQ22222\t9606\t0018\t0469\t0.3\t1",
-    "P11111\tQ22222\t9606\t0018\t0469\t0.45\t1",  # intact max 0.45 > 0.4
-    "P44444\tP55555\t9606\t0018\t0469\t0.4\t1",   # not strictly above
-    "P44444\tP55555\t9606\t0018\t0471\t0.9\t1",   # mint
-    "P11111\tP44444\t9606\t0018\t0465\t-\t1",     # dip, no score
-    "P11111\tR88888\t9606\t0018\t0469\t0.9\t1",   # unmapped
+    "P11111\tQ22222\t0469\t0.3\t1",
+    "P11111\tQ22222\t0469\t0.45\t1",  # intact max 0.45 > 0.4
+    "P44444\tP55555\t0469\t0.4\t1",   # not strictly above
+    "P44444\tP55555\t0471\t0.9\t1",   # mint
+    "P11111\tP44444\t0465\t-\t1",     # dip, no score
+    "P11111\tR88888\t0469\t0.9\t1",   # unmapped
 ]
 HIPPIE = [
     "uniprot_accession_A\tuniprot_name_A\tentrez_A\tuniprot_accession_B\tuniprot_name_B\tentrez_B\tscore\tinfo",
@@ -136,9 +136,9 @@ def run(tmp, hippie_gz):
 
 
 def check(out):
-    assert [(r["acc"], r["taxid"], r["pfams"]) for r in read(os.path.join(out, "protein_pfam.tsv.gz"))] == [
-        ("M66666", "10090", "PF00006"), ("P11111", "9606", "PF00001;PF00002"),
-        ("P44444", "9606", "PF00004"), ("P55555", "9606", "PF00005"), ("Q22222", "9606", "PF00003")]
+    assert [(r["acc"], r["pfams"]) for r in read(os.path.join(out, "protein_pfam.tsv.gz"))] == [
+        ("M66666", "PF00006"), ("P11111", "PF00001;PF00002"),
+        ("P44444", "PF00004"), ("P55555", "PF00005"), ("Q22222", "PF00003")]
 
     assert pairs(out, "biogrid") == {("P11111", "Q22222"): 1, ("P44444", "P55555"): 0}
     assert pairs(out, "intact") == {("P11111", "Q22222"): 1, ("P44444", "P55555"): 0}

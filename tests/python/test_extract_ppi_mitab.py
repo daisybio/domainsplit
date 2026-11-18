@@ -94,7 +94,7 @@ def test_biogrid():
         for inp in write_inputs(tmp, "biogrid", BIOGRID, "BIOGRID-ALL-5.0.1.mitab.txt"):
             rows, log = run(inp, "biogrid", tmp)
             assert [(r["acc_a"], r["acc_b"]) for r in rows] == [("P11111", "Q22222"), ("P44444", "P55555")]
-            assert rows[0] == {"acc_a": "P11111", "acc_b": "Q22222", "taxid": "9606", "method": "0018",
+            assert rows[0] == {"acc_a": "P11111", "acc_b": "Q22222",
                                "source_db": "biogrid", "score": "-", "pmids": "100;200"}
             assert rows[1]["pmids"] == ""
             for reason in ("non_physical_type", "no_swissprot_id", "several_swissprot_ids",
@@ -109,7 +109,7 @@ def test_intact():
             got = [(r["acc_a"], r["acc_b"], r["source_db"], r["score"]) for r in rows]
             assert got == [("P11111", "Q22222", "0469", "0.45"), ("P44444", "P55555", "0471", "0.56"),
                            ("P44444", "P55555", "0465", "-")], got
-            assert rows[0]["pmids"] == "300" and rows[0]["taxid"] == "9606"
+            assert rows[0]["pmids"] == "300"
             for reason in ("non_uniprot_interactor", "negative", "taxid_missing_or_negative", "cross_taxon"):
                 assert f"'{reason}': 1" in log, (reason, log)
 

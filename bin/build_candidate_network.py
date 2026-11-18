@@ -91,7 +91,9 @@ def fetch_gene_mappings(gene_names, batch_size=100):
 
     gene_list = sorted(gene_names)
     gene_to_uniprot = {}
-    gene_seen = {}
+    # gene -> accessions, kept apart so an exact primary-name hit outranks an alias hit
+    primary_hits = defaultdict(set)
+    synonym_hits = defaultdict(set)
     uniprot_to_pfams = defaultdict(set)
     n_batches = math.ceil(len(gene_list) / batch_size)
 
@@ -102,69 +104,75 @@ def fetch_gene_mappings(gene_names, batch_size=100):
         batch_num = i // batch_size + 1
         gene_clause = " OR ".join(f"gene:{g}" for g in batch)
         query = f"organism_name:Human AND ({gene_clause}) AND reviewed:true"
+        url = BASE_URL
         params = {
             "query": query,
             "fields": "accession,gene_primary,xref_pfam",
             "sort": "accession desc",
             "size": "500",
         }
+        n_results = 0
 
-        for attempt in range(MAX_RETRIES):
-            try:
-                resp = requests.get(BASE_URL, headers=HEADERS, params=params, timeout=120)
-                resp.raise_for_status()
-                break
-            except requests.RequestException as exc:
-                if attempt < MAX_RETRIES - 1:
-                    wait = min(2 ** (attempt + 1), 60)
-                    log(f"batch {batch_num}/{n_batches} attempt {attempt + 1} failed: {exc}; retrying in {wait}s")
-                    time.sleep(wait)
-                else:
-                    sys.exit(f"{TAG} batch {batch_num}/{n_batches} failed after {MAX_RETRIES} attempts: {exc}")
+        while url:
+            for attempt in range(MAX_RETRIES):
+                try:
+                    resp = requests.get(url, headers=HEADERS, params=params, timeout=120)
+                    resp.raise_for_status()
+                    break
+                except requests.RequestException as exc:
+                    if attempt < MAX_RETRIES - 1:
+                        wait = min(2 ** (attempt + 1), 60)
+                        log(f"batch {batch_num}/{n_batches} attempt {attempt + 1} failed: {exc}; retrying in {wait}s")
+                        time.sleep(wait)
+                    else:
+                        sys.exit(f"{TAG} batch {batch_num}/{n_batches} failed after {MAX_RETRIES} attempts: {exc}")
 
-        data = resp.json()
-        for entry in data.get("results", []):
-            acc = entry.get("primaryAccession")
-            genes = entry.get("genes", [])
-            if not genes:
-                continue
-            primary_gene = genes[0].get("geneName", {}).get("value")
-            if not primary_gene or primary_gene not in gene_names:
-                for synonym in genes[0].get("synonyms", []):
-                    syn_value = synonym.get("value")
-                    if syn_value in gene_names:
-                        primary_gene = syn_value
-                        break
-            if not primary_gene or primary_gene not in gene_names:
-                continue
+            results = resp.json().get("results", [])
+            n_results += len(results)
+            for entry in results:
+                acc = entry.get("primaryAccession")
+                matched = False
+                for gene in entry.get("genes", []):
+                    name = gene.get("geneName", {}).get("value")
+                    if name in gene_names:
+                        primary_hits[name].add(acc)
+                        matched = True
+                    for synonym in gene.get("synonyms", []):
+                        syn_value = synonym.get("value")
+                        if syn_value in gene_names:
+                            synonym_hits[syn_value].add(acc)
+                            matched = True
+                if not matched:
+                    continue
 
-            if primary_gene not in gene_seen:
-                gene_seen[primary_gene] = acc
-            elif gene_seen[primary_gene] is not None and gene_seen[primary_gene] != acc:
-                gene_seen[primary_gene] = None
+                pfams = set()
+                for xref in entry.get("uniProtKBCrossReferences", []):
+                    if xref.get("database") == "Pfam":
+                        pfams.add(xref["id"].split(".")[0])
+                if pfams:
+                    uniprot_to_pfams[acc] |= pfams
 
-            pfams = set()
-            for xref in entry.get("uniProtKBCrossReferences", []):
-                if xref.get("database") == "Pfam":
-                    pfams.add(xref["id"].split(".")[0])
-            if pfams:
-                uniprot_to_pfams[acc] |= pfams
+            # the next-page URL already carries query, fields, size and cursor
+            url = resp.links.get("next", {}).get("url")
+            params = None
 
-        log(f"batch {batch_num}/{n_batches}: queried {len(batch)} genes, got {len(data.get('results', []))} results")
+        log(f"batch {batch_num}/{n_batches}: queried {len(batch)} genes, got {n_results} results")
 
         if batch_num < n_batches:
             time.sleep(1)
 
     n_ambig = 0
     ambiguous_genes = set()
-    for gene, acc in gene_seen.items():
-        if acc is not None:
-            gene_to_uniprot[gene] = acc
+    gene_seen = set(primary_hits) | set(synonym_hits)
+    for gene in gene_seen:
+        accs = primary_hits.get(gene) or synonym_hits[gene]
+        if len(accs) == 1:
+            gene_to_uniprot[gene] = next(iter(accs))
         else:
             n_ambig += 1
             ambiguous_genes.add(gene)
 
-    genes_not_seen = set(gene_names) - set(gene_seen.keys())
+    genes_not_seen = set(gene_names) - gene_seen
 
     log(f"n_mapped_genes = {len(gene_to_uniprot)}")
     log(f"n_unique_uniprots = {len(set(gene_to_uniprot.values()))}")
