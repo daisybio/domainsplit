@@ -230,7 +230,7 @@
                 },
                 "ppidm_classes": {
                     "type": "string",
-                    "description": "Comma-separated PPIDM confidence classes to include.",
+                    "description": "Comma-separated PPIDM confidence classes to include. Narrowed per side to the classes named by explicit PPIDM_<Class>/INVERSE_PPIDM_<Class> tokens in --external_test_sources.",
                     "default": "Bronze,Silver,Gold",
                     "fa_icon": "fas fa-tags"
                 },

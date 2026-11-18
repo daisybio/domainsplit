@@ -76,10 +76,10 @@ def toy_edges():
     return edges
 
 
-def write_inputs(tmp):
+def write_inputs(tmp, extra_proteins=None):
     with gzip.open(os.path.join(tmp, "protein_pfam.tsv.gz"), "wt") as fh:
         fh.write("acc\tpfams\n")
-        for acc, pf in sorted(toy_proteins().items()):
+        for acc, pf in sorted({**toy_proteins(), **(extra_proteins or {})}.items()):
             fh.write(f"{acc}\t{';'.join(sorted(pf))}\n")
     for s, rows in toy_edges().items():
         with gzip.open(os.path.join(tmp, f"source_{s}.tsv.gz"), "wt") as fh:
@@ -191,6 +191,18 @@ def test_classes_and_invariants():
             assert rare not in powered  # absent above for lack of power, not for lack of depletion
             n_dense += dense in powered
         assert n_dense == 4
+
+
+def test_same_protein_pair_is_never_inverse():
+    # The dense depleted pair (Gold INVERSE above) stays powered and depleted --
+    # Z0 has no PPI, so N, n and K are unchanged -- but one protein carries both.
+    with tempfile.TemporaryDirectory() as tmp:
+        write_inputs(tmp, {"Z0": ["PF00100", "PF00200"]})
+        out = run(tmp, os.path.join(tmp, "a"))
+        neg = read_classes(os.path.join(out, "inverse_ppidm_computed.tsv"))
+        rep = json.load(open(os.path.join(out, "ppidm_report.json")))
+        assert ("PF00100", "PF00200") not in neg
+        assert rep["inverse_excluded_same_protein"] == 1
 
 
 def test_seed_determinism():

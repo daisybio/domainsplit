@@ -9,7 +9,6 @@ Run directly (`python3 tests/python/test_parse_single_domain_ppi.py`) or via pyt
 """
 
 import gzip
-import json
 import os
 import subprocess
 import sys
@@ -19,7 +18,7 @@ import pytest
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.join(REPO, "bin"))
 
-from parse_single_domain_ppi import detect_layout  # noqa: E402
+from parse_single_domain_ppi import detect_layout, single_domain_proteins  # noqa: E402
 
 CURRENT = "\t".join([
     "uniprot_accession_A", "uniprot_name_A", "entrez_A",
@@ -61,17 +60,29 @@ def test_hippie_plain_and_gzip_read_alike(tmp_path, gz):
             fh.write(text)
     else:
         hippie.write_text(text)
-    smap = tmp_path / "map.json"
-    smap.write_text(json.dumps({"accession_to_pfams": {"P00001": ["PF00001"], "P00002": ["PF00002"]}}))
+    smap = tmp_path / "swissprot_pfam.tsv"
+    smap.write_text("Entry\tPfam\nP00001\tPF00001;\nP00002\tPF00002;\n")
     out = tmp_path / "out.tsv"
     bin_dir = os.path.join(REPO, "bin")
     subprocess.run(
         [sys.executable, os.path.join(bin_dir, "parse_single_domain_ppi.py"),
-         "--hippie", str(hippie), "--swissprot-map", str(smap), "--min-score", "0.5",
+         "--hippie", str(hippie), "--swissprot-pfam", str(smap), "--min-score", "0.5",
          "--out", str(out), "--versions", str(tmp_path / "v.yml"), "--process-name", "T"],
         check=True, env=dict(os.environ, PYTHONPATH=bin_dir),
     )
     assert out.read_text().splitlines()[1:] == ["PF00001\tPF00002\t0\tsingle_domain_ppi"]
+
+
+def test_single_domain_counts_distinct_nonempty_pfams(tmp_path):
+    """PARSE_SWISSPROT writes a trailing ';', so `PF00001;` is one domain, not two."""
+    tsv = tmp_path / "swissprot_pfam.tsv.gz"
+    with gzip.open(tsv, "wt") as fh:
+        fh.write("Entry\tPfam\n"
+                 "P00001\tPF00001;\n"            # single
+                 "P00002\tPF00002;PF00002;\n"    # one distinct -> single
+                 "P00003\tPF00001;PF00003;\n"    # multi
+                 "P00004\t\n")                   # no domain
+    assert single_domain_proteins(str(tsv)) == {"P00001": "PF00001", "P00002": "PF00002"}
 
 
 if __name__ == "__main__":

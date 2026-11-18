@@ -11,7 +11,6 @@ components:
   - download/3did/sqlite
   - download/negatome
   - insert/3did
-  - build/swissprot/pfam/map
   - insert/single/domain/ppi
   - insert/ppidm
   - insert/negatome
@@ -31,9 +30,10 @@ input:
   - url_negatome:
       type: string
       description: URL of the Negatome combined dataset.
-  - url_uniprot_swissprot_pfam:
-      type: string
-      description: URL of the UniProt SwissProt-to-Pfam mapping used to build single-domain PPIs.
+  - swissprot_pfam_tsv:
+      type: file
+      description: PARSE_SWISSPROT's Entry/Pfam TSV.gz (reviewed entries), read directly by PARSE_SINGLE_DOMAIN_PPI.
+      pattern: "*.tsv.gz"
   - hippie:
       type: string
       description: HIPPIE PPI file (--url_hippie, URL or path); single-domain DDIs and a PPIDM source.

@@ -31,7 +31,6 @@
 include { DOWNLOAD_3DID_SQLITE      } from '../../../modules/local/3did/main.nf'
 include { DOWNLOAD_NEGATOME         } from '../../../modules/local/negatome/main.nf'
 include { INSERT_3DID               } from '../../../modules/local/insert_3did/main.nf'
-include { BUILD_SWISSPROT_PFAM_MAP  } from '../../../modules/local/swissprot_map/main.nf'
 include { PARSE_SINGLE_DOMAIN_PPI   } from '../../../modules/local/parse_single_domain_ppi/main.nf'
 include { PARSE_PPIDM               } from '../../../modules/local/parse_ppidm/main.nf'
 include { PARSE_PPIDM as PARSE_INVERSE_PPIDM } from '../../../modules/local/parse_ppidm/main.nf'
@@ -83,6 +82,48 @@ def externalSourceWanted(source) {
     return source in tokens
 }
 
+// The classes PARSE_PPIDM (prefix `PPIDM`) or PARSE_INVERSE_PPIDM (prefix
+// `INVERSE_PPIDM`) emits. When every selected token is a PPIDM/INVERSE_PPIDM
+// one, explicit `<prefix>_<Class>` tokens narrow --ppidm_classes to the classes
+// named; a class nothing selects would only widen the master DB and the union
+// Pfam fetch / embedding workload. The two prefixes are disjoint by
+// construction (compute_ppidm.py asserts it), so narrowing loses no conflict
+// between them. Next to negatome or single_domain_ppi every configured class is
+// parsed: INSERT_EXTERNAL_SOURCES drops a pair whose external labels disagree,
+// and an unparsed class would hide that disagreement. A bare `<prefix>` token
+// or an empty selection keeps --ppidm_classes as configured. Classes compare
+// case-insensitively, as parse_ppidm.py does.
+def ppidmParseClasses(prefix) {
+    def tokens = externalTestTokens()
+    def configured = params.ppidm_classes.toString().tokenize(',').collect { c -> c.trim() }.findAll { c -> c }
+    def picked = tokens.findAll { t -> t.startsWith(prefix + '_') }.collect { t -> t.substring(prefix.length() + 1) }
+    def missing = picked.findAll { c -> !configured.any { k -> k.equalsIgnoreCase(c) } }
+    if (missing) {
+        error("--external_test_sources selects ${missing.collect { c -> prefix + '_' + c }.join(', ')}, but --ppidm_classes (${params.ppidm_classes}) does not parse that class")
+    }
+    def ppidm_only = tokens.every { t -> t.startsWith('PPIDM') || t.startsWith('INVERSE_PPIDM') }
+    def classes = !tokens || prefix in tokens || !ppidm_only
+        ? params.ppidm_classes.toString()
+        : configured.findAll { k -> picked.any { c -> c.equalsIgnoreCase(k) } }.join(',')
+    log.info "PARSE_${prefix} classes: ${classes}"
+    return classes
+}
+
+// Under `--external_test_balance uniform` the larger label is subsampled to the
+// smaller, so an explicit selection naming only one label would fail late in
+// BUILD_EXTERNAL_TEST after the whole build. Refuse it at startup instead
+// (build_external_test.py keeps its own check for a label lost to filtering).
+def checkExternalTestBalance() {
+    def tokens = externalTestTokens()
+    if (!tokens || params.external_test_balance.toString() != 'uniform') {
+        return
+    }
+    def negative = tokens.findAll { t -> t == 'negatome' || t.startsWith('INVERSE_PPIDM') }
+    if (!negative || negative.size() == tokens.size()) {
+        error("--external_test_balance uniform needs both labels, but --external_test_sources (${tokens.join(',')}) selects only ${negative ? 'negatives' : 'positives'}. Add a ${negative ? 'positive (single_domain_ppi, PPIDM*)' : 'negative (INVERSE_PPIDM*, negatome)'} source, or pass --external_test_balance none.")
+    }
+}
+
 // Whether COMPUTE_PPIDM runs: computed positives are wanted (no legacy
 // --ppidm_tsv) or computed negatives are.
 def ppidmComputed() {
@@ -130,6 +171,7 @@ workflow COLLECT_DDI_DATA {
     def want_inverse  = externalSourceWanted('INVERSE_PPIDM')
     def want_negatome = externalSourceWanted('negatome')
     def compute_ppidm = ppidmComputed()
+    checkExternalTestBalance()
     if (want_candidates && !negative_ppi_parquet) {
         error("--negative_ppi_parquet is required while a split row samples `ilp_candidates` negatives (see --ppi_splitting_multi_negset)")
     }
@@ -181,23 +223,22 @@ workflow COLLECT_DDI_DATA {
     //    Only the sources --external_test_sources selects are fetched/parsed.
     def parsed = []
     if (want_single) {
-        swissprot_map = BUILD_SWISSPROT_PFAM_MAP(swissprot_pfam_tsv).map
         parsed << PARSE_SINGLE_DOMAIN_PPI(
             file(hippie),
-            swissprot_map,
+            swissprot_pfam_tsv,
             params.hippie_min_score,
         ).ddis
-        ch_versions = ch_versions.mix(BUILD_SWISSPROT_PFAM_MAP.out.versions, PARSE_SINGLE_DOMAIN_PPI.out.versions)
+        ch_versions = ch_versions.mix(PARSE_SINGLE_DOMAIN_PPI.out.versions)
     }
     if (want_ppidm) {
         parsed << PARSE_PPIDM(
             ppidm_tsv ? file(ppidm_tsv, checkIfExists: true) : COMPUTE_PPIDM.out.ppidm,
-            params.ppidm_classes,
+            ppidmParseClasses('PPIDM'),
         ).ddis
         ch_versions = ch_versions.mix(PARSE_PPIDM.out.versions)
     }
     if (want_inverse) {
-        parsed << PARSE_INVERSE_PPIDM(COMPUTE_PPIDM.out.inverse_ppidm, params.ppidm_classes).ddis
+        parsed << PARSE_INVERSE_PPIDM(COMPUTE_PPIDM.out.inverse_ppidm, ppidmParseClasses('INVERSE_PPIDM')).ddis
         ch_versions = ch_versions.mix(PARSE_INVERSE_PPIDM.out.versions)
     }
     if (want_negatome) {

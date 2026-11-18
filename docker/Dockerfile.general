@@ -7,7 +7,7 @@ FROM mambaorg/micromamba:2.10.0
 # Covers all CPU processes in daisybio/domainsplit pipeline:
 #   - DOWNLOAD_3DID, INSERT_3DID (gawk + gzip + bin/mysql2sqlite, sqlite3 stdlib)
 #   - INIT_DOMAINSPLIT_DB (sqlite3 stdlib)
-#   - PARSE_SINGLE_DOMAIN_PPI, PARSE_PPIDM, PARSE_NEGATOME, BUILD_SWISSPROT_PFAM_MAP,
+#   - PARSE_SINGLE_DOMAIN_PPI, PARSE_PPIDM, PARSE_NEGATOME,
 #     INSERT_EXTERNAL_SOURCES (pandas, sqlite3 stdlib)
 #   - BUILD_CANDIDATE_NETWORK (pandas + pyarrow + requests)
 #   - EXPORT_UNION_FAMILIES, EXPORT_SPLIT_DDIS, EXPORT_SPLIT_INPUTS (sqlite3 stdlib)

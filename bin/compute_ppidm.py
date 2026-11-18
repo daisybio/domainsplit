@@ -10,7 +10,8 @@ plus the published classification, and its mirror for depletion):
   calibrated on 3did, hypergeometric enrichment per source (Bonferroni over E*);
 * negatives from all rows: hypergeometric depletion per source, tested only where
   the source has the power to see one (Bonferroni over every hetero pair of the
-  domain universe), enriched nowhere, consensus at or below the threshold.
+  domain universe), enriched nowhere, consensus at or below the threshold, and
+  never carried together by one universe protein.
 """
 
 import argparse
@@ -155,6 +156,14 @@ def cooccurrence(pa, pb, ptr, pdom, D, step=400_000):
         pc, inv = np.unique(np.concatenate([pc, cc]), return_inverse=True)
         K = np.bincount(inv, weights=np.concatenate([K, kc]), minlength=len(pc)).astype(np.int64)
     return N, n, pc, K
+
+
+def same_protein_pairs(ptr, pdom, D):
+    """Sorted hetero pair codes x*D+y (x<y) of domains that share a universe protein."""
+    prot = np.repeat(np.arange(len(ptr) - 1, dtype=np.int64), np.diff(ptr))
+    m = pd.DataFrame({"p": prot, "x": pdom}).merge(pd.DataFrame({"p": prot, "y": pdom}), on="p")
+    x, y = m["x"].values, m["y"].values
+    return np.unique(x[x < y] * D + y[x < y])
 
 
 def lookup(pc, values, codes):
@@ -381,9 +390,15 @@ def main():
         pu[has] = hypergeom.sf(k[has] - 1, N, n[cand[has] // D], n[cand[has] % D])
         enr += has & (pu <= alpha_up)
     dep = sum(v.astype(int) for v in dep_by_group.values()) if dep_by_group else np.zeros(len(cand), int)
-    ok = (enr == 0) & (lookup(allc, CS, cand) <= T)
-    inv_codes = cand[ok & (dep > 0)]
-    inv_class = np.where(dep[ok & (dep > 0)] >= h, "Gold", "Silver")
+    ok = (enr == 0) & (lookup(allc, CS, cand) <= T) & (dep > 0)
+    # Two domains that co-occur on one protein can interact (intra-chain), and K
+    # (cross-protein only) cannot see that, so such a pair is never called depleted.
+    together = np.isin(cand, same_protein_pairs(ptr, pdom, D))
+    n_inv_same_protein = int((ok & together).sum())
+    ok &= ~together
+    log(f"INVERSE candidates excluded for sharing a protein: {n_inv_same_protein}")
+    inv_codes = cand[ok]
+    inv_class = np.where(dep[ok] >= h, "Gold", "Silver")
     assert not np.intersect1d(ec, inv_codes).size, "PPIDM and INVERSE_PPIDM overlap"
     assert not ((ec // D == ec % D).any() or (inv_codes // D == inv_codes % D).any()), "homo pair emitted"
 
@@ -442,6 +457,7 @@ def main():
                  "hetero_in_universe_unscored": n_unscored_gold},
         "scored_pairs": len(allc), "E_star": int(E.sum()), "alpha_up": alpha_up,
         "domain_universe": Du, "alpha_low": alpha_low, "powered_pairs_any_source": len(cand),
+        "inverse_excluded_same_protein": n_inv_same_protein,
         "classes": {"PPIDM": counts(ec, pos_class, ("Gold", "Silver", "Bronze")),
                     "INVERSE_PPIDM": counts(inv_codes, inv_class, ("Gold", "Silver"))},
     }

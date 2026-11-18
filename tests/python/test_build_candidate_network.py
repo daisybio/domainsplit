@@ -109,6 +109,8 @@ def test_alias_and_paging(monkeypatch):
     g2u, u2p = bcn.fetch_gene_mappings({"ABC1", "DEF2", "GHI3"}, batch_size=50)
 
     assert calls[1] == ("https://next.page/2", None)
+    # taxon id, not organism_name:Human (a name search also hits non-human hosts' genes)
+    assert calls[0][1]["query"].startswith("organism_id:9606 AND (")
     # ABC1: primary hit beats alias; DEF2: second gene entry; GHI3: two alias hits -> ambiguous
     assert g2u == {"ABC1": "P00001", "DEF2": "P00003"}
     assert u2p["P00003"] == {"PF00003"}

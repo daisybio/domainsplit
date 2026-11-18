@@ -103,7 +103,7 @@ def fetch_gene_mappings(gene_names, batch_size=100):
         batch = gene_list[i : i + batch_size]
         batch_num = i // batch_size + 1
         gene_clause = " OR ".join(f"gene:{g}" for g in batch)
-        query = f"organism_name:Human AND ({gene_clause}) AND reviewed:true"
+        query = f"organism_id:9606 AND ({gene_clause}) AND reviewed:true"
         url = BASE_URL
         params = {
             "query": query,

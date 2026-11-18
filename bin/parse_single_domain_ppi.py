@@ -24,22 +24,45 @@ source contributed nothing".
 """
 
 import argparse
-import json
+import gzip
 import sys
 
-from build_swissprot_pfam_map import open_maybe_gzip
 from external_ddi_tsv import write_external_tsv
 
 
 def parse_args():
     p = argparse.ArgumentParser()
     p.add_argument("--hippie", required=True)
-    p.add_argument("--swissprot-map", required=True)
+    p.add_argument("--swissprot-pfam", required=True,
+                   help="PARSE_SWISSPROT's Entry/Pfam TSV(.gz), Pfam list ';'-joined")
     p.add_argument("--min-score", type=float, required=True)
     p.add_argument("--out", required=True)
     p.add_argument("--versions", required=True)
     p.add_argument("--process-name", required=True)
     return p.parse_args()
+
+
+def open_maybe_gzip(path):
+    with open(path, "rb") as fh:
+        magic = fh.read(2)
+    return gzip.open(path, "rt") if magic == b"\x1f\x8b" else open(path, "rt")
+
+
+def single_domain_proteins(path):
+    """accession -> its one Pfam, for entries with exactly one *distinct* Pfam.
+
+    The writer emits ``PF00001;`` (trailing ";"), so empty tokens are dropped
+    before counting -- a raw split would see two tokens and lose every row.
+    """
+    single = {}
+    with open_maybe_gzip(path) as fh:
+        next(fh, None)  # header
+        for line in fh:
+            cols = line.rstrip("\n").split("\t")
+            pfams = {p for p in cols[-1].split(";") if p} if len(cols) > 1 else set()
+            if cols[0] and len(pfams) == 1:
+                single[cols[0]] = pfams.pop()
+    return single
 
 
 def detect_layout(first_line):
@@ -77,16 +100,7 @@ def detect_layout(first_line):
 def main():
     args = parse_args()
 
-    with open(args.swissprot_map) as fh:
-        smap = json.load(fh)
-    accession_to_pfams = smap["accession_to_pfams"]
-
-    # single-domain proteins: accession -> its one Pfam
-    single_domain = {
-        acc: pfams[0]
-        for acc, pfams in accession_to_pfams.items()
-        if len(pfams) == 1
-    }
+    single_domain = single_domain_proteins(args.swissprot_pfam)
     print(f"[single_domain_ppi] single-domain proteins: {len(single_domain)}", flush=True)
 
     def resolve_pfam(cols, index):

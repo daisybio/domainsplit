@@ -60,9 +60,11 @@ UNIVERSE_RE = re.compile(
 
 def preview(tmp_path, *args):
     env = dict(os.environ, NXF_OFFLINE="1")
+    # Any existing file: without it the preview stops at the absent local
+    # gurobi.lic, and a clean exit status would mean nothing.
     return subprocess.run(
         ["nextflow", "run", REPO, "-profile", "test", "-preview",
-         "--outdir", str(tmp_path), *args],
+         "--outdir", str(tmp_path), "--gurobi_license", os.path.join(REPO, "nextflow.config"), *args],
         cwd=REPO, env=env, capture_output=True, text=True, timeout=600,
     )
 
@@ -111,17 +113,17 @@ def test_retired_vocabulary_is_rejected_with_the_mapping(tmp_path):
 
 # --external_test_sources decides which external sources are fetched at all: a
 # source it leaves out must not appear in the DAG (a Negatome download failing
-# on a run that never uses Negatome is the bug this pins). The preview stops at
-# the absent local gurobi.lic, but -with-dag is written before that.
+# on a run that never uses Negatome is the bug this pins).
 SOURCE_PROCESSES = {"DOWNLOAD_NEGATOME", "PARSE_NEGATOME", "PARSE_SINGLE_DOMAIN_PPI",
-                    "BUILD_SWISSPROT_PFAM_MAP", "PARSE_PPIDM", "PARSE_INVERSE_PPIDM",
+                    "PARSE_PPIDM", "PARSE_INVERSE_PPIDM",
                     "EXTRACT_PPI_MITAB", "BUILD_PPIDM_SOURCES", "COMPUTE_PPIDM"}
 PPIDM_CHAIN = {"EXTRACT_PPI_MITAB", "BUILD_PPIDM_SOURCES", "COMPUTE_PPIDM"}
 
 
 def dag_processes(tmp_path, *args):
     dag = tmp_path / "dag.mmd"
-    preview(tmp_path, "-with-dag", str(dag), *args)
+    proc = preview(tmp_path, "-with-dag", str(dag), *args)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
     assert dag.exists(), "preview wrote no DAG"
     text = dag.read_text()
     return {p for p in SOURCE_PROCESSES if p in text}
@@ -151,8 +153,17 @@ def test_external_test_sources_prunes_fetches(sources, expected, tmp_path):
     elif sources == "=":
         args = ["--external_test_sources="]
     else:
-        args = ["--external_test_sources", sources]
+        # `none`: a one-label selection is refused at startup under `uniform`
+        args = ["--external_test_sources", sources, "--external_test_balance", "none"]
     assert dag_processes(tmp_path, *args) == expected
+
+
+@pytest.mark.parametrize("sources", ["PPIDM_Gold", "single_domain_ppi,PPIDM", "negatome,INVERSE_PPIDM_Gold"])
+def test_uniform_balance_refuses_a_one_label_selection(sources, tmp_path):
+    proc = preview(tmp_path, "--external_test_sources", sources, "--external_test_balance", "uniform")
+    out = proc.stdout + proc.stderr
+    assert proc.returncode != 0
+    assert "--external_test_balance uniform needs both labels" in out, out
 
 
 def test_inverse_ppidm_refused_with_legacy_ppidm_tsv(tmp_path):
@@ -168,9 +179,47 @@ def test_external_test_sources_rejects_unknown_token(tmp_path):
 
 
 @pytest.mark.parametrize("name", ["structure_data_methods", "embedding_models_domainbench",
-                                  "external_test_sources"])
+                                  "external_test_sources", "swissprot_taxon_ids"])
 def test_bare_empty_off_switch_fails_with_the_working_form(name, tmp_path):
     proc = preview(tmp_path, f"--{name}", "")
     out = proc.stdout + proc.stderr
     assert proc.returncode != 0
     assert f"`--{name}=`" in out, out
+
+
+def test_default_preview_exits_cleanly(tmp_path):
+    """-profile test gives most `url_*` as local paths, several of them the same
+    file (url_hippie is also a PPIDM input): the manifest's local-file staging
+    must handle both. `.values().unique()` on the map threw
+    UnsupportedOperationException here."""
+    proc = preview(tmp_path)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+
+
+# Which classes PARSE_PPIDM / PARSE_INVERSE_PPIDM are handed (logged at startup).
+# Explicit tokens narrow --ppidm_classes only when every token is a PPIDM one:
+# next to negatome or single_domain_ppi an unparsed class would hide a label
+# conflict from INSERT_EXTERNAL_SOURCES.
+@pytest.mark.parametrize("args, expected", [
+    ([], {"PPIDM": "Gold", "INVERSE_PPIDM": "Gold"}),
+    (["--ppidm_classes", "BRONZE,GOLD"], {"PPIDM": "GOLD", "INVERSE_PPIDM": "GOLD"}),
+    (["--external_test_sources", "PPIDM_Gold,negatome"], {"PPIDM": "Bronze,Silver,Gold"}),
+    (["--external_test_sources", "PPIDM,INVERSE_PPIDM_Silver"],
+     {"PPIDM": "Bronze,Silver,Gold", "INVERSE_PPIDM": "Silver"}),
+])
+def test_ppidm_parse_classes(args, expected, tmp_path):
+    proc = preview(tmp_path, *args)
+    out = proc.stdout + proc.stderr
+    assert proc.returncode == 0, out
+    got = dict(re.findall(r"PARSE_(PPIDM|INVERSE_PPIDM) classes: (\S+?)(?=PARSE_|--|\s|$)", out))
+    assert got == expected, out
+
+
+def test_ppidm_class_not_configured_fails_at_startup(tmp_path):
+    """Gold is configured, Gold and Silver requested: the partial overlap used to
+    pass here and fail only in BUILD_EXTERNAL_TEST at the end of the run."""
+    proc = preview(tmp_path, "--ppidm_classes", "Gold",
+                   "--external_test_sources", "PPIDM_Gold,PPIDM_Silver,INVERSE_PPIDM_Gold")
+    out = proc.stdout + proc.stderr
+    assert proc.returncode != 0
+    assert "selects PPIDM_Silver, but --ppidm_classes (Gold) does not parse that class" in out, out
