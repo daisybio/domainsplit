@@ -42,7 +42,7 @@ Performance (all inherited unchanged from the ESM-only version):
     path calls `forward(sequence_id=None)`, which masks nothing whatever the pad
     token, so any batch > 1 leaked padding into every shorter sequence.
   - On torch.OutOfMemoryError: halve the batch size and retry the same group;
-    at batch size 1 the record is skipped.
+    at batch size 1 the task fails (a skip would silently drop the record).
   - `--max-len` drops the long-tail quadratic-attention sequences entirely.
   - Storage dtype is float16.
 
