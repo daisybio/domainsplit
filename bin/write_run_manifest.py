@@ -12,6 +12,8 @@ Inputs:
   commits of this repo and the ppi-splitting submodule, Nextflow/session info,
   and the URLs the run downloads from.
 * ``--input NAME=PATH`` (repeatable): manual inputs, hashed with SHA-256.
+* ``--local NAME=PATH`` (repeatable): a ``urls`` entry given as a local path,
+  staged by the workflow; hashed into ``url_headers[NAME]`` instead of HEADed.
 * ``--db``: the master; per-(method, split) positive/negative counts are read
   from ``ddi_split_membership``, so the class ratio every published split
   *actually* has is on record, not the ratio it was asked for. Two units:
@@ -100,6 +102,8 @@ def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     p.add_argument("--base", required=True)
     p.add_argument("--input", action="append", default=[], metavar="NAME=PATH")
+    p.add_argument("--local", action="append", default=[], metavar="NAME=PATH",
+                   help="a urls entry that is a local file: hashed, not HEADed (also with --no-network)")
     p.add_argument("--db", required=True)
     p.add_argument("--out", required=True)
     p.add_argument("--no-network", action="store_true", help="skip the HEAD requests (tests, offline runs)")
@@ -110,17 +114,24 @@ def main(argv=None):
     with open(args.base) as f:
         manifest = json.load(f)
 
-    inputs = {}
-    for spec in args.input:
-        name, _, path = spec.partition("=")
-        if not path:
-            sys.exit(f"--input expects NAME=PATH, got {spec!r}")
-        inputs[name] = {"path": path, "sha256": sha256(path)}
-    manifest["manual_inputs"] = inputs
+    def pairs(flag, specs):
+        out = {}
+        for spec in specs:
+            name, _, path = spec.partition("=")
+            if not path:
+                sys.exit(f"{flag} expects NAME=PATH, got {spec!r}")
+            out[name] = path
+        return out
 
+    manifest["manual_inputs"] = {
+        name: {"path": path, "sha256": sha256(path)} for name, path in pairs("--input", args.input).items()
+    }
+
+    local = pairs("--local", args.local)
     urls = manifest.get("urls", {})
     manifest["url_headers"] = {
-        name: ({"url": u} if args.no_network else {"url": u, **head(u)})
+        name: ({"url": u, "sha256": sha256(local[name])} if name in local
+               else {"url": u} if args.no_network else {"url": u, **head(u)})
         for name, u in urls.items()
     }
     manifest["split_counts"] = split_counts(args.db)

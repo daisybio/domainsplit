@@ -38,12 +38,15 @@ def test_manifest():
             f.write(b"a\tb\n")
         base = os.path.join(d, "base.json")
         with open(base, "w") as f:
-            json.dump({"params": {"seed": 42}, "urls": {"url_3did": "https://example.invalid/x"}}, f)
+            json.dump({"params": {"seed": 42}, "urls": {"url_3did": "https://example.invalid/x",
+                                                       "url_pfam2go": "/data/pfam2go"}}, f)
         out = os.path.join(d, "run_manifest.json")
 
         write_run_manifest.main([
             "--base", base, "--db", db, "--out", out, "--no-network",
             "--input", f"hippie_tsv={manual}",
+            # a local url_* arrives staged under another path; the original value is kept
+            "--local", f"url_pfam2go={manual}",
         ])
         m = json.load(open(out))
 
@@ -56,6 +59,7 @@ def test_manifest():
     assert m["sampled_negatives_without_membership"] == 2  # DDIs 5 and 6; 7 is not protected, 8 is no exact token
     assert m["split_counts"]["random_hrni"]["validation"]["negatives_per_positive"] == 0.0
     assert m["url_headers"]["url_3did"] == {"url": "https://example.invalid/x"}
+    assert m["url_headers"]["url_pfam2go"] == {"url": "/data/pfam2go", "sha256": hashlib.sha256(b"a\tb\n").hexdigest()}
 
 
 if __name__ == "__main__":

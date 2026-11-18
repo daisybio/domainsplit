@@ -148,7 +148,7 @@ def splitsOf(row, negset) {
     return labels.collect { label -> publishedSplit(negset, label) }
 }
 
-// The three comma-list params whose empty value is an off-switch. Nextflow 26
+// The comma-list params whose empty value is an off-switch. Nextflow 26
 // parses `--x ''` as the String "true" (older parsers: Boolean true), which
 // would otherwise surface as an "unknown method/model/source 'true'" error.
 // `--x=` passes a real empty string.
@@ -225,8 +225,7 @@ def jsonScalar(v) {
     return (v == null || v instanceof Number || v instanceof Boolean) ? v : v.toString()
 }
 
-def manifestBase(uniprot_dats) {
-    def submodule = "${projectDir}/subworkflows/external/ppi-splitting"
+def manifestUrls(uniprot_dats) {
     // Only the URLs this run reads: the manifest HEADs each one, and a request
     // to a source the run never uses (Negatome, when not selected) is a request
     // that can only fail.
@@ -249,9 +248,14 @@ def manifestBase(uniprot_dats) {
     if (ppidm) {
         ppidmInputUrls().eachWithIndex { u, i -> urls["ppidm_input_" + i] = u.toString() }
     }
+    return urls
+}
+
+def manifestBase(uniprot_dats) {
+    def submodule = "${projectDir}/subworkflows/external/ppi-splitting"
     return groovy.json.JsonOutput.toJson([
         params        : params.collectEntries { k, v -> [(k.toString()): v instanceof Collection ? v.collect { x -> jsonScalar(x) } : jsonScalar(v)] },
-        urls          : urls,
+        urls          : manifestUrls(uniprot_dats),
         domainsplit   : [commit: gitOut(projectDir, ['rev-parse', 'HEAD']),
                          // Empty when the tracked tree is clean; a moved submodule pin shows here too.
                          modified: gitOut(projectDir, ['status', '--porcelain', '--untracked-files=no']),
@@ -314,16 +318,8 @@ Use all_species_reviewed or human_any_review_status.""")
         error("--instance_tier '${tier}' is not a known protein universe. One of: human_reviewed, all_species_reviewed, human_any_review_status, all_species_any_review_status (unimplemented, see daisybio/domainsplit#4).")
     }
 
-    ['structure_data_methods', 'embedding_models_domainbench', 'external_test_sources'].each { name ->
+    ['structure_data_methods', 'embedding_models_domainbench', 'external_test_sources', 'swissprot_taxon_ids'].each { name ->
         rejectBareFlag(name)
-    }
-
-    // `--swissprot_taxon_ids ''` on the command line is parsed by Nextflow as a
-    // bare flag and arrives as Boolean true, which would then stringify to "true"
-    // and filter every entry out. There is no reason to pass it empty any more --
-    // an `all_species_*` tier derives it -- so say that rather than let it through.
-    if (params.swissprot_taxon_ids instanceof Boolean) {
-        error("--swissprot_taxon_ids was given no value; Nextflow parsed it as a bare boolean flag. An empty taxon filter is what `--instance_tier all_species_reviewed` already derives, so drop the flag; to set it explicitly to empty, use a -params-file.")
     }
 
     def taxa = params.swissprot_taxon_ids.toString().trim()
@@ -738,6 +734,12 @@ Use all_species_reviewed or human_any_review_status.""")
         channel.fromList(subset_targets).combine(scored_db)
     )
 
+    // A `url_*` given as a local path cannot be HEADed: stage it so its content is
+    // hashed (each distinct file once). A missing path stays a recorded HEAD error.
+    // toUnique, not unique: unique() mutates in place and a map's values view refuses that.
+    def local_urls = manifestUrls(uniprot_dats).findAll { k, u -> !u.contains('://') && file(u).exists() }
+        .collectEntries { k, u -> [(k): file(u)] }
+    def local_paths = local_urls.values().toUnique()
     WRITE_RUN_MANIFEST(
         channel.of(manifestBase(uniprot_dats)).collectFile(name: 'manifest_base.json'),
         enriched_db,
@@ -749,6 +751,8 @@ Use all_species_reviewed or human_any_review_status.""")
         // [] when PPIDM is not computed.
         COLLECT_DDI_DATA.out.ppidm_report.mix(COLLECT_DDI_DATA.out.ppidm_sources).collect().ifEmpty([]),
         COLLECT_DDI_DATA.out.candidate_pfam_mapping,
+        local_urls.collect { k, f -> [k, local_paths.indexOf(f)] },
+        local_paths,
     )
 
     //

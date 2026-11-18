@@ -19,6 +19,12 @@ process WRITE_RUN_MANIFEST {
     path ppidm_reports,        stageAs: 'ppidm/*'
     // BUILD_CANDIDATE_NETWORK's gene_pfam_mapping.json; [] without `ilp_candidates`.
     path candidate_pfam_mapping, stageAs: 'candidate/*'
+    // `url_*`/UniProt entries given as local paths, one numbered dir each under a
+    // fixed name: only the content is hashed, and a basename with blanks or quotes
+    // would otherwise need shell escaping in --local below. local_keys pairs each
+    // manifest key with its file's index.
+    val  local_keys
+    path local_files,          stageAs: 'local??/file'
 
     output:
     path "run_manifest.json", emit: manifest
@@ -30,6 +36,7 @@ process WRITE_RUN_MANIFEST {
     def neg_arg    = negative_ppi_parquet ? "--input negative_ppi_parquet=${negative_ppi_parquet}" : ''
     def ppidm_args = [ppidm_reports].flatten().findAll { f -> f }.collect { f -> "--input ${f.name}=${f}" }.join(' ')
     def mapping_arg = candidate_pfam_mapping ? "--input candidate_gene_pfam_mapping=${candidate_pfam_mapping}" : ''
+    def local_args = local_keys.collect { k, i -> "--local ${k}=${[local_files].flatten()[i]}" }.join(' ')
     """
     write_run_manifest.py \\
         --base ${base_json} \\
@@ -39,6 +46,7 @@ process WRITE_RUN_MANIFEST {
         ${neg_arg} \\
         ${ppidm_args} \\
         ${mapping_arg} \\
+        ${local_args} \\
         --out run_manifest.json \\
         --versions versions.yml \\
         --process-name "${task.process}"
