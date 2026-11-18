@@ -93,13 +93,14 @@ def test_t_db_counts_contacting_residue_pairs_of_train_positives_only():
         for k in range(2):
             c, s = os.path.join(tmp, f"c{k}.csv"), os.path.join(tmp, f"s{k}.csv")
             run("build_scoring_matrix.py", "--db_in", db, "--structures_h5", h5, "--method", "m",
-                "--c_ab_counts_out", c, "--surface_counts_out", s, "--shard_id", str(k), "--n_shards", "2",
+                "--c_ab_counts_out", c, "--surface_counts_out", s, "--shard_id", str(k), "--n_shards", "2", "--seed", "7",
                 "--versions", os.path.join(tmp, "v.yml"), "--process_name", "T")
             shards.append((c, s))
         t_db = os.path.join(tmp, "t_db.txt")
         run("merge_scoring_matrix.py", "--method", "m", "--c_ab_counts", *[c for c, _ in shards],
             "--surface_counts", *[s for _, s in shards], "--c_ab_matrix_out", os.path.join(tmp, "cab.csv"),
-            "--db_freq_out", os.path.join(tmp, "freq.csv"), "--t_db_out", t_db)
+            "--db_freq_out", os.path.join(tmp, "freq.csv"), "--t_db_out", t_db,
+            "--fold_counts_out", os.path.join(tmp, "folds.json"))
         # 2 train positives x 1 contacting (ALA, TRP) pair, counted as (A,B) and (B,A).
         assert open(t_db).read().strip() == "4"
 
@@ -107,7 +108,7 @@ def test_t_db_counts_contacting_residue_pairs_of_train_positives_only():
 def potential(tmp, t_db):
     from utils_struct import AA_3
 
-    cab, freq, t = (os.path.join(tmp, n) for n in ("cab.csv", "freq.csv", "t_db.txt"))
+    cab, freq, t, folds = (os.path.join(tmp, n) for n in ("cab.csv", "freq.csv", "t_db.txt", "folds.json"))
     with open(cab, "w") as fh:  # only TRP-TRP contacts are favourable
         fh.write("aaA,aaB,count\n" + "".join(
             f"{a},{b},{1000 if a == b == 'TRP' else 0}\n" for a in AA_3 for b in AA_3))
@@ -115,7 +116,9 @@ def potential(tmp, t_db):
         fh.write("aa,frequency\n" + "".join(f"{a},{1 / len(AA_3)}\n" for a in AA_3))
     with open(t, "w") as fh:
         fh.write(f"{t_db}\n")
-    return cab, freq, t
+    with open(folds, "w") as fh:  # no fold counts: every train row gets the full potential
+        fh.write('{"c_ab": %s, "surface": %s}' % ([[[0] * 20] * 20] * 5, [[0] * 20] * 5))
+    return cab, freq, t, folds
 
 
 def chains(resname):
@@ -127,7 +130,7 @@ def score(tmp, db, h5, mats, n_shards):
     for k in range(n_shards):
         s, c = os.path.join(tmp, f"{n_shards}_{k}.scores.tsv"), os.path.join(tmp, f"{n_shards}_{k}.confirmed.tsv")
         res = run("score_ddi.py", "--db_in", db, "--structures_h5", h5, "--method", "m",
-                  "--c_ab_matrix", mats[0], "--db_freq", mats[1], "--t_db", mats[2],
+                  "--c_ab_matrix", mats[0], "--db_freq", mats[1], "--t_db", mats[2], "--fold_counts", mats[3],
                   "--scores_out", s, "--confirmed_out", c, "--shard_id", str(k), "--n_shards", str(n_shards),
                   "--seed", "7", "--versions", os.path.join(tmp, "v.yml"), "--process_name", "T")
         scores += open(s).read().splitlines()[1:]

@@ -3,6 +3,7 @@
 import gzip
 import io
 import sqlite3
+import zlib
 
 from Bio.PDB.PDBIO import Select
 from Bio.PDB.SASA import ShrakeRupley
@@ -87,7 +88,6 @@ AA_SET = set(AA_3)
 
 BACKBONE_ATOMS = {"N", "CA", "C", "O", "OXT"}
 
-NO_HB  = 3.5   # H-bond:     N-O distance <= 3.5 Å
 NO_SB  = 5.5   # Salt bridge: N-O distance <= 5.5 Å
 CC_VDW = 5.0   # vdW:        C-C distance <= 5.0 Å
 
@@ -131,6 +131,30 @@ def calculate_rsa_residue_level(domain, chain_id):
             rsa_residue[rid] = None
 
     return rsa_residue
+
+
+# Relative solvent accessibility of the unbound domain must be >= 10% to count
+# a residue as surface (excludes buried side-chains, per Sprinzak & Margalit
+# 2001). Shared by the potential builder and the scorer so both count contacts
+# under one definition.
+RSA_THRESHOLD = 0.1
+
+
+def check_rsa(domain, chain_id, threshold=RSA_THRESHOLD):
+    """Residue ids with relative solvent accessibility >= threshold."""
+    rsa = calculate_rsa_residue_level(domain, chain_id=chain_id)
+    return {rid for rid, v in rsa.items() if v is not None and v >= threshold}
+
+
+# Train rows are scored cross-fit: with the potential built from the train
+# positives of the other folds, so a row's own contacts never score it.
+N_FOLDS = 5
+
+
+def ddi_fold(seed, ddi_id):
+    """Cross-fit fold of a DDI: grouped by ddi_id, seeded, stateless, so every
+    shard and every task (builder and scorer) assigns the same fold."""
+    return zlib.crc32(f"{seed}:{ddi_id}".encode()) % N_FOLDS
 
 
 
@@ -177,6 +201,19 @@ def get_positive_train_structures(db_path, method):
     """, (method,)).fetchall()
     conn.close()
     return rows
+
+
+def get_train_rows(db_path, method):
+    """(ddi_id, instance_id_a, instance_id_b) rows (positive and negative) this
+    method places in its train split. Keyed by the row, not the ddi_id: a DDI
+    with a train row and a test row is cross-fit on the first only."""
+    conn = _ro(db_path)
+    rows = conn.execute(
+        "SELECT DISTINCT ddi_id, instance_id_a, instance_id_b FROM ddi_split_membership "
+        "WHERE method = ? AND split = 'train'",
+        (method,)).fetchall()
+    conn.close()
+    return set(rows)
 
 
 def get_structures_for_method(db_path, method):

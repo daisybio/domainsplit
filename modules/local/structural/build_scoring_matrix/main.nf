@@ -23,6 +23,7 @@ process BUILD_SCORING_MATRIX {
         --surface_counts_out ${method}.${shard_id}.surface_counts.csv \\
         --shard_id ${shard_id} \\
         --n_shards ${n_shards} \\
+        --seed ${params.seed} \\
         --versions versions.yml \\
         --process_name "${task.process}"
     """

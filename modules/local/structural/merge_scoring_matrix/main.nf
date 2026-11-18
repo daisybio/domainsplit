@@ -8,7 +8,8 @@ process MERGE_SCORING_MATRIX {
     tuple val(method), path(c_ab_shards, stageAs: 'c_ab_??.csv'), path(surface_shards, stageAs: 'surface_??.csv')
 
     output:
-    tuple val(method), path("${method}.c_ab_matrix.csv"), path("${method}.db_freq.csv"), path("${method}.t_db.txt"), emit: matrix
+    tuple val(method), path("${method}.c_ab_matrix.csv"), path("${method}.db_freq.csv"), path("${method}.t_db.txt"),
+          path("${method}.fold_counts.json"), emit: matrix
 
     script:
     """
@@ -18,6 +19,7 @@ process MERGE_SCORING_MATRIX {
         --surface_counts ${surface_shards} \\
         --c_ab_matrix_out ${method}.c_ab_matrix.csv \\
         --db_freq_out ${method}.db_freq.csv \\
-        --t_db_out ${method}.t_db.txt
+        --t_db_out ${method}.t_db.txt \\
+        --fold_counts_out ${method}.fold_counts.json
     """
 }

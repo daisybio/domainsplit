@@ -10,14 +10,14 @@ process MERGE_SCORES {
     path confirmed_tsvs
 
     output:
-    path "dbstruct.sqlite3", emit: dbstruct
+    path "domainsplit.sqlite3", emit: dbstruct
     path "versions.yml",     emit: versions
 
     script:
     """
     merge_scores.py \\
         --db_in input.dbstruct.sqlite3 \\
-        --db_out dbstruct.sqlite3 \\
+        --db_out domainsplit.sqlite3 \\
         --scores ${scores_tsvs} \\
         --confirmed ${confirmed_tsvs} \\
         --versions versions.yml \\

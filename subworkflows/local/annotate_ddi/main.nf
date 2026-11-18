@@ -39,7 +39,8 @@ workflow ANNOTATE_DDI {
     matrix_shards_grouped = BUILD_SCORING_MATRIX.out.shard.groupTuple(by: 0, sort: { a, b -> a.name <=> b.name })
 
     MERGE_SCORING_MATRIX(matrix_shards_grouped)
-    // MERGE_SCORING_MATRIX.out.matrix: (method, c_ab_matrix, db_freq, t_db)
+    // MERGE_SCORING_MATRIX.out.matrix: (method, c_ab_matrix, db_freq, t_db, fold_counts)
+    // fold_counts: per cross-fit fold, so SCORE_DDI scores train rows without their own fold
 
     // Step 2: score every DDI under each method, sharded
     score_shard_in = methods_ch
@@ -48,7 +49,7 @@ workflow ANNOTATE_DDI {
             tuple(method, shard_id, params.score_ddi_shards, db, h5)
         }
         .combine(MERGE_SCORING_MATRIX.out.matrix, by: 0)
-    // score_shard_in: (method, shard_id, n_shards, database, hdf_structures, c_ab_matrix, db_freq, t_db)
+    // score_shard_in: (method, shard_id, n_shards, database, hdf_structures, c_ab_matrix, db_freq, t_db, fold_counts)
 
     SCORE_DDI(score_shard_in)
     ch_versions = ch_versions.mix(SCORE_DDI.out.versions)

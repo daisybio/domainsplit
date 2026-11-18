@@ -18,7 +18,16 @@ Scoring methodology (Sprinzak & Margalit 2001, PNAS):
           = -0.5 (sc_mc) / -1.0 (sc_sc) / -0.5 (mc_mc)  otherwise
     E_ab  = T_DB * freq_a * freq_b
     z     = (score - mean_random) / std_random   over 1000 random trials
-A domain pair is only scored if it has >= 5 interacting residue pairs.
+A domain pair is only scored if it has >= 5 interacting residue pairs, and
+only if its random trials vary: a constant null distribution (e.g. a sparse
+potential where no cell reaches E_ab >= 5, so only the AA-independent
+fallbacks remain) has no z-score, so z stays NULL and no vote is cast.
+
+Cross-fit: an instance pair this method places in TRAIN (positive or negative)
+is scored with the potential minus the counts of its own fold
+(utils_struct.ddi_fold, grouped by ddi_id), so a train positive's own contacts
+never enter the potential that scores it. Validation/test pairs use the full
+train-positive potential, also when their DDI has another pair in train.
 
 The random trials are drawn from a generator seeded with (--seed, CRC32 of
 the instance-pair key), so a pair's z-score is the same whatever the shard
@@ -27,6 +36,7 @@ count or row order, and the same across reruns.
 """
 import argparse
 import csv
+import json
 import math
 import sys
 import zlib
@@ -38,9 +48,9 @@ from scipy.spatial.distance import cdist
 from Bio.PDB.PDBParser import PDBParser
 
 from utils_struct import (
-    bytes_to_stringio, BACKBONE_ATOMS, CC_VDW, NO_SB, AA_3,
-    calculate_rsa_residue_level, extract_domain_residues,
-    get_structure_bytes, get_structures_for_method,
+    bytes_to_stringio, BACKBONE_ATOMS, CC_VDW, NO_SB, AA_3, N_FOLDS,
+    check_rsa, ddi_fold, extract_domain_residues,
+    get_structure_bytes, get_structures_for_method, get_train_rows,
 )
 
 TRIALS = 1000
@@ -48,24 +58,15 @@ MIN_INTERACTING_PAIRS = 5
 C_CUTOFF = 0
 E_CUTOFF = 5.0
 
-T_DB: int = 0
-DB_FREQ: dict = {}
-C_AB_MATRIX: dict = {}
 FALLBACK_SCORES = {'sc_sc': -1.0, 'sc_mc': -0.5, 'mc_mc': -0.5}
 CHAIN_A, CHAIN_B = "A", "B"
 ZSCORE_THRESHOLD = 2.3
-# Relative solvent accessibility of the unbound protein must be >= 10% to
-# count a residue as surface (excludes buried side-chains from scoring).
-RSA_THRESHOLD = 0.1
 
 # Fixed ordering for itype indices used throughout the vectorized code.
 ITYPES = ['mc_mc', 'sc_mc', 'sc_sc']
 ITYPE_INDEX = {t: i for i, t in enumerate(ITYPES)}
 
 AA_INDEX = {aa: i for i, aa in enumerate(AA_3)}
-
-# Populated once in main() after C_AB_MATRIX / DB_FREQ / T_DB are loaded.
-SCORE_LOOKUP = np.array([])  # shape (20, 20, 3), see build_score_lookup()
 
 
 def parse_args():
@@ -76,6 +77,8 @@ def parse_args():
     p.add_argument("--c_ab_matrix", required=True)
     p.add_argument("--db_freq", required=True)
     p.add_argument("--t_db", required=True)
+    p.add_argument("--fold_counts", required=True,
+                    help="merge_scoring_matrix.py's per-fold counts, for cross-fit train rows")
     p.add_argument("--scores_out", required=True)
     p.add_argument("--confirmed_out", required=True)
     p.add_argument("--versions", required=True)
@@ -92,58 +95,70 @@ def parse_args():
 
 
 def load_c_ab_matrix(path):
-    global C_AB_MATRIX
+    """(20, 20) raw contact counts, AA_3 order."""
+    c_ab = np.zeros((len(AA_3), len(AA_3)))
     with open(path) as f:
         for row in csv.DictReader(f):
-            C_AB_MATRIX[(row['aaA'], row['aaB'])] = float(row['count'])
+            c_ab[AA_INDEX[row['aaA']], AA_INDEX[row['aaB']]] = float(row['count'])
+    return c_ab
 
 
 def load_db_freq(path):
-    global DB_FREQ
+    """(20,) surface AA frequencies, AA_3 order."""
+    freq = np.zeros(len(AA_3))
     with open(path) as f:
         for row in csv.DictReader(f):
-            DB_FREQ[row['aa']] = float(row['frequency'])
+            freq[AA_INDEX[row['aa']]] = float(row['frequency'])
+    return freq
 
 
 def load_t_db(path):
-    global T_DB
-    T_DB = int(Path(path).read_text().strip())
+    return int(Path(path).read_text().strip())
 
 
-def get_expected_contacts(aaA, aaB):
-    return T_DB * DB_FREQ.get(aaA, 0.0) * DB_FREQ.get(aaB, 0.0)
-
-
-def compute_res_empirical_score(aaA, aaB, interaction_type):
-    C_ab = C_AB_MATRIX.get((aaA, aaB), C_AB_MATRIX.get((aaB, aaA), 0.0))
-    E_ab = get_expected_contacts(aaA, aaB)
-    if C_ab > C_CUTOFF and E_ab >= E_CUTOFF:
-        return math.log10(C_ab / E_ab)
-    return FALLBACK_SCORES.get(interaction_type, -1.0)
-
-
-def build_score_lookup():
+def build_score_lookup(c_ab, db_freq, t_db):
     """
-    Build the (20, 20, 3) empirical-potential lookup table once, globally.
-    table[i, j, k] = compute_res_empirical_score(AA_3[i], AA_3[j], ITYPES[k])
-    Only 20*20*3 = 1200 combinations total -- computed once instead of being
-    re-derived per residue pair per trial.
+    The (20, 20, 3) empirical-potential lookup:
+    table[i, j, k] = log10(C_ab / E_ab) if C_ab > 0 and E_ab >= 5, else the
+    fallback of ITYPES[k], with E_ab = T_DB * freq_i * freq_j.
     """
     table = np.zeros((len(AA_3), len(AA_3), len(ITYPES)))
-    for i, aaA in enumerate(AA_3):
-        for j, aaB in enumerate(AA_3):
+    for i in range(len(AA_3)):
+        for j in range(len(AA_3)):
+            c = c_ab[i, j]  # symmetric
+            e = t_db * db_freq[i] * db_freq[j]
             for k, itype in enumerate(ITYPES):
-                table[i, j, k] = compute_res_empirical_score(aaA, aaB, itype)
+                table[i, j, k] = math.log10(c / e) if c > C_CUTOFF and e >= E_CUTOFF \
+                    else FALLBACK_SCORES[itype]
     return table
 
 
-def check_rsa(domain, chain_id, threshold=RSA_THRESHOLD):
-    """
-    Residue ids with relative solvent accessibility >= threshold (10% by
-    default, per Sprinzak & Margalit 2001: buried side-chains excluded).
-    """
-    rsa = calculate_rsa_residue_level(domain, chain_id=chain_id)
-    return {rid for rid, v in rsa.items() if v is not None and v >= threshold}
+def load_fold_counts(path):
+    """(c_ab (N_FOLDS, 20, 20), surface (N_FOLDS, 20)) raw counts per fold."""
+    with open(path) as f:
+        folds = json.load(f)
+    return np.asarray(folds["c_ab"], dtype=float), np.asarray(folds["surface"], dtype=float)
+
+
+def holdout_counts(c_ab, db_freq, t_db, c_folds, s_folds, k):
+    """(c_ab, db_freq, t_db) of the potential without fold k: fold k's raw
+    counts subtracted from the full ones. With no counts in fold k it is the
+    full potential again."""
+    rest = s_folds.sum(axis=0) - s_folds[k]
+    # No surface left without fold k: either fold k held every train
+    # structure (its contacts go too: fallbacks only, constant trials,
+    # unscored) or no fold has counts (k removes nothing). Freq is moot.
+    freq_k = rest / rest.sum() if rest.sum() > 0 else db_freq
+    return c_ab - c_folds[k], freq_k, t_db - c_folds[k].sum()
+
+
+def build_potentials(c_ab, db_freq, t_db, c_folds, s_folds):
+    """{None: full potential, k: potential without fold k}, each (lookup, db_freq)."""
+    potentials = {None: (build_score_lookup(c_ab, db_freq, t_db), db_freq)}
+    for k in range(N_FOLDS):
+        c_k, freq_k, t_k = holdout_counts(c_ab, db_freq, t_db, c_folds, s_folds, k)
+        potentials[k] = (build_score_lookup(c_k, freq_k, t_k), freq_k)
+    return potentials
 
 
 def _residue_atom_arrays(residues, checked_ids):
@@ -242,7 +257,7 @@ def find_contacts_vectorized(res_a, res_b, structure):
     return best_ra, best_rb, best_itype, len(best_key)
 
 
-def compute_real_score_vectorized(res_a, res_b, ra_arr, rb_arr, itype_arr):
+def compute_real_score_vectorized(lookup, res_a, res_b, ra_arr, rb_arr, itype_arr):
     """Empirical potential for the actual (non-random) residue identities."""
     if len(ra_arr) == 0:
         return 0.0
@@ -251,7 +266,7 @@ def compute_real_score_vectorized(res_a, res_b, ra_arr, rb_arr, itype_arr):
     valid = (aa_a_idx >= 0) & (aa_b_idx >= 0)
     if not valid.any():
         return 0.0
-    return float(SCORE_LOOKUP[aa_a_idx[valid], aa_b_idx[valid], itype_arr[valid]].sum())
+    return float(lookup[aa_a_idx[valid], aa_b_idx[valid], itype_arr[valid]].sum())
 
 
 def pair_rng(seed, instance_id_a, instance_id_b):
@@ -259,7 +274,7 @@ def pair_rng(seed, instance_id_a, instance_id_b):
     return np.random.default_rng([seed, zlib.crc32(f"{instance_id_a}__{instance_id_b}".encode())])
 
 
-def run_random_trials_vectorized(n_a, n_b, ra_arr, rb_arr, itype_arr, n_trials, rng):
+def run_random_trials_vectorized(lookup, db_freq, n_a, n_b, ra_arr, rb_arr, itype_arr, n_trials, rng):
     """
     Run a vectorized simulation of random trials to compute a null distribution
     of contact scores.
@@ -273,14 +288,8 @@ def run_random_trials_vectorized(n_a, n_b, ra_arr, rb_arr, itype_arr, n_trials, 
     if len(ra_arr) == 0:
         return np.zeros(n_trials)
 
-    aas = list(DB_FREQ.keys())
-    weights = np.array([DB_FREQ[a] for a in aas], dtype=float)
-    weights = weights / weights.sum() if weights.sum() > 0 else np.full(len(aas), 1.0 / len(aas))
-    aa_pool_idx = np.array([AA_INDEX.get(a, -1) for a in aas])
-    valid_pool = aa_pool_idx >= 0
-    aa_pool_idx = aa_pool_idx[valid_pool]
-    weights = weights[valid_pool]
-    weights = weights / weights.sum()
+    weights = db_freq / db_freq.sum() if db_freq.sum() > 0 else np.full(len(AA_3), 1.0 / len(AA_3))
+    aa_pool_idx = np.arange(len(AA_3))
 
     sample_a_full = rng.choice(aa_pool_idx, size=(n_trials, n_a), p=weights)
     sample_b_full = rng.choice(aa_pool_idx, size=(n_trials, n_b), p=weights)
@@ -288,13 +297,17 @@ def run_random_trials_vectorized(n_a, n_b, ra_arr, rb_arr, itype_arr, n_trials, 
     aa_a_per_contact = sample_a_full[:, ra_arr]  # (n_trials, n_contacts)
     aa_b_per_contact = sample_b_full[:, rb_arr]  # (n_trials, n_contacts)
 
-    scores = SCORE_LOOKUP[aa_a_per_contact, aa_b_per_contact, itype_arr[None, :]]
+    scores = lookup[aa_a_per_contact, aa_b_per_contact, itype_arr[None, :]]
     return scores.sum(axis=1)  # (n_trials,)
 
 
 def compute_z_score(real_score, random_scores):
-    mean_r, std_r = float(np.mean(random_scores)), float(np.std(random_scores))
-    return 0.0 if std_r == 0 else (real_score - mean_r) / std_r
+    """None when the trials do not vary: a constant null cannot score the pair.
+    Tested by equality, not std == 0: the std of identical floats can round
+    to a tiny nonzero value and turn a constant null into z = -1."""
+    if np.ptp(random_scores) == 0:
+        return None
+    return (real_score - float(np.mean(random_scores))) / float(np.std(random_scores))
 
 
 def aggregate_scores(scores):
@@ -336,19 +349,16 @@ def write_versions(path, process_name):
 
 
 def main():
-    global SCORE_LOOKUP
     args = parse_args()
     print(f"[score_ddi] method={args.method}, zscore_threshold={ZSCORE_THRESHOLD}, trials={TRIALS}", flush=True)
 
-    load_c_ab_matrix(args.c_ab_matrix)
-    load_db_freq(args.db_freq)
-    load_t_db(args.t_db)
-    print(f"  Loaded T_DB={T_DB}, {len(C_AB_MATRIX)} C_ab entries, {len(DB_FREQ)} frequency entries", flush=True)
+    c_ab, db_freq, t_db = load_c_ab_matrix(args.c_ab_matrix), load_db_freq(args.db_freq), load_t_db(args.t_db)
+    print(f"  Loaded T_DB={t_db}", flush=True)
 
-    SCORE_LOOKUP = build_score_lookup()
-    print("  Built global (20,20,3) score lookup table", flush=True)
+    potentials = build_potentials(c_ab, db_freq, t_db, *load_fold_counts(args.fold_counts))
+    print(f"  Built the full and {N_FOLDS} held-out-fold (20,20,3) score lookups", flush=True)
 
-    if T_DB == 0:
+    if t_db == 0:
         # No train contacts -> no potential: scoring would give AA-independent
         # fallback scores and a fake z=0.0 with a negative vote. Leave z_score NULL.
         print(f"[score_ddi] WARNING: method={args.method} has T_DB=0 (no train-positive "
@@ -356,6 +366,7 @@ def main():
         method_structures = []
     else:
         method_structures = get_structures_for_method(args.db_in, args.method)
+    train_rows = get_train_rows(args.db_in, args.method)
     print(f"[score_ddi] method={args.method}: {len(method_structures)} structures total", flush=True)
 
     if args.n_shards > 1:
@@ -407,12 +418,18 @@ def main():
                       f"(< {MIN_INTERACTING_PAIRS}) -- skipping", flush=True)
                 continue
 
-            real_score = compute_real_score_vectorized(res_a, res_b, ra_arr, rb_arr, itype_arr)
+            lookup, freq = potentials[ddi_fold(args.seed, ddi_id)
+                                       if (ddi_id, instance_id_a, instance_id_b) in train_rows else None]
+            real_score = compute_real_score_vectorized(lookup, res_a, res_b, ra_arr, rb_arr, itype_arr)
             random_scores = run_random_trials_vectorized(
-                len(res_a), len(res_b), ra_arr, rb_arr, itype_arr, TRIALS,
+                lookup, freq, len(res_a), len(res_b), ra_arr, rb_arr, itype_arr, TRIALS,
                 pair_rng(args.seed, instance_id_a, instance_id_b),
             )
             z_score = compute_z_score(real_score, random_scores)
+            if z_score is None:
+                print(f"  Row {ddi_id}: random trials are constant (sparse potential) "
+                      f"-- not scored", flush=True)
+                continue
             confirmed = int(z_score >= ZSCORE_THRESHOLD)
 
             print(f"DDI {ddi_id}: n_interacting={n_interacting}, "

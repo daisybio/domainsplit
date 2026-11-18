@@ -12,9 +12,10 @@ but this method's own train split, a test-time DDI would be scored against
 a background that had already seen it.
 
 SHARDING: when --n_shards > 1, this script processes only its slice of
-the method's train structures and writes RAW, UN-normalized counts:
-    <method>.<shard_id>.c_ab_counts.csv     — 20x20 contact counts (summable)
-    <method>.<shard_id>.surface_counts.csv  — surface AA counts (summable)
+the method's train structures and writes RAW, UN-normalized counts, split
+by cross-fit fold (utils_struct.ddi_fold of the structure's ddi_id):
+    <method>.<shard_id>.c_ab_counts.csv     — fold, 20x20 contact counts (summable)
+    <method>.<shard_id>.surface_counts.csv  — fold, surface AA counts (summable)
 This is a reduction (sums), so any split across shards is safe -- unlike
 score_ddi.py, no grouping is needed here. Run merge_scoring_matrix.py
 once all shards for a method are done to sum these and produce the final,
@@ -22,6 +23,8 @@ normalized:
     <method>.c_ab_matrix.csv — 20x20 contact counts (aaA, aaB, count)
     <method>.db_freq.csv     — train-set surface AA frequencies (aa, frequency)
     <method>.t_db.txt        — total contact count T_DB
+    <method>.fold_counts.json — the per-fold raw counts, which score_ddi.py
+                                subtracts to score a train row without its fold
 which score_ddi.py consumes unchanged. With --n_shards=1 (default), a
 single "merge" of one shard still runs, so behaviour/output is identical
 to before, just via the two-step shard+merge path.
@@ -40,26 +43,12 @@ from scipy.spatial.distance import cdist
 from Bio.PDB.PDBParser import PDBParser
 
 from utils_struct import (
-    AA_3, bytes_to_stringio, calculate_rsa_residue_level,
+    AA_3, CC_VDW, N_FOLDS, NO_SB, bytes_to_stringio, check_rsa, ddi_fold,
     extract_domain_residues, get_positive_train_structures,
     get_structure_bytes
 )
 
-CC_VDW = 5.0   # vdW:        C-C distance <= 5.0 Å
-NO_SB  = 5.5   # Salt bridge: N-O distance <= 5.5 Å
-
 CHAIN_A, CHAIN_B = "A", "B"
-# Relative solvent accessibility of the unbound protein must be >= 10% to
-# count a residue as surface (excludes buried side-chains, per Sprinzak &
-# Margalit 2001). Applied to both the contact matrix and DB_FREQ, since
-# both are meant to reflect surface, not buried, residues.
-RSA_THRESHOLD = 0.1
-
-
-def check_rsa(domain, chain_id, threshold=RSA_THRESHOLD):
-    """Residue ids with relative solvent accessibility >= threshold."""
-    rsa = calculate_rsa_residue_level(domain, chain_id=chain_id)
-    return {rid for rid, v in rsa.items() if v is not None and v >= threshold}
 
 
 def parse_args():
@@ -73,6 +62,8 @@ def parse_args():
                     help="raw (un-normalized) surface AA count output for this shard")
     p.add_argument("--versions", required=True)
     p.add_argument("--process_name", required=True)
+    p.add_argument("--seed", type=int, required=True,
+                    help="seeds the cross-fit fold of each ddi_id (same as score_ddi.py's)")
     p.add_argument("--shard_id", type=int, default=0,
                     help="0-based index of this shard (default 0 = no sharding)")
     p.add_argument("--n_shards", type=int, default=1,
@@ -145,8 +136,10 @@ def find_contact_pairs_vectorized(res_a, res_b, checked_a, checked_b):
 
 
 def build_matrix(args):
-    C_ab = defaultdict(lambda: defaultdict(int))
-    surface_counts = defaultdict(int)
+    # Indexed [fold][aa...]: the merge sums folds for the full potential and
+    # keeps them apart so score_ddi.py can leave a train row's own fold out.
+    C_ab = [defaultdict(lambda: defaultdict(int)) for _ in range(N_FOLDS)]
+    surface_counts = [defaultdict(int) for _ in range(N_FOLDS)]
     n_instances = n_skipped = n_no_contact = n_missing_bytes = 0
 
     train_structures = get_positive_train_structures(args.db_in, args.method)
@@ -189,22 +182,23 @@ def build_matrix(args):
             # RSA of the unbound domain must be >= 10% to count as surface
             # (excludes buried side-chains); applied to both the surface
             # frequency counts and the contact matrix.
+            fold = ddi_fold(args.seed, ddi_id)
             checked_a = check_rsa(structure, chain_id=CHAIN_A)
             checked_b = check_rsa(structure, chain_id=CHAIN_B)
 
             for r in res_a:
                 if r.get_id() in checked_a:
-                    surface_counts[r.get_resname()] += 1
+                    surface_counts[fold][r.get_resname()] += 1
             for r in res_b:
                 if r.get_id() in checked_b:
-                    surface_counts[r.get_resname()] += 1
+                    surface_counts[fold][r.get_resname()] += 1
 
             contact_pairs = find_contact_pairs_vectorized(res_a, res_b, checked_a, checked_b)
             for i, j in contact_pairs:
                 aaA = res_a[i].get_resname()
                 aaB = res_b[j].get_resname()
-                C_ab[aaA][aaB] += 1
-                C_ab[aaB][aaA] += 1
+                C_ab[fold][aaA][aaB] += 1
+                C_ab[fold][aaB][aaA] += 1
             if not contact_pairs:
                 n_no_contact += 1
             if n_instances % 500 == 0:
@@ -216,15 +210,15 @@ def build_matrix(args):
 
 
 def write_c_ab_counts(C_ab, path):
-    """Raw (un-normalized) contact counts for this shard -- summable across
-    shards by merge_scoring_matrix.py. Same format as the old final
-    c_ab_matrix.csv, since it was already raw counts, not frequencies."""
+    """Raw (un-normalized) contact counts for this shard, per fold -- summable
+    across shards by merge_scoring_matrix.py."""
     with open(path, "w", newline="") as f:
         writer = csv.writer(f)
-        writer.writerow(["aaA", "aaB", "count"])
-        for aaA in AA_3:
-            for aaB in AA_3:
-                writer.writerow([aaA, aaB, C_ab[aaA][aaB]])
+        writer.writerow(["fold", "aaA", "aaB", "count"])
+        for fold in range(N_FOLDS):
+            for aaA in AA_3:
+                for aaB in AA_3:
+                    writer.writerow([fold, aaA, aaB, C_ab[fold][aaA][aaB]])
     print(f"Written raw C_ab counts to {path}", flush=True)
 
 
@@ -233,9 +227,10 @@ def write_surface_counts(surface_counts, path):
     across shards. merge_scoring_matrix.py normalizes into db_freq.csv."""
     with open(path, "w", newline="") as f:
         writer = csv.writer(f)
-        writer.writerow(["aa", "count"])
-        for aa in AA_3:
-            writer.writerow([aa, surface_counts.get(aa, 0)])
+        writer.writerow(["fold", "aa", "count"])
+        for fold in range(N_FOLDS):
+            for aa in AA_3:
+                writer.writerow([fold, aa, surface_counts[fold].get(aa, 0)])
     print(f"Written raw surface counts to {path}", flush=True)
 
 

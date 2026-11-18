@@ -11,7 +11,11 @@ when the pair shows up as (A, B) for some DDIs and (B, A) for others.
 
 When af_metadata has no entry for a pair, or the referenced file is missing
 or unreadable, nothing is written for it and has_structure keeps its default
-of 0. has_structure is a property of the instance pair, so it is set for
+of 0. The same holds for an instance pair whose window does not match this
+run's UniProt sequence (protein.sequence) by residue number: af_metadata is
+user-generated, and a complex predicted from an isoform, an older sequence
+version or a renumbered construct would otherwise be sliced at the wrong
+residues (see check_window). has_structure is a property of the instance pair, so it is set for
 every method's rows of that triple, not only the --methods ones: the
 structure is in structures.h5 either way.
 """
@@ -35,6 +39,7 @@ import zstandard
 from Bio.PDB.MMCIFParser import MMCIFParser
 from Bio.PDB.PDBIO import PDBIO
 from Bio.PDB.PDBParser import PDBParser
+from Bio.SeqUtils import seq1
 
 import utils_struct
 
@@ -45,8 +50,13 @@ INSERT_BATCH_SIZE = 20000
 
 # Columns handed to the workers, in this order.
 ROW_COLS = ["ddi_id", "instance_id_a", "instance_id_b",
-            "pfam_id_a", "uniprot_id_a", "start_a", "end_a",
-            "pfam_id_b", "start_b", "end_b"]
+            "uniprot_id_a", "start_a", "end_a",
+            "uniprot_id_b", "start_b", "end_b"]
+
+# A window must have at least this fraction of its residues present in the
+# complex AND matching the UniProt sequence at their number: a truncated
+# construct or a model missing most of the domain is not this domain.
+MIN_WINDOW_COVERAGE = 0.8
 
 
 def default_cpus() -> int:
@@ -64,6 +74,9 @@ def parse_args():
     p.add_argument("--af_metadata", required=True)
     p.add_argument("--methods", required=True,
                    help="comma-separated methods whose instance pairs are sliced")
+    p.add_argument("--max_mismatch_rate", type=float, required=True,
+                   help="max fraction of a window's residues whose type differs from "
+                        "protein.sequence at their number (as afdb_max_mismatch_rate)")
     p.add_argument("--versions", required=True)
     p.add_argument("--process_name", required=True)
     p.add_argument("--cpus", type=int, default=None,
@@ -126,6 +139,26 @@ def load_structure(path: str, source: str):
     raise ValueError(f"Unknown source {source} for path {path}")
 
 
+def check_window(chain, start: int, end: int, sequence, max_mismatch_rate: float):
+    """Raise ValueError unless `chain`'s residues numbered start..end are
+    `sequence`'s residues at those numbers. Compared by residue number, not
+    by order, so a gap in the model does not shift the comparison. A residue
+    numbered past the sequence end counts as a mismatch. An insertion-coded
+    residue (10A) has no UniProt position, so it is never validated."""
+    if not sequence:
+        raise ValueError("no canonical sequence to validate against")
+    observed = [r for r in chain if r.id[0] == " " and r.id[2] == " " and start <= r.id[1] <= end]
+    mismatches = sum(1 for r in observed
+                     if r.id[1] > len(sequence) or seq1(r.get_resname()) != sequence[r.id[1] - 1])
+    if observed and mismatches / len(observed) > max_mismatch_rate:
+        raise ValueError(f"chain {chain.id} {start}-{end}: {mismatches}/{len(observed)} residues "
+                         f"differ from the UniProt sequence (> {max_mismatch_rate})")
+    coverage = (len(observed) - mismatches) / (end - start + 1)
+    if coverage < MIN_WINDOW_COVERAGE:
+        raise ValueError(f"chain {chain.id} {start}-{end}: only {coverage:.0%} of the window "
+                         f"validated (< {MIN_WINDOW_COVERAGE:.0%})")
+
+
 def slice_pair(structure, chain_a: str, start_a: int, end_a: int,
                chain_b: str, start_b: int, end_b: int) -> bytes:
     """Slicing a pair of domains from a structure. The domain from `chain_a` is written
@@ -154,7 +187,7 @@ def slice_pair(structure, chain_a: str, start_a: int, end_a: int,
 
 def process_pair(task):
     """One protein pair: load the complex once, slice every instance pair."""
-    path, source, file_uniprot_a, rows = task
+    path, source, file_uniprot_a, rows, sequences, max_mismatch_rate = task
     try:
         structure = load_structure(path, source)
     except Exception as exc:  # missing / corrupt file -> no structure
@@ -165,12 +198,15 @@ def process_pair(task):
     slices = {}    # (group_key, dset_key) -> gzip PDB bytes
     errors = {}    # (group_key, dset_key) -> error string
     ok_rows, failed = [], []
-    for (ddi_id, ia, ib, pfam_a, uni_a, sa, ea, pfam_b, sb, eb) in rows:
-        key = (f"{pfam_a}_{pfam_b}", f"{ia}__{ib}")
+    for (ddi_id, ia, ib, uni_a, sa, ea, uni_b, sb, eb) in rows:
+        key = utils_struct.structure_h5_keys(ia, ib)
         if key not in slices and key not in errors:
             # Row's protein A is chain A in the file unless the file has the pair swapped.
             chain_a, chain_b = ("B", "A") if file_uniprot_a != uni_a else ("A", "B")
             try:
+                model = structure[0]
+                check_window(model[chain_a], int(sa), int(ea), sequences.get(uni_a), max_mismatch_rate)
+                check_window(model[chain_b], int(sb), int(eb), sequences.get(uni_b), max_mismatch_rate)
                 slices[key] = slice_pair(structure, chain_a, int(sa), int(ea),
                                          chain_b, int(sb), int(eb))
             except Exception as exc:
@@ -287,6 +323,10 @@ def main():
 
     con_ro = sqlite3.connect(f"file:{args.db_in}?mode=ro", uri=True)
     instances = fetch_relevant_instances(con_ro, methods)
+    # Streamed and filtered: the protein table can hold every reviewed entry.
+    needed = set(instances["uniprot_id_a"]) | set(instances["uniprot_id_b"])
+    sequences = {u: seq for u, seq in con_ro.execute("SELECT uniprot_id, sequence FROM protein")
+                 if u in needed}
     con_ro.close()
 
     # Unordered protein-pair key: (A, B) and (B, A) share one complex file, order lexicographically
@@ -312,7 +352,8 @@ def main():
             continue
         path, file_uniprot_a, source = entry
         rows = list(group[ROW_COLS].itertuples(index=False, name=None))
-        tasks.append((path, source, file_uniprot_a, rows))
+        pair_seqs = {u: sequences.get(u) for u in (first.uniprot_id_a, first.uniprot_id_b)}
+        tasks.append((path, source, file_uniprot_a, rows, pair_seqs, args.max_mismatch_rate))
     print(f"enrich_structural_af: {n_missing_meta} rows without metadata, "
           f"{len(tasks)} protein pairs to slice", flush=True)
 

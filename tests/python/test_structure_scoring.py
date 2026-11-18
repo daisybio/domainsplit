@@ -14,6 +14,8 @@ Asserted here:
     and its random trials depend only on (seed, pair), not on shard or order.
   * merge_scores.py writes that one z-score to every split row of the triple,
     for its own method only.
+  * ENRICH_STRUCTURAL only slices a window whose residues match this run's
+    protein.sequence by residue number, with enough of the window validated.
 
 Run directly (`python3 tests/python/test_structure_scoring.py`) or via pytest.
 """
@@ -56,7 +58,7 @@ def pdb_text(chains):
     return "\n".join(lines) + "\n"
 
 
-def build(tmp):
+def build(tmp, p1_sequence="A" * N_RES):
     import zstandard
 
     db = os.path.join(tmp, "in.sqlite3")
@@ -65,6 +67,8 @@ def build(tmp):
     ia = add_instance(conn, "PF00001", "P1", 5, 15)
     ib = add_instance(conn, "PF00002", "P2", 3, 9)
     ic = add_instance(conn, "PF00003", "P3", 1, 10)
+    conn.execute("UPDATE protein SET sequence = ?", ("A" * N_RES,))  # the complex is all ALA
+    conn.execute("UPDATE protein SET sequence = ? WHERE uniprot_id = 'P1'", (p1_sequence,))
     conn.execute("INSERT INTO domain_domain_interaction(domain_id_a, domain_id_b, negative, source) "
                  "VALUES (1, 2, 0, '3did'), (1, 3, 1, 'sampled_negative')")
     rows = [(1, "random", s, ia, ib) for s in ("train", "test_uniform_1_1", "test_uniform_1_10")]
@@ -87,14 +91,14 @@ def build(tmp):
     return db, meta, ia, ib, ic
 
 
-def run_enrich(tmp):
-    db, meta, ia, ib, ic = build(tmp)
+def run_enrich(tmp, **kw):
+    db, meta, ia, ib, ic = build(tmp, **kw)
     out_db = os.path.join(tmp, "out.sqlite3")
     h5_path = os.path.join(tmp, "structures.h5")
     subprocess.run(
         [sys.executable, os.path.join(BIN, "enrich_structural_af.py"),
          "--db_in", db, "--db_out", out_db, "--structures_h5", h5_path,
-         "--af_metadata", meta, "--methods", "random", "--cpus", "1",
+         "--af_metadata", meta, "--methods", "random", "--cpus", "1", "--max_mismatch_rate", "0.02",
          "--versions", os.path.join(tmp, "versions.yml"), "--process_name", "TEST"],
         check=True, env=ENV, capture_output=True, text=True,
     )
@@ -168,6 +172,56 @@ def test_slice_with_an_empty_domain_window_is_rejected():
         else:
             raise AssertionError(f"empty window {windows} produced a slice")
     assert [c.id for c in s[0]] == ["A", "B"], "chain ids restored after a rejected slice"
+
+
+def test_complex_numbered_off_the_uniprot_sequence_is_not_sliced():
+    import h5py
+
+    import utils_struct
+
+    with tempfile.TemporaryDirectory() as tmp:
+        # P1 is TRP at 5..15 in this run's UniProt: the all-ALA complex is another sequence.
+        out_db, h5_path, ia, ib, _ic = run_enrich(tmp, p1_sequence="AAAA" + "W" * 11 + "AAAAA")
+        conn = sqlite3.connect(out_db)
+        assert {f for (f,) in conn.execute("SELECT has_structure FROM ddi_split_membership")} == {0}
+        conn.close()
+        with h5py.File(h5_path, "r") as h5:
+            assert utils_struct.get_structure_bytes(h5, ia, ib) is None
+
+
+def test_window_check_compares_by_number_and_needs_coverage():
+    import pytest
+    from Bio.PDB.PDBParser import PDBParser
+
+    import enrich_structural_af
+
+    chain = PDBParser(QUIET=True).get_structure("x", io.StringIO(pdb_text([("A", 0.0)])))[0]["A"]
+    del chain[(" ", 10, " ")]  # a gap must not shift the residues after it
+    check = enrich_structural_af.check_window
+    check(chain, 5, 15, "A" * N_RES, 0.02)  # 10/11 present and matching
+    with pytest.raises(ValueError, match="differ"):
+        check(chain, 5, 15, "A" * 11 + "W" * 9, 0.02)  # UniProt has TRP at 12..15: 4 of 10 observed differ
+    with pytest.raises(ValueError, match="validated"):
+        check(chain, 15, 40, "A" * 40, 0.02)  # only 15..20 exist in the model
+    with pytest.raises(ValueError, match="no canonical sequence"):
+        check(chain, 5, 15, None, 0.02)
+
+
+def test_window_check_does_not_count_insertion_coded_residues():
+    import pytest
+    from Bio.PDB.PDBParser import PDBParser
+
+    import enrich_structural_af
+
+    chain = PDBParser(QUIET=True).get_structure("x", io.StringIO(pdb_text([("A", 0.0)])))[0]["A"]
+    for n in (4, 5):
+        del chain[(" ", n, " ")]
+    inserted = chain[(" ", 1, " ")].copy()
+    inserted.id = (" ", 1, "A")
+    chain.add(inserted)
+    # 1, 1A, 2, 3 would be 4/5 = 80 %; only 3 distinct positions of 1..5 exist.
+    with pytest.raises(ValueError, match="validated"):
+        enrich_structural_af.check_window(chain, 1, 5, "A" * N_RES, 0.02)
 
 
 def test_scoring_pairs_are_distinct_and_draws_are_seeded():

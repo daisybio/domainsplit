@@ -7,7 +7,7 @@ process SCORE_DDI {
     input:
     tuple val(method), val(shard_id), val(n_shards),
           path(dbstruct, stageAs: 'input.dbstruct.sqlite3'), path(structures_h5),
-          path(c_ab_matrix), path(db_freq), path(t_db)
+          path(c_ab_matrix), path(db_freq), path(t_db), path(fold_counts)
 
     output:
     tuple val(method), path("${method}.${shard_id}.scores.tsv"),
@@ -18,7 +18,7 @@ process SCORE_DDI {
     """
     score_ddi.py \\
         --db_in input.dbstruct.sqlite3 --structures_h5 ${structures_h5} --method ${method} \\
-        --c_ab_matrix ${c_ab_matrix} --db_freq ${db_freq} --t_db ${t_db} \\
+        --c_ab_matrix ${c_ab_matrix} --db_freq ${db_freq} --t_db ${t_db} --fold_counts ${fold_counts} \\
         --scores_out ${method}.${shard_id}.scores.tsv --confirmed_out ${method}.${shard_id}.confirmed.tsv \\
         --shard_id ${shard_id} --n_shards ${n_shards} --seed ${params.seed} \\
         --versions versions.yml --process_name "${task.process}"

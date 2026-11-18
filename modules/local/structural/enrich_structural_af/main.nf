@@ -23,6 +23,7 @@ process ENRICH_STRUCTURAL_AF {
         --af_metadata ${af_metadata} \\
         --structures_h5 structures.h5 \\
         --methods "${methods}" \\
+        --max_mismatch_rate ${params.afdb_max_mismatch_rate} \\
         --versions versions.yml \\
         --process_name "${task.process}" \\
         --cpus ${task.cpus}
