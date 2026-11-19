@@ -13,6 +13,7 @@ process PRUNE_UNREPRESENTED_DDIS {
     path "versions.yml",        emit: versions
 
     script:
+    def drop_homomer = params.drop_homomer_ddi.toString().toBoolean() ? '--drop-homomer' : ''
     """
     # NOT cp: on this cluster's NFS, coreutils uses copy_file_range(), which the
     # server satisfies as a server-side copy -- 567 MB "copied" in 0.8 s and then
@@ -23,7 +24,7 @@ process PRUNE_UNREPRESENTED_DDIS {
     dd if="${domainsplit_db_in}" of=domainsplit.sqlite3 bs=4M status=none
 
     prune_unrepresented_ddis.py \\
-        --db domainsplit.sqlite3 \\
+        --db domainsplit.sqlite3 ${drop_homomer} \\
         --report-out pruned_ddis.tsv \\
         --versions versions.yml \\
         --process-name "${task.process}"

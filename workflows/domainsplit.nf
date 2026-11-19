@@ -179,6 +179,11 @@ def structureMethods(all_methods) {
 // buildDatasetsChannel() in its main.nf: the keys are fixed, and mutating the
 // map downstream would break every join() in there, all of which key on the
 // whole map.
+// A CLI `--drop_homomer_ddi false` arrives as the String "false", which is truthy.
+def dropHomomer() {
+    return params.drop_homomer_ddi.toString().toBoolean()
+}
+
 def metaOf(row) {
     def negsets = activeNegsets(row)
     return [
@@ -199,7 +204,8 @@ def metaOf(row) {
         neg_ilp_time_limit       : params.neg_ilp_time_limit,
         neg_ilp_lambda_degree    : params.neg_ilp_lambda_degree,
         neg_ilp_lambda_taxon_pair: params.neg_ilp_lambda_taxon_pair,
-        neg_ilp_lambda_self_loop : params.neg_ilp_lambda_self_loop,
+        // 0 under drop_homomer_ddi: see that param in nextflow.config.
+        neg_ilp_lambda_self_loop : dropHomomer() ? 0 : params.neg_ilp_lambda_self_loop,
         // GO terms describe proteins, not domain families, so the Jaccard bias
         // term has nothing to match on in DDI mode; ppi-splitting forces it to 0
         // itself, and restating it here keeps the two metas identical.

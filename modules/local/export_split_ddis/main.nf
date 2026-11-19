@@ -14,9 +14,10 @@ process EXPORT_SPLIT_DDIS {
     path "versions.yml",   emit: versions
 
     script:
+    def drop_homomer = params.drop_homomer_ddi.toString().toBoolean() ? '--drop-homomer' : ''
     """
     export_split_inputs.py \\
-        --mode ddis \\
+        --mode ddis ${drop_homomer} \\
         --db "${domainsplit_db_in}" \\
         --instances ${instances_tsv} \\
         --source ${source} \\

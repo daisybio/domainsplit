@@ -336,6 +336,11 @@
                     "default": "uniform",
                     "enum": ["uniform", "none"],
                     "fa_icon": "fas fa-balance-scale"
+                },
+                "drop_homomer_ddi": {
+                    "type": "boolean",
+                    "description": "Remove every homomer DDI (same Pfam family on both sides) from the master, every split and the external test. Forces neg_ilp_lambda_self_loop to 0.",
+                    "fa_icon": "fas fa-filter"
                 }
             }
         },
