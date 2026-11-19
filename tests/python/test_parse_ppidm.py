@@ -36,11 +36,11 @@ PPIDM_ROWS = [
 ]
 
 
-def run_parser(ppidm, classes, out, tmp):
+def run_parser(ppidm, classes, out, tmp, extra=()):
     env = dict(os.environ, PYTHONPATH=BIN + os.pathsep + os.environ.get("PYTHONPATH", ""))
     subprocess.run(
         [sys.executable, PARSER, "--ppidm", ppidm, "--classes", classes,
-         "--out", out,
+         "--out", out, *extra,
          "--versions", os.path.join(tmp, "versions.yml"),
          "--process-name", "TEST:PARSE_PPIDM"],
         check=True, env=env,
@@ -101,7 +101,33 @@ def test_parse_ppidm_class_filter():
         assert {(a, b) for a, b, _, _ in rows} == {("PF00001", "PF00002")}
 
 
+def test_parse_ppidm_negative():
+    """--negative --source-prefix INVERSE_PPIDM: negatives, Bronze ignored."""
+    with tempfile.TemporaryDirectory() as tmp:
+        ppidm = os.path.join(tmp, "inverse_ppidm_computed.tsv")
+        out = os.path.join(tmp, "inverse_ppidm_ddis.tsv")
+        # compute_ppidm.py writes plain PFxxxxx tokens
+        write_ppidm(ppidm, [
+            "domain_1\tdomain_2\tclass",
+            "PF00001\tPF00002\tGold",
+            "PF00003\tPF00004\tSilver",
+            "PF00005\tPF00006\tBronze",
+        ])
+        run_parser(ppidm, "Bronze,Silver,Gold", out, tmp,
+                   extra=("--source-prefix", "INVERSE_PPIDM", "--negative"))
+
+        rows = read_tsv(out)
+        assert all(neg == 1 for _, _, neg, _ in rows), "INVERSE_PPIDM rows must be negatives"
+        assert sorted((a, b, s) for a, b, _, s in rows) == [
+            ("PF00001", "PF00002", "INVERSE_PPIDM"),
+            ("PF00001", "PF00002", "INVERSE_PPIDM_Gold"),
+            ("PF00003", "PF00004", "INVERSE_PPIDM"),
+            ("PF00003", "PF00004", "INVERSE_PPIDM_Silver"),
+        ], rows
+
+
 if __name__ == "__main__":
     test_parse_ppidm_all_classes()
     test_parse_ppidm_class_filter()
+    test_parse_ppidm_negative()
     print("OK: parse_ppidm class handling holds")

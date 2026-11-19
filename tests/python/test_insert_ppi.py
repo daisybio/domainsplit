@@ -262,6 +262,62 @@ def test_shared_string_id_resolves_to_the_protein_in_the_database():
         assert edges(tmp) == {("P11111", "P22222", 900.0)}
 
 
+def test_collapsed_ids_keep_the_max_score():
+    """Two STRING ids of one accession collapse onto one pair: the stronger wins."""
+    rows = [
+        ("9606.ENSP00000000001", "9606.ENSP00000000002", "300"),
+        ("9606.ENSP00000000009", "9606.ENSP00000000002", "900"),
+        ("9606.ENSP00000000001", "9606.ENSP00000000002", "300"),
+    ]
+    with tempfile.TemporaryDirectory() as tmp:
+        run(tmp, rows, extra_map=[("P11111", "9606.ENSP00000000009")])
+        assert edges(tmp) == {("P11111", "P22222", 900.0)}
+
+
+def test_upsert_replaces_a_legacy_null_score():
+    """SQLite's MAX(NULL, x) is NULL, so a NULL left by an older import must not win."""
+    rows = [("9606.ENSP00000000001", "9606.ENSP00000000002", "900")]
+    with tempfile.TemporaryDirectory() as tmp:
+        db, mapping, links = build(tmp, rows)
+        conn = sqlite3.connect(db)
+        conn.execute(
+            "INSERT INTO protein_protein_interaction(protein_id_a, protein_id_b, score) "
+            "SELECT a.id, b.id, NULL FROM protein a, protein b "
+            "WHERE a.uniprot_id = 'P11111' AND b.uniprot_id = 'P22222'"
+        )
+        conn.commit()
+        conn.close()
+        subprocess.run(
+            [sys.executable, INSERT_PPI, "--db-in", db, "--string-ppi", links,
+             "--uniprot-id-mapping", mapping,
+             "--versions", os.path.join(tmp, "versions.yml"),
+             "--process-name", "TEST:INSERT_PPI"],
+            cwd=tmp, check=True, env=ENV, capture_output=True, text=True,
+        )
+        assert edges(tmp) == {("P11111", "P22222", 900.0)}
+
+
+def test_a_nan_score_is_fatal():
+    """nan parses as a float, slips past --min-score and would be stored as NULL."""
+    rows = [("9606.ENSP00000000001", "9606.ENSP00000000002", "nan")]
+    with tempfile.TemporaryDirectory() as tmp:
+        proc = run(tmp, rows, check=False)
+    assert proc.returncode != 0
+    assert "non-numeric combined_score" in proc.stderr, proc.stderr
+
+
+def test_string_id_claimed_by_two_db_proteins_is_skipped():
+    """Neither claimant gets the edges, and no cross product is invented."""
+    rows = [
+        ("9606.ENSP00000000001", "9606.ENSP00000000002", "900"),
+        ("10090.ENSMUSP00000000001", "10090.ENSMUSP00000000002", "800"),
+    ]
+    with tempfile.TemporaryDirectory() as tmp:
+        proc = run(tmp, rows, extra_map=[("P22222", "9606.ENSP00000000001")])
+        assert edges(tmp) == {("Q33333", "Q44444", 800.0)}
+    assert "1 STRING ids are claimed by two or more" in proc.stderr, proc.stderr
+
+
 def test_min_score_dropping_everything_names_the_cutoff():
     """The fatal "nothing inserted" error must blame the cutoff, not the species."""
     rows = [("9606.ENSP00000000001", "9606.ENSP00000000002", "300")]

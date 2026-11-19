@@ -2,7 +2,7 @@ process INGEST_INSTANCES {
     tag "ingest_instances"
     label 'process_medium'
     conda "${moduleDir}/environment.yml"
-    container "docker.io/konstantinpelz/domainsplit-general:1.0.0"
+    container "docker.io/konstantinpelz/domainsplit-general:2.0.0"
 
     input:
     path domainsplit_db_in, stageAs: 'input.domainsplit.sqlite3'
@@ -12,7 +12,6 @@ process INGEST_INSTANCES {
 
     output:
     path "domainsplit.sqlite3",             emit: domainsplit_db
-    path "protein_domain_mapping.csv.gz",   emit: protein_domain_map
     path "versions.yml",                    emit: versions
 
     script:
@@ -30,7 +29,6 @@ process INGEST_INSTANCES {
         --instances ${instances_tsv} \\
         --sequences ${sequences_fasta} \\
         --taxon-ids "${taxon_ids.toString().trim()}" \\
-        --mapping-out protein_domain_mapping.csv.gz \\
         --versions versions.yml \\
         --process-name "${task.process}"
     """

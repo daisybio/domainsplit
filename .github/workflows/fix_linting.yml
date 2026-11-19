@@ -5,11 +5,13 @@ on:
 
 jobs:
   fix-linting:
-    # Only run if comment is on a PR with the main repo, and if it contains the magic keywords
+    # Only run if comment is on a PR with the main repo, contains the magic keywords, and comes from someone with
+    # write access: the job runs the PR's own hook config with a push token.
     if: >
       contains(github.event.comment.html_url, '/pull/') &&
       contains(github.event.comment.body, '@nf-core-bot fix linting') &&
-      github.repository == 'daisybio/domainsplit'
+      github.repository == 'daisybio/domainsplit' &&
+      contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
     runs-on: ubuntu-latest
     steps:
       # Use the @nf-core-bot token to check out so we can push later

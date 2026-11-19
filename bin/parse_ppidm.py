@@ -10,6 +10,10 @@ source list reads ``"PPIDM,PPIDM_Gold"`` -- so a consumer can select all of PPID
 or one confidence class without either query needing to know about the other.
 Classes are emitted Gold -> Silver -> Bronze so the merged list is ordered by
 confidence.
+
+``--negative`` emits the same shape as negatives (``negative = 1``), for the
+INVERSE_PPIDM output (``--source-prefix INVERSE_PPIDM``). INVERSE_PPIDM has no
+Bronze class, so Bronze is ignored there.
 """
 
 import argparse
@@ -26,6 +30,8 @@ def parse_args():
     p.add_argument("--ppidm", required=True)
     p.add_argument("--classes", required=True,
                    help="comma-separated classes to include, e.g. 'Bronze,Silver,Gold'")
+    p.add_argument("--source-prefix", default="PPIDM")
+    p.add_argument("--negative", action="store_true")
     p.add_argument("--out", required=True)
     p.add_argument("--versions", required=True)
     p.add_argument("--process-name", required=True)
@@ -42,8 +48,12 @@ def main():
     args = parse_args()
 
     allowed = {c.strip().capitalize() for c in args.classes.split(",") if c.strip()}
+    if args.negative and "Bronze" in allowed:
+        allowed.discard("Bronze")
+        print("[ppidm] ignoring Bronze: not a valid negative class", flush=True)
     classes = [c for c in CLASS_ORDER if c in allowed]
     print(f"[ppidm] including classes: {classes}", flush=True)
+    prefix, label = args.source_prefix, int(args.negative)
 
     pairs_by_class = {c: [] for c in classes}
     n_rows = n_bad = 0
@@ -73,8 +83,8 @@ def main():
     rows = []
     for cls in classes:  # Gold first
         for pfam_a, pfam_b in pairs_by_class[cls]:
-            rows.append((pfam_a, pfam_b, 0, "PPIDM"))
-            rows.append((pfam_a, pfam_b, 0, f"PPIDM_{cls}"))
+            rows.append((pfam_a, pfam_b, label, prefix))
+            rows.append((pfam_a, pfam_b, label, f"{prefix}_{cls}"))
 
     n = write_external_tsv(args.out, rows)
     print(f"[ppidm] wrote {n} rows to {args.out}", flush=True)

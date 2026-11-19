@@ -1,6 +1,1 @@
-channels:
-  - conda-forge
-  - bioconda
-dependencies:
-  - biopython
-  - h5py
+../../../docker/env/general.yml

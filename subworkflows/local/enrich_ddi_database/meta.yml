@@ -23,9 +23,6 @@ input:
       type: file
       description: UniProt protein sequences.
       pattern: "*.{fasta,fa,gz}"
-  - protein_domain_map:
-      type: file
-      description: Protein-to-Pfam-domain mapping from INGEST_INSTANCES; only its uniprot_id column is read.
   - input_uniprot_go_terms:
       type: file
       description: UniProt protein-to-GO-term annotations.

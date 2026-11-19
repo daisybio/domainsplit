@@ -2,7 +2,7 @@ process DOWNLOAD_NEGATOME {
     tag "negatome"
     label 'process_low'
     conda "${moduleDir}/environment.yml"
-    container "docker.io/konstantinpelz/domainsplit-general:1.0.0"
+    container "docker.io/konstantinpelz/domainsplit-general:2.0.0"
 
     input:
     val url
@@ -14,10 +14,8 @@ process DOWNLOAD_NEGATOME {
     script:
     """
     #!/usr/bin/env python3
-    import shutil
     import sys
     import ssl
-    import os
     import urllib.request
     import urllib.error
 
@@ -42,23 +40,19 @@ process DOWNLOAD_NEGATOME {
         reason = getattr(exc, "reason", exc)
         return isinstance(reason, ssl.SSLCertVerificationError)
 
-    if URL.startswith(("http://", "https://", "ftp://", "file://")):
-        try:
-            download(URL, ssl.create_default_context())
-        except (urllib.error.URLError, ssl.SSLError) as exc:
-            if not is_cert_failure(exc):
-                raise
-            print(
-                f"WARNING: Negatome HTTPS cert validation failed for {URL} ({exc!r}); "
-                "retrying with unverified SSL context.",
-                file=sys.stderr,
-                flush=True,
-            )
-            download(URL, ssl._create_unverified_context())
-    elif os.path.exists(URL):
-        shutil.copy(URL, OUT)
-    else:
-        raise SystemExit(f"url_negatome '{URL}' is neither a supported URL nor a local file")
+    # Remote URLs only: COLLECT_DDI_DATA stages a local url_negatome straight into PARSE_NEGATOME.
+    try:
+        download(URL, ssl.create_default_context())
+    except (urllib.error.URLError, ssl.SSLError) as exc:
+        if not is_cert_failure(exc):
+            raise
+        print(
+            f"WARNING: Negatome HTTPS cert validation failed for {URL} ({exc!r}); "
+            "retrying with unverified SSL context.",
+            file=sys.stderr,
+            flush=True,
+        )
+        download(URL, ssl._create_unverified_context())
 
     with open("versions.yml", "w") as f:
         f.write('"${task.process}":\\n')

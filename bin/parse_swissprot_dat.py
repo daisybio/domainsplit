@@ -7,19 +7,18 @@ One pass over static FTP files (``uniprot_sprot_human.dat.gz``,
 ``--instance_tier`` resolved to) replaces two ``rest.uniprot.org`` stream
 queries, which are throttled to ~4 KB/s per connection and drop the connection
 long before an all-reviewed query finishes. The outputs are byte-compatible with
-what the old sources produced, so ``insert_protein_go_terms.py``,
-``build_swissprot_pfam_map.py`` and ``insert_protein_sequences.py`` are unchanged:
+what the old sources produced, so ``insert_protein_go_terms.py`` and
+``insert_protein_sequences.py`` are unchanged:
 
 * ``--go-terms``   ``Entry\\tGene Ontology IDs`` TSV.gz, GO ids joined by "; ".
                    Every ``DR   GO;`` line is kept, evidence code included, which
                    is what the REST ``go_id`` field returned. **All** entries:
                    TrEMBL GO is IEA, the DB records it as protein annotation and
                    nothing splits on it.
-* ``--pfam-map``   ``Entry\\tEntry Name\\tGene Names\\tPfam`` TSV.gz, Pfam
-                   accessions joined by ";" with a trailing ";", gene names
-                   space-separated -- the shape of the REST
-                   ``accession,id,gene_names,xref_pfam`` stream. **Reviewed
-                   entries only** by default; see ``--pfam-map-reviewed-only``.
+* ``--pfam-map``   ``Entry\\tPfam`` TSV.gz, Pfam accessions joined by ";" with
+                   a trailing ";" (the REST ``xref_pfam`` shape), read by
+                   ``parse_single_domain_ppi.py``. **Reviewed entries only** by
+                   default; see ``--pfam-map-reviewed-only``.
 * ``--sequences``  ``>sp|ACC|ENTRY_NAME ...`` / ``>tr|ACC|ENTRY_NAME ...``
                    FASTA.gz, the same headers UniProt's own FASTA carries. The
                    prefix follows the entry's review flag: ``insert_protein_
@@ -58,8 +57,6 @@ TAXID_RE = re.compile(r"NCBI_TaxID=(\d+)")
 # UniProt evidence tags: "Name=TP53 {ECO:0000255|HAMAP-Rule:MF_00001};"
 EVIDENCE_RE = re.compile(r"\s*\{[^}]*\}")
 
-GENE_KEYS = ("Name=", "Synonyms=", "OrderedLocusNames=", "ORFNames=")
-
 #: The ID line's second whitespace field. "ID   TP53_HUMAN   Reviewed;   393 AA."
 REVIEW_TOKENS = {"Reviewed;": True, "Unreviewed;": False}
 
@@ -80,7 +77,7 @@ def parse_args():
         action=argparse.BooleanOptionalAction,
         default=True,
         help="write --pfam-map for reviewed entries only (default). That output feeds "
-        "build_swissprot_pfam_map.py -> parse_single_domain_ppi.py, which infers a DDI "
+        "parse_single_domain_ppi.py, which infers a DDI "
         "from a HIPPIE PPI between two *single-domain* proteins. On a TrEMBL entry the "
         "Pfam annotation is automatic and the sequence is often a fragment, so "
         "'this protein has exactly one domain' is not a claim that source can support "
@@ -90,25 +87,6 @@ def parse_args():
     p.add_argument("--versions", required=True)
     p.add_argument("--process-name", required=True)
     return p.parse_args()
-
-
-def gene_tokens(gn_lines):
-    """The REST ``gene_names`` field: name, synonyms, ordered locus and ORF names
-    of every gene on the entry, whitespace-separated, evidence tags stripped."""
-    tokens = []
-    for raw in gn_lines:
-        for chunk in EVIDENCE_RE.sub("", raw).split(";"):
-            chunk = chunk.strip()
-            if not chunk:
-                continue
-            for key in GENE_KEYS:
-                if chunk.startswith(key):
-                    for token in chunk[len(key):].split(","):
-                        token = token.strip()
-                        if token and token not in tokens:
-                            tokens.append(token)
-                    break
-    return tokens
 
 
 def flush(entry, out, stats, seen, pfam_map_reviewed_only):
@@ -137,10 +115,7 @@ def flush(entry, out, stats, seen, pfam_map_reviewed_only):
 
     if reviewed or not pfam_map_reviewed_only:
         pfams = ";".join(entry["pfam"])
-        out["pfam"].write(
-            f"{acc}\t{entry['id']}\t{' '.join(gene_tokens(entry['gn']))}\t"
-            f"{pfams + ';' if pfams else ''}\n"
-        )
+        out["pfam"].write(f"{acc}\t{pfams + ';' if pfams else ''}\n")
         stats[f"pfam_map_{flag}"] += 1
         if len(entry["pfam"]) == 1:
             stats["single_pfam"] += 1
@@ -172,7 +147,7 @@ def flush(entry, out, stats, seen, pfam_map_reviewed_only):
 
 def new_entry():
     return {"acc": "", "id": "", "de": "", "os": "", "ox": "", "reviewed": None,
-            "gn": [], "go": [], "pfam": [], "string": [], "seq": [], "in_seq": False}
+            "go": [], "pfam": [], "string": [], "seq": [], "in_seq": False}
 
 
 def review_flag(line, path):
@@ -235,8 +210,6 @@ def parse_file(path, wanted, out, stats, seen, pfam_map_reviewed_only):
                     body = line[5:].strip()
                     if body.startswith(("RecName: Full=", "SubName: Full=")):
                         entry["de"] = EVIDENCE_RE.sub("", body.split("Full=", 1)[1]).rstrip(";")
-            elif tag == "GN":
-                entry["gn"].append(line[5:].strip())
             elif tag == "OS":
                 entry["os"] += (" " if entry["os"] else "") + line[5:].strip()
             elif tag == "OX":
@@ -293,7 +266,7 @@ def main():
     ):
         out = {"go": out_go, "pfam": out_pfam, "fasta": out_fasta, "string": out_string}
         out_go.write("Entry\tGene Ontology IDs\n")
-        out_pfam.write("Entry\tEntry Name\tGene Names\tPfam\n")
+        out_pfam.write("Entry\tPfam\n")
 
         for path in args.dat:
             per_file = parse_file(path, wanted, out, stats, seen, args.pfam_map_reviewed_only)

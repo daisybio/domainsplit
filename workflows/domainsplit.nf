@@ -3,12 +3,10 @@
     IMPORT MODULES / SUBWORKFLOWS / FUNCTIONS
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 */
-include { paramsSummaryMap            } from 'plugin/nf-schema'
 include { softwareVersionsToYAML      } from '../subworkflows/nf-core/utils_nfcore_pipeline'
-include { methodsDescriptionText      } from '../subworkflows/local/utils_nfcore_domainsplit_pipeline'
 include { INIT_DOMAINSPLIT_DB         } from '../modules/local/init_domainsplit_db/main.nf'
 include { PARSE_SWISSPROT             } from '../modules/local/parse_swissprot/main.nf'
-include { COLLECT_DDI_DATA            } from '../subworkflows/local/collect_ddi_data/main.nf'
+include { COLLECT_DDI_DATA; externalSourceWanted; ppidmComputed; ppidmInputUrls } from '../subworkflows/local/collect_ddi_data/main.nf'
 include { EXPORT_UNION_FAMILIES       } from '../modules/local/export_union_families/main.nf'
 include { EXPORT_SPLIT_DDIS           } from '../modules/local/export_split_ddis/main.nf'
 include { INGEST_SPLITS               } from '../subworkflows/local/ingest_splits/main.nf'
@@ -16,6 +14,8 @@ include { INSERT_EXTERNAL_SOURCES     } from '../modules/local/insert_external_s
 include { PRUNE_UNREPRESENTED_DDIS    } from '../modules/local/prune_unrepresented_ddis/main.nf'
 include { FETCH_STRING_LINKS          } from '../modules/local/fetch_string_links/main.nf'
 include { REPORT_DDI_ATTRITION        } from '../modules/local/report_ddi_attrition/main.nf'
+include { WRITE_RUN_MANIFEST          } from '../modules/local/write_run_manifest/main.nf'
+include { REPORT_SPLIT_QC             } from '../modules/local/report_split_qc/main.nf'
 include { generate_domain_embeddings  } from '../modules/local/domain_embeddings/main.nf'
 include { ENRICH_DDI_DATABASE         } from '../subworkflows/local/enrich_ddi_database/main.nf'
 include { BUILD_EXTERNAL_TEST         } from '../modules/local/build_external_test/main.nf'
@@ -28,6 +28,11 @@ include { PPI_SPLITTING               } from '../subworkflows/external/ppi-split
 include { FETCH_DOMAIN_META           } from '../subworkflows/external/ppi-splitting/processes/data_prep.nf'
 include { GET_LENGTHS                 } from '../subworkflows/external/ppi-splitting/processes/data_prep.nf'
 include { SUBSET_DOMAIN_DATA          } from '../subworkflows/external/ppi-splitting/processes/data_prep.nf'
+
+// AF inclusion
+include { ENRICH_STRUCTURAL           } from '../subworkflows/local/enrich_structural/main.nf'
+include { ANNOTATE_DDI                } from '../subworkflows/local/annotate_ddi/main.nf'
+
 
 /*
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -46,12 +51,12 @@ include { SUBSET_DOMAIN_DATA          } from '../subworkflows/external/ppi-split
                        which are unseen by construction (see §2 of the plan).
 
     `ilp_candidates` is the ILP sampler restricted to the candidate network of
-    experimentally-tested-but-not-interacting Pfam pairs, so it yields
-    high-confidence negative instances -- hence the `_hcni` directories. It needs
+    Pfam pairs tested together often but never reported interacting, so it yields
+    high-replication non-interacting (HRNI) instances -- hence the `_hrni` directories. It needs
     ppi-splitting's comma-separated `negative_sampling_method` fan-out, which the
     pinned submodule has (`parseNegsets` in its main.nf), so both ILP rows produce
-    two negative sets on one positive split and the run yields 5 method
-    directories / 18 split databases.
+    two negative sets on one positive split, `random` produces three, and the
+    run yields 7 method directories / 26 split databases.
 ----------------------------------------------------------------------------*/
 
 // A function, not a script-level `def` variable: those are locals of the script's
@@ -61,30 +66,35 @@ def splitRows() {
         [
             id            : 'random',
             split_method  : 'random',
-            negsets       : ['uniform': 'random'],
+            // `random_ilp`/`random_hrni` share this positive split and the ILP
+            // sampler, so the candidate pool is their only difference: they
+            // separate the HRNI effect from the family-disjoint split effect
+            // (DATASET_AUDIT.md F9). `uniform` stays first so a single-negset
+            // run keeps the naive baseline.
+            negsets       : ['uniform': 'random', 'ilp': 'random_ilp', 'ilp_candidates': 'random_hrni'],
             internal_test : true,
         ],
         [
             id            : 'minimal_leakage',
             split_method  : 'ilp',
-            negsets       : ['ilp': 'minimal_leakage', 'ilp_candidates': 'minimal_leakage_hcni'],
+            negsets       : ['ilp': 'minimal_leakage', 'ilp_candidates': 'minimal_leakage_hrni'],
             internal_test : true,
         ],
         [
             id            : 'external_test',
             split_method  : 'ilp',
-            negsets       : ['ilp': 'external_test', 'ilp_candidates': 'external_test_hcni'],
+            negsets       : ['ilp': 'external_test', 'ilp_candidates': 'external_test_hrni'],
             internal_test : false,
         ],
     ]
 }
 
-// The negative sets a row actually produces on this run. Normally all of them:
-// `params.ppi_splitting_multi_negset` exists so a `--split_only` debug run can
-// drop back to one, because ppi-splitting rejects `--split_only` unless
-// `negative_sampling_method` is exactly "ilp" (its main.nf). With the param off,
-// each row keeps only its *first* negative set and the `_hcni` directories are
-// not produced.
+// The negative sets a row actually produces on this run. Normally all of them;
+// with `params.ppi_splitting_multi_negset` off, each row keeps only its *first*
+// negative set and the `_hrni` directories are not produced. That does not make
+// ppi-splitting's `--split_only` reachable: its embedded-caller contract needs
+// non-empty partition/node_mapping and an "ilp"-only negative method, while these
+// rows carry empty ones and the random row samples random/uniform.
 def activeNegsets(row) {
     // `.toString().toBoolean()`, not the raw param: a CLI `--ppi_splitting_multi_negset
     // false` arrives as the *String* "false", and every non-empty String is truthy in
@@ -139,10 +149,41 @@ def splitsOf(row, negset) {
     return labels.collect { label -> publishedSplit(negset, label) }
 }
 
+// The comma-list params whose empty value is an off-switch. Nextflow 26
+// parses `--x ''` as the String "true" (older parsers: Boolean true), which
+// would otherwise surface as an "unknown method/model/source 'true'" error.
+// `--x=` passes a real empty string.
+def rejectBareFlag(name) {
+    def v = params[name]
+    if (v instanceof Boolean || v.toString() == 'true') {
+        error("--${name} arrived as '${v}': Nextflow parses `--${name} ''` as a bare flag. To pass an empty value (off), write `--${name}=` or set it in a -params-file.")
+    }
+}
+
+// Methods ENRICH_STRUCTURAL / ANNOTATE_DDI slice and score. 'all' = every
+// method this run publishes; '' (`--structure_data_methods=`) = structure off. Anything else must name
+// published methods: an unknown name would score nothing, silently.
+def structureMethods(all_methods) {
+    def wanted = params.structure_data_methods.toString().tokenize(',')*.trim().findAll { m -> m }
+    if (wanted == ['all']) {
+        return all_methods
+    }
+    def unknown = wanted - all_methods
+    if (unknown) {
+        error("--structure_data_methods names ${unknown.join(', ')}, which this run does not publish (methods: ${all_methods.join(', ')}; or 'all', or `--structure_data_methods=` for no structure).")
+    }
+    return wanted
+}
+
 // Every per-dataset override ppi-splitting reads out of `meta`. Mirrors
 // buildDatasetsChannel() in its main.nf: the keys are fixed, and mutating the
 // map downstream would break every join() in there, all of which key on the
 // whole map.
+// A CLI `--drop_homomer_ddi false` arrives as the String "false", which is truthy.
+def dropHomomer() {
+    return params.drop_homomer_ddi.toString().toBoolean()
+}
+
 def metaOf(row) {
     def negsets = activeNegsets(row)
     return [
@@ -163,12 +204,75 @@ def metaOf(row) {
         neg_ilp_time_limit       : params.neg_ilp_time_limit,
         neg_ilp_lambda_degree    : params.neg_ilp_lambda_degree,
         neg_ilp_lambda_taxon_pair: params.neg_ilp_lambda_taxon_pair,
-        neg_ilp_lambda_self_loop : params.neg_ilp_lambda_self_loop,
+        // 0 under drop_homomer_ddi: see that param in nextflow.config.
+        neg_ilp_lambda_self_loop : dropHomomer() ? 0 : params.neg_ilp_lambda_self_loop,
         // GO terms describe proteins, not domain families, so the Jaccard bias
         // term has nothing to match on in DDI mode; ppi-splitting forces it to 0
         // itself, and restating it here keeps the two metas identical.
         neg_ilp_lambda_jaccard   : 0,
     ]
+}
+
+// `git` output for the manifest, or a note why there is none: a run launched
+// from a release tarball has no .git, and that must not fail a finished run.
+def gitOut(dir, List args) {
+    try {
+        def proc = (['git', '-C', dir.toString()] + args).execute()
+        proc.waitFor()
+        return proc.exitValue() == 0 ? proc.text.trim() : "unavailable (git exit ${proc.exitValue()})"
+    } catch (Exception e) {
+        return "unavailable (${e.class.simpleName})"
+    }
+}
+
+// Everything the manifest knows on the Groovy side; WRITE_RUN_MANIFEST adds the
+// input hashes, URL headers and per-split counts. Params are stringified except
+// scalars and lists, since a Path or GString has no stable JSON form.
+def jsonScalar(v) {
+    return (v == null || v instanceof Number || v instanceof Boolean) ? v : v.toString()
+}
+
+def manifestUrls(uniprot_dats) {
+    // Only the URLs this run reads: the manifest HEADs each one, and a request
+    // to a source the run never uses (Negatome, when not selected) is a request
+    // that can only fail.
+    def ppidm = ppidmComputed()
+    def unused = [
+        url_negatome           : !externalSourceWanted('negatome'),
+        url_pfam_regions       : params.pfam_regions as boolean,
+        url_hippie             : !(ppidm || externalSourceWanted('single_domain_ppi')),
+        url_biogrid_mitab      : !ppidm,
+        url_intact_mitab       : !ppidm,
+        url_sifts_chain_uniprot: !ppidm,
+        url_3did_flat          : !ppidm,
+    ]
+    def urls = params.findAll { k, v -> k.toString().startsWith('url_') && v && !unused[k.toString()] }
+        .collectEntries { k, v -> [(k.toString()): v.toString()] }
+    uniprot_dats.eachWithIndex { u, i -> urls["uniprot_dat_" + i] = u.toString() }
+    // PPIDM's inputs that are not `url_*` params (the all-species UniProt flat
+    // file and the per-organism STRING files); duplicates of the above are
+    // harmless, the manifest HEADs each key once.
+    if (ppidm) {
+        ppidmInputUrls().eachWithIndex { u, i -> urls["ppidm_input_" + i] = u.toString() }
+    }
+    return urls
+}
+
+def manifestBase(uniprot_dats) {
+    def submodule = "${projectDir}/subworkflows/external/ppi-splitting"
+    return groovy.json.JsonOutput.toJson([
+        params        : params.collectEntries { k, v -> [(k.toString()): v instanceof Collection ? v.collect { x -> jsonScalar(x) } : jsonScalar(v)] },
+        urls          : manifestUrls(uniprot_dats),
+        domainsplit   : [commit: gitOut(projectDir, ['rev-parse', 'HEAD']),
+                         // Empty when the tracked tree is clean; a moved submodule pin shows here too.
+                         modified: gitOut(projectDir, ['status', '--porcelain', '--untracked-files=no']),
+                         revision: workflow.revision],
+        ppi_splitting : [commit: gitOut(submodule, ['rev-parse', 'HEAD'])],
+        nextflow      : [version: nextflow.version.toString(), session_id: workflow.sessionId.toString(),
+                         run_name: workflow.runName, start: workflow.start.toString(),
+                         profile: workflow.profile, container_engine: workflow.containerEngine],
+        split_rows    : splitRows().collect { row -> row + [active_negsets: activeNegsets(row)] },
+    ])
 }
 
 /*
@@ -221,12 +325,8 @@ Use all_species_reviewed or human_any_review_status.""")
         error("--instance_tier '${tier}' is not a known protein universe. One of: human_reviewed, all_species_reviewed, human_any_review_status, all_species_any_review_status (unimplemented, see daisybio/domainsplit#4).")
     }
 
-    // `--swissprot_taxon_ids ''` on the command line is parsed by Nextflow as a
-    // bare flag and arrives as Boolean true, which would then stringify to "true"
-    // and filter every entry out. There is no reason to pass it empty any more --
-    // an `all_species_*` tier derives it -- so say that rather than let it through.
-    if (params.swissprot_taxon_ids instanceof Boolean) {
-        error("--swissprot_taxon_ids was given no value; Nextflow parsed it as a bare boolean flag. An empty taxon filter is what `--instance_tier all_species_reviewed` already derives, so drop the flag; to set it explicitly to empty, use a -params-file.")
+    ['structure_data_methods', 'embedding_models_domainbench', 'external_test_sources', 'swissprot_taxon_ids'].each { name ->
+        rejectBareFlag(name)
     }
 
     def taxa = params.swissprot_taxon_ids.toString().trim()
@@ -252,9 +352,12 @@ Use all_species_reviewed or human_any_review_status.""")
     if (tier.endsWith('_any_review_status') && reviewed_only) {
         error("--instance_tier ${tier} asks for an unreviewed stratum, but every resolved --uniprot_dat_urls entry is a Swiss-Prot flat file:\n  ${uniprot_dats.join('\n  ')}\nAn unreviewed stratum that can never fill produces a green run with fewer families and nothing saying why. Add the matching uniprot_trembl_*.dat.gz.")
     }
-    // Not an error: this is how a human+mouse run is expressed.
+    // FETCH_DOMAIN_META (ppi-splitting) derives its taxon filter from the tier names
+    // alone, so an all_species_* tier samples instances from every species whatever
+    // this says, and ingest_instances.py then aborts on the first excluded one --
+    // after the fetch and the ILP. Refuse up front until upstream takes a taxon list.
     if (tier.startsWith('all_species_') && taxa) {
-        log.info "--instance_tier ${tier} with --swissprot_taxon_ids '${taxa}': the universe is deliberately narrowed to those taxa, not every species."
+        error("--instance_tier ${tier} with --swissprot_taxon_ids '${taxa}' is not supported: ppi-splitting's FETCH_DOMAIN_META cannot narrow instance sampling to a taxon list, so instances from other species would be sampled and INGEST_INSTANCES would abort. Drop --swissprot_taxon_ids, or use a human_* tier.")
     }
 
     // The whole derivation on one line of the run log. Four values that must
@@ -298,9 +401,10 @@ Use all_species_reviewed or human_any_review_status.""")
         params.url_3did,
         params.url_negatome,
         input_swissprot_pfam,
-        params.hippie_tsv,
+        params.url_hippie,
         params.ppidm_tsv,
         params.negative_ppi_parquet,
+        splitRows().any { row -> 'ilp_candidates' in activeNegsets(row) },
     )
 
     domainsplit_db_ddi = COLLECT_DDI_DATA.out.domainsplit_db
@@ -574,18 +678,17 @@ Use all_species_reviewed or human_any_review_status.""")
     generate_domain_embeddings(
         union_sequences,
         domainsplit_db,
+        input_uniprot_sequences,
+        cache_dir,
     )
 
     //
     // Enrichment, on the master database, before any subsetting.
     //
-    protein_domain_map = ingested.protein_domain_map
-
     ENRICH_DDI_DATABASE(
         external.domainsplit_db,
         input_pfam2go,
         input_uniprot_sequences,
-        protein_domain_map,
         input_uniprot_go_terms,
         input_string,
         input_string_map,
@@ -593,11 +696,6 @@ Use all_species_reviewed or human_any_review_status.""")
 
     enriched_db = ENRICH_DDI_DATABASE.out.domainsplit_db
 
-    //
-    // One database per (method, split). SUBSET_SPLIT_DB creates each output and
-    // pulls the surviving rows out of the master read-only -- it does not clone
-    // and delete, so a split's file costs only the rows it keeps.
-    //
     def subset_targets = splitRows().collectMany { row ->
         activeNegsets(row).collectMany { negset ->
             def method = row.negsets[negset]
@@ -606,8 +704,81 @@ Use all_species_reviewed or human_any_review_status.""")
         }
     }
 
+    //
+    // Structure, on the master, before any subsetting: slice each instance pair
+    // out of its AF3 complex (ENRICH_STRUCTURAL -> structures.h5,
+    // has_structure), then score it under each method's own train-split contact
+    // potential (ANNOTATE_DDI -> z_score, ddi_interaction_confirmed). Off with
+    // `--structure_data_methods=` (a bare `''` parses as "true"), in which case af_metadata is never opened.
+    //
+    def structure_methods = structureMethods(subset_targets*.method.unique())
+    if (structure_methods) {
+        ENRICH_STRUCTURAL(
+            enriched_db,
+            file(params.af_metadata, checkIfExists: true),
+            structure_methods.join(','),
+        )
+        ANNOTATE_DDI(
+            ENRICH_STRUCTURAL.out.domainsplit_db,
+            ENRICH_STRUCTURAL.out.structures,
+            structure_methods,
+        )
+        scored_db = ANNOTATE_DDI.out.domainsplit_db
+        ch_versions = ch_versions.mix(ENRICH_STRUCTURAL.out.versions, ANNOTATE_DDI.out.versions)
+    }
+    else {
+        scored_db = enriched_db
+        log.info "--structure_data_methods is empty: no structures are sliced or scored, and every has_structure stays 0."
+    }
+
+    //
+    // One database per (method, split). SUBSET_SPLIT_DB creates each output and
+    // pulls the surviving rows out of the master read-only -- it does not clone
+    // and delete, so a split's file costs only the rows it keeps.
+    //
+
     split_dbs = SUBSET_SPLIT_DB(
-        channel.fromList(subset_targets).combine(enriched_db)
+        channel.fromList(subset_targets).combine(scored_db)
+    )
+
+    //
+    // Split QC on the master, which holds every method's membership rows. The
+    // family-disjointness check covers every method the ILP split, derived from
+    // splitRows() so a new ILP row is checked without touching this.
+    //
+    def ilp_methods = splitRows()
+        .findAll { row -> row.split_method == 'ilp' }
+        .collectMany { row -> activeNegsets(row).collect { negset -> row.negsets[negset] } }
+    REPORT_SPLIT_QC(
+        scored_db,
+        ilp_methods.join(','),
+        external_methods.join(','),
+        // [] without esm3_structure.
+        generate_domain_embeddings.out.embeddings
+            .filter { h5 -> h5.name == 'esm3_structure_domain_embeddings.h5' }
+            .collect().ifEmpty([]),
+        generate_domain_embeddings.out.afdb_report.collect().ifEmpty([]),
+    )
+
+    // A `url_*` given as a local path cannot be HEADed: stage it so its content is
+    // hashed (each distinct file once). A missing path stays a recorded HEAD error.
+    // toUnique, not unique: unique() mutates in place and a map's values view refuses that.
+    def local_urls = manifestUrls(uniprot_dats).findAll { k, u -> !u.contains('://') && file(u).exists() }
+        .collectEntries { k, u -> [(k): file(u)] }
+    def local_paths = local_urls.values().toUnique()
+    WRITE_RUN_MANIFEST(
+        channel.of(manifestBase(uniprot_dats)).collectFile(name: 'manifest_base.json'),
+        enriched_db,
+        // [] when --external_test_sources left that source out.
+        (ppidmComputed() || externalSourceWanted('single_domain_ppi')) && params.url_hippie ? file(params.url_hippie) : [],
+        params.ppidm_tsv ? file(params.ppidm_tsv, checkIfExists: true) : [],
+        params.negative_ppi_parquet ? file(params.negative_ppi_parquet, checkIfExists: true) : [],
+        // COMPUTE_PPIDM's report and per-source counts, hashed and summarised;
+        // [] when PPIDM is not computed.
+        COLLECT_DDI_DATA.out.ppidm_report.mix(COLLECT_DDI_DATA.out.ppidm_sources).collect().ifEmpty([]),
+        COLLECT_DDI_DATA.out.candidate_pfam_mapping,
+        local_urls.collect { k, f -> [k, local_paths.indexOf(f)] },
+        local_paths,
     )
 
     //
@@ -630,6 +801,8 @@ Use all_species_reviewed or human_any_review_status.""")
         ENRICH_DDI_DATABASE.out.versions,
         BUILD_EXTERNAL_TEST.out.versions,
         SUBSET_SPLIT_DB.out.versions,
+        WRITE_RUN_MANIFEST.out.versions,
+        REPORT_SPLIT_QC.out.versions,
     )
 
     softwareVersionsToYAML(ch_versions)
@@ -643,14 +816,8 @@ Use all_species_reviewed or human_any_review_status.""")
 emit:
     // The master: enriched *and* carrying every split's membership rows,
     // including the external test set BUILD_EXTERNAL_TEST wrote upstream.
-    domainsplit_db    = enriched_db
+    domainsplit_db    = scored_db
     split_db          = split_dbs.split_db
-    domain_embeddings = generate_domain_embeddings.out.embeddings
-    candidate_network = candidate_network
-    source_conflicts  = inserted.conflicts
-    ddi_attrition     = attrition.report
-    bias_analysis     = ppi.multiqc_report
-    dropped_families  = dropped_families
 }
 
 /*

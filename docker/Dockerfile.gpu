@@ -1,14 +1,18 @@
-FROM mambaorg/micromamba:1.5.10
+FROM mambaorg/micromamba:2.10.0
 
-# Build/tag as konstantinpelz/domainsplit-gpu:1.1.0
+# Build/tag as konstantinpelz/domainsplit-gpu:2.0.0
+# Build context is docker/:
+#   docker build -f docker/Dockerfile.gpu -t konstantinpelz/domainsplit-gpu:2.0.0 docker/
+# Packages and pins (conda + the single pip block) live in docker/env/gpu.yml.
 # Covers the GPU process in daisybio/domainsplit pipeline:
 #   - GENERATE_DOMAIN_EMBEDDINGS_CHUNK (torch + esm SDK + transformers/ProtT5
 #     + h5py + biopython + tqdm)
 #
-# Mirrors CUDA 12.8 + torch 2.7.0 stack from daisybio-domainbenchmark Dockerfile.ml.
+# CUDA 13.0 (torch 2.11.0+cu130 wheel; its nvidia-* deps bring the CUDA runtime
+# and cuDNN, so no conda cuda/cudnn packages). Host driver must support CUDA >= 13.0.
 LABEL org.opencontainers.image.source="https://github.com/daisybio/domainsplit"
-LABEL org.opencontainers.image.version="1.1.0"
-LABEL org.opencontainers.image.description="domainsplit GPU container (CUDA 12.8, torch 2.7, esm SDK, transformers/ProtT5, biopython, h5py)"
+LABEL org.opencontainers.image.version="2.0.0"
+LABEL org.opencontainers.image.description="domainsplit GPU container (CUDA 13.0, torch 2.11, esm SDK, transformers/ProtT5, biopython, h5py)"
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
@@ -34,39 +38,10 @@ ENV NVIDIA_TF32_OVERRIDE=0
 # entirely and does not touch NVML.
 ENV PYTORCH_CUDA_ALLOC_CONF=backend:cudaMallocAsync
 
-RUN micromamba create -y -n ${ENV_NAME} \
-    -c conda-forge -c bioconda -c nvidia \
-    python=3.12.2 \
-    numpy=2.2.6 \
-    pandas=2.2.3 \
-    h5py=3.14.0 \
-    biopython=1.84 \
-    tqdm=4.66.5 \
-    cuda-version=12.8 \
-    cudnn=9 \
-    pip=25.0 \
-    zstandard=0.25.0 \
-    zstd=1.5.7 \
- && micromamba clean --all --yes
-
-# Torch from PyTorch cu128 wheel; esm, transformers + huggingface_hub from PyPI.
-# huggingface_hub provides the `hf` CLI used by the embedding script for HF_TOKEN
-# auth. transformers + sentencepiece + protobuf are ProtT5's requirements
-# (T5EncoderModel and its SentencePiece tokenizer).
-# Single pip call so esm's or transformers' transitive deps cannot pull a
-# non-cu128 torch wheel from PyPI default — previously a second `pip install esm`
-# quietly upgraded torch to a newer CUDA build (cu13x) whose runtime then refused
-# to talk to the cluster's CUDA 12.8 driver and fell back to CPU (exit 137 from
-# OOM). Anything added here goes in *this* call, not a new RUN.
-RUN micromamba run -n ${ENV_NAME} pip install \
-    --index-url https://download.pytorch.org/whl/cu128 \
-    --extra-index-url https://pypi.org/simple \
-    torch==2.7.0 \
-    esm==3.1.6 \
-    huggingface_hub==0.26.2 \
-    transformers==4.48.1 \
-    sentencepiece==0.2.0 \
-    protobuf==5.28.3
+COPY --chown=$MAMBA_USER:$MAMBA_USER env/gpu.yml /tmp/env.yml
+RUN micromamba create -y -n ${ENV_NAME} -f /tmp/env.yml \
+ && micromamba clean --all --yes \
+ && rm /tmp/env.yml
 
 ENTRYPOINT ["micromamba", "run", "-n", "gpu"]
 CMD ["python"]

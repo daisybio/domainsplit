@@ -25,7 +25,6 @@ workflow ENRICH_DDI_DATABASE {
     domainsplit_db_in
     input_pfam2go
     input_uniprot_sequences
-    protein_domain_map
     input_uniprot_go_terms
     input_string
     input_string_map
@@ -38,8 +37,7 @@ workflow ENRICH_DDI_DATABASE {
 
     db_after_proteins = INSERT_PROTEIN_SEQUENCES(
         db_after_domain_go,
-        input_uniprot_sequences,
-        protein_domain_map
+        input_uniprot_sequences
     ).domainsplit_db
 
     db_after_protein_go = INSERT_PROTEIN_GO_TERMS(

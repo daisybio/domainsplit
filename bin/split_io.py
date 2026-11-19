@@ -18,7 +18,7 @@ than one set.  Parsing names here would couple ingest to that suffixing rule, so
 every ingest script instead takes explicit ``--split method:split:path`` triples
 built by the calling subworkflow -- which is also where the negative-set ->
 method-directory mapping (``ilp`` -> ``minimal_leakage``, ``ilp_candidates`` ->
-``minimal_leakage_hcni``, ...) lives.
+``minimal_leakage_hrni``, ...) lives.
 
 The split names arriving here are already the *published* ones
 (``validation``, ``test_matched_1_1``, ...): ``publishedSplit()`` in

@@ -2,7 +2,7 @@ process INIT_DOMAINSPLIT_DB {
     tag "init_domainsplit_db"
     label 'process_low'
     conda "${moduleDir}/environment.yml"
-    container "docker.io/konstantinpelz/domainsplit-general:1.0.0"
+    container "docker.io/konstantinpelz/domainsplit-general:2.0.0"
 
     output:
     path "domainsplit.sqlite3", emit: domainsplit_db
@@ -107,15 +107,39 @@ process INIT_DOMAINSPLIT_DB {
         -- Which DDIs, and which concrete domain-instance pairs, belong to which
         -- (method, split). Populated by INGEST_SPLIT_MEMBERSHIP from
         -- ppi-splitting's instance-level CSVs and by BUILD_EXTERNAL_TEST.
-        -- Exists only to drive SUBSET_SPLIT_DB, which is a pure SQL filter over
-        -- it. `instance_id_*` reference domain_protein_map.instance_id rather
-        -- than protein.id: a protein carrying two copies of one family gives two
+        -- Drives SUBSET_SPLIT_DB, which is a pure SQL filter over it.
+        -- `instance_id_*` reference domain_protein_map.instance_id rather than
+        -- protein.id: a protein carrying two copies of one family gives two
         -- instances, and the split is defined on instances, not proteins.
+        --
+        -- has_structure: 1 when ENRICH_STRUCTURAL_AF sliced this instance pair
+        -- out of an AF3 complex into structures.h5. Defaults to 0, so a row the
+        -- structural step never looked at (structure off, or a method outside
+        -- --structure_data_methods) never claims a structure it does not have.
+        -- z_score: ANNOTATE_DDI's contact-potential z-score for the instance
+        -- pair under this method's train potential; NULL when has_structure = 0
+        -- or the interface has too few contacts to score.
         CREATE TABLE ddi_split_membership (
             ddi_id REFERENCES domain_domain_interaction ON DELETE CASCADE,
             method, split,
             instance_id_a, instance_id_b,
+            has_structure INTEGER NOT NULL DEFAULT 0,
+            z_score REAL,
             UNIQUE(ddi_id, method, split, instance_id_a, instance_id_b)
+        );
+
+        -- Per-method structural confirmation of a DDI, written by ANNOTATE_DDI.
+        -- Split-independent: one method's potential scores all of its splits.
+        -- majority_confirmed: more than half of the DDI's scored instance pairs
+        -- reach z >= 2.3; mean_confirmed: their mean z does. ddi_id is typed
+        -- INTEGER so a writer binding '1' cannot store TEXT that SUBSET_SPLIT_DB's
+        -- `ddi_id IN (SELECT id ...)` then never matches.
+        CREATE TABLE ddi_interaction_confirmed (
+            ddi_id INTEGER REFERENCES domain_domain_interaction ON DELETE CASCADE,
+            method,
+            majority_confirmed INTEGER,
+            mean_confirmed INTEGER,
+            UNIQUE(ddi_id, method)
         );
 
         CREATE INDEX IF NOT EXISTS idx_domain_domain_interaction_domain_id_a
@@ -136,6 +160,8 @@ process INIT_DOMAINSPLIT_DB {
         ON ddi_split_membership (method, split);
         CREATE INDEX IF NOT EXISTS idx_ddi_split_membership_ddi_id
         ON ddi_split_membership (ddi_id);
+        CREATE INDEX IF NOT EXISTS idx_ddi_split_membership_triple
+        ON ddi_split_membership (ddi_id, instance_id_a, instance_id_b);
     ''')
     con.commit()
     con.close()

@@ -13,6 +13,7 @@ output, so the SQL contains no backslash escapes. We track '' (doubled
 single-quote) and "" (doubled double-quote) -- both toggle the open-quote
 flag twice in sequence, which correctly cancels out.
 """
+import re
 import sqlite3
 import sys
 
@@ -21,6 +22,17 @@ SKIP_PREFIXES = (
     "BEGIN TRANSACTION",
     "END TRANSACTION",
     "COMMIT",
+)
+
+# insert_3did.py reads only these; the other ~17 tables of the dump are skipped.
+# shortcut: statements split at line-final ';', so a multi-line trigger body still
+# breaks the import (as it did before); 3did dumps carry no triggers today.
+KEEP_TABLES = {"ddi1", "domain"}
+TABLE_OF = re.compile(
+    r"(?:INSERT(?:\s+OR\s+\w+)?\s+INTO|REPLACE\s+INTO|CREATE\s+TABLE(?:\s+IF\s+NOT\s+EXISTS)?"
+    r"|DROP\s+TABLE(?:\s+IF\s+EXISTS)?|CREATE\s+(?:UNIQUE\s+)?INDEX\s+\S+\s+ON"
+    r"|CREATE\s+TRIGGER\s+.*?\sON)\s+[`\"\[]?(\w+)",
+    re.IGNORECASE | re.DOTALL,
 )
 
 dump_path, db_path = sys.argv[1], sys.argv[2]
@@ -41,6 +53,9 @@ def flush():
         return
     upper = stmt.upper()
     if any(upper.startswith(p) for p in SKIP_PREFIXES):
+        return
+    m = TABLE_OF.match(stmt)
+    if m and m.group(1).lower() not in KEEP_TABLES:
         return
     # Some 3did dumps (notably the 2011 release) contain duplicate INSERT rows
     # that violate UNIQUE constraints once mysql2sqlite emits them as SQLite

@@ -72,13 +72,11 @@ other_unreviewed`. **Reviewed outranks human**: a family with no human
   instance pool of families that were never dropped, and only `human_reviewed`
   reproduces a previous run's numbers.
 
-To narrow rather than widen — a human+mouse run, say — set `swissprot_taxon_ids`
-explicitly alongside an `all_species_*` tier:
-
-```yaml
-instance_tier: "all_species_reviewed"
-swissprot_taxon_ids: "9606,10090"
-```
+Narrowing an `all_species_*` tier to a taxon list (a human+mouse run, say, via
+`swissprot_taxon_ids: "9606,10090"`) is **not supported yet** and is rejected at
+startup: ppi-splitting's `FETCH_DOMAIN_META` derives its taxon filter from the
+tier names alone, so it would sample instances from every species and
+`INGEST_INSTANCES` would abort on them.
 
 The retired values are `human_only` (now `human_reviewed`) and `any` (now
 `all_species_reviewed` — **not** `all_species_any_review_status`, which adds

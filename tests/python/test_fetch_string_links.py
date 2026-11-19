@@ -228,6 +228,36 @@ def test_min_proteins_skips_a_thin_taxon():
     assert report["7227"]["status"] == "skipped_min_proteins"
 
 
+def test_a_string_id_claimed_by_two_proteins_is_skipped(monkeypatch, tmp_path, capsys):
+    """Ambiguous ids drop their edges instead of handing them to one claimant."""
+    proteins = PROTEINS + [("P66666", "9606", "9606.ENSP00000000001")]
+    _session, links, report = run(str(tmp_path), monkeypatch=monkeypatch, proteins=proteins)
+    assert links[1:] == [["10090.ENSMUSP00000000001", "10090.ENSMUSP00000000002", "800"]], links
+    assert report["9606"]["edges_kept"] == "0"
+    assert "1 STRING ids are claimed by two or more" in capsys.readouterr().err
+
+
+def test_raw_files_are_removed_batch_by_batch(monkeypatch, tmp_path):
+    """With --jobs 2, the third taxon is fetched only after the first batch's raw
+    files were filtered and deleted; output order is still the sorted taxa order."""
+    monkeypatch.chdir(tmp_path)
+    on_disk = []
+
+    class Watching(FakeSession):
+        def get(self, url, **kwargs):
+            on_disk.append(sorted(f for f in os.listdir(tmp_path) if ".protein.links." in f))
+            return super().get(url, **kwargs)
+
+    _s, links, _r = run(str(tmp_path), argv_extra=["--jobs", "2"], session=Watching(),
+                        monkeypatch=monkeypatch)
+    assert on_disk[-1] == [], on_disk  # 7227, the second batch
+    # Taxa sort by (-proteins, taxid): 10090 and 9606 tie on 2, "10090" < "9606".
+    assert links[1:] == [
+        ["10090.ENSMUSP00000000001", "10090.ENSMUSP00000000002", "800"],
+        ["9606.ENSP00000000001", "9606.ENSP00000000002", "900"],
+    ], links
+
+
 def test_no_string_xref_at_all_is_fatal():
     """An unreviewed-only universe carries almost no `DR STRING;` lines. That is a
     fact about UniProt, but a run with *none* would produce an empty PPI table, so
@@ -257,4 +287,4 @@ def test_no_string_xref_at_all_is_fatal():
             )
             with pytest.raises(SystemExit) as excinfo:
                 fsl.main()
-    assert "carries a `DR STRING;` cross-reference" in str(excinfo.value)
+    assert "carries an unambiguous `DR STRING;` cross-reference" in str(excinfo.value)

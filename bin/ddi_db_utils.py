@@ -114,7 +114,8 @@ def ensure_domains(conn, pfam_ids):
     unique = {p for p in pfam_ids if p}
     conn.executemany(
         "INSERT OR IGNORE INTO domain(pfam_id) VALUES (?)",
-        [(p,) for p in unique],
+        # sorted: set order follows PYTHONHASHSEED, and the order assigns domain.id
+        [(p,) for p in sorted(unique, key=pfam_sort_key)],
     )
     return len(unique)
 

@@ -2,11 +2,11 @@ process PARSE_SINGLE_DOMAIN_PPI {
     tag "parse_single_domain_ppi"
     label 'process_low'
     conda "${moduleDir}/environment.yml"
-    container "docker.io/konstantinpelz/domainsplit-general:1.0.0"
+    container "docker.io/konstantinpelz/domainsplit-general:2.0.0"
 
     input:
     path hippie_tsv
-    path swissprot_map
+    path swissprot_pfam
     val  min_score
 
     output:
@@ -17,7 +17,7 @@ process PARSE_SINGLE_DOMAIN_PPI {
     """
     parse_single_domain_ppi.py \\
         --hippie ${hippie_tsv} \\
-        --swissprot-map ${swissprot_map} \\
+        --swissprot-pfam ${swissprot_pfam} \\
         --min-score ${min_score} \\
         --out single_domain_ppi_ddis.tsv \\
         --versions versions.yml \\
