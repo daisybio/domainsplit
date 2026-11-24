@@ -36,6 +36,9 @@ from concurrent.futures import ThreadPoolExecutor
 
 URL_TEMPLATE = "https://alphafold.ebi.ac.uk/files/AF-{acc}-F1-model_v{version}.pdb"
 BACKBONE = (0, 1, 2)  # N, CA, C in atom37 order
+# AFDB serves files from a cloud bucket that answers 403, not 404, for some absent
+# models (measured: all 1682 failures of an all_species_reviewed run, re-checked by curl).
+NOT_IN_AFDB = ("403", "404")
 REPORT_COLUMNS = ("uniprot_id", "status", "length", "placed", "mismatch_rate", "coverage", "detail")
 
 
@@ -108,9 +111,9 @@ def uniprot_sequences(path, wanted):
 
 
 def download(acc, version, cache_dir, session, retries=4, retry_wait=10.0):
-    """`(path, status)`; status is cached / downloaded / 404 / error:<reason>.
+    """`(path, status)`; status is cached / downloaded / 403 / 404 / error:<reason>.
 
-    Same contract as fetch_string_links.download: a 404 is final at once, other
+    Same contract as fetch_string_links.download: a 404 (or AFDB's 403) is final at once, other
     failures are retried with doubling waits, and a file is only ever renamed
     into the cache complete.
     """
@@ -126,8 +129,8 @@ def download(acc, version, cache_dir, session, retries=4, retry_wait=10.0):
             time.sleep(retry_wait * 2 ** (attempt - 1))
         try:
             resp = session.get(URL_TEMPLATE.format(acc=acc, version=version), timeout=(30, 120))
-            if resp.status_code == 404:
-                return None, "404"
+            if str(resp.status_code) in NOT_IN_AFDB:
+                return None, str(resp.status_code)
             resp.raise_for_status()
         except requests.RequestException as exc:
             status = f"error:{type(exc).__name__}"
@@ -208,10 +211,10 @@ def main() -> int:
             path, status = fetched[acc]
             if path is None:
                 # AFDB has no F1 model for proteins over 2,700 residues, nor for
-                # entries newer than its last sync: both are 404s.
-                row["status"] = "not_in_afdb" if status == "404" else "download_failed"
+                # entries newer than its last sync: 404s, or 403s from its bucket.
+                row["status"] = "not_in_afdb" if status in NOT_IN_AFDB else "download_failed"
                 row["detail"] = status
-                n_errors += status != "404"
+                n_errors += status not in NOT_IN_AFDB
                 continue
             try:
                 residue_index, chain_seq, atom37, plddt = parse_model(path)
@@ -249,9 +252,9 @@ def main() -> int:
     if accs and n_written == 0:
         print("[afdb] ERROR: no protein got a structure; see the report", file=sys.stderr)
         return 1
-    # A non-404 failure is transient, not data: dropping the protein would make the H5 set vary by run.
+    # Any other failure is transient, not data: dropping the protein would make the H5 set vary by run.
     if n_errors:
-        print(f"[afdb] ERROR: {n_errors} non-404 download failure(s); see the report", file=sys.stderr)
+        print(f"[afdb] ERROR: {n_errors} non-403/404 download failure(s); see the report", file=sys.stderr)
         return 1
     return 0
 

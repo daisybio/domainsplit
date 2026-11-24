@@ -108,10 +108,23 @@ def _run_main(monkeypatch, tmp, statuses):
 def test_non_404_download_failure_fails_the_task(monkeypatch):
     with tempfile.TemporaryDirectory() as tmp:
         assert _run_main(monkeypatch, tmp, {"P1": "cached", "P2": "404"}) == 0
+    with tempfile.TemporaryDirectory() as tmp:  # AFDB's bucket answers 403 for absent models
+        assert _run_main(monkeypatch, tmp, {"P1": "cached", "P2": "403"}) == 0
     with tempfile.TemporaryDirectory() as tmp:
         assert _run_main(monkeypatch, tmp, {"P1": "cached", "P2": "error:ConnectionError"}) == 1
     with tempfile.TemporaryDirectory() as tmp:  # the all-unusable guard still holds
         assert _run_main(monkeypatch, tmp, {"P1": "404"}) == 1
+
+
+def test_403_is_final_not_retried():
+    import types
+    import fetch_afdb_structures as fas
+
+    calls = []
+    session = types.SimpleNamespace(get=lambda *a, **k: calls.append(1) or types.SimpleNamespace(status_code=403))
+    with tempfile.TemporaryDirectory() as tmp:
+        assert fas.download("P1", 6, tmp, session) == (None, "403")
+    assert len(calls) == 1
 
 
 if __name__ == "__main__":
