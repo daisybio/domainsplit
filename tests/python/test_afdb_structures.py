@@ -93,8 +93,11 @@ def _run_main(monkeypatch, tmp, statuses):
         f.writelines(f">PF00001_{a}_1_5\nAAAAA\n" for a in statuses)
     with open(uni, "w") as f:
         f.writelines(f">sp|{a}|X\n{UNIPROT}\n" for a in statuses)
-    monkeypatch.setattr(fas, "download", lambda a, *_a, **_k: (
-        (os.path.join(tmp, a), statuses[a]) if statuses[a] == "cached" else (None, statuses[a])))
+    def download(a, *_a, **_k):  # a list value yields one status per call
+        st = statuses[a].pop(0) if isinstance(statuses[a], list) else statuses[a]
+        return (os.path.join(tmp, a), st) if st == "cached" else (None, st)
+
+    monkeypatch.setattr(fas, "download", download)
     monkeypatch.setattr(fas, "parse_model", lambda _p: chain(1, UNIPROT))
     monkeypatch.setitem(sys.modules, "esm", types.SimpleNamespace(__version__="0"))
     monkeypatch.setattr(sys, "argv", [
@@ -114,6 +117,8 @@ def test_non_404_download_failure_fails_the_task(monkeypatch):
         assert _run_main(monkeypatch, tmp, {"P1": "cached", "P2": "error:ConnectionError"}) == 1
     with tempfile.TemporaryDirectory() as tmp:  # the all-unusable guard still holds
         assert _run_main(monkeypatch, tmp, {"P1": "404"}) == 1
+    with tempfile.TemporaryDirectory() as tmp:  # a 429 from the parallel pass is retried serially
+        assert _run_main(monkeypatch, tmp, {"P1": "cached", "P2": ["error:HTTP429", "cached"]}) == 0
 
 
 def test_403_is_final_not_retried():
@@ -134,3 +139,29 @@ if __name__ == "__main__":
     test_low_plddt_residues_are_nan()
     test_input_parsers()
     print("ok")
+
+
+def test_429_is_retried_with_retry_after(monkeypatch):
+    import types
+    import requests
+    import fetch_afdb_structures as fas
+
+    sleeps = []
+    monkeypatch.setattr(fas.time, "sleep", sleeps.append)
+
+    def resp(code, headers=None):
+        r = requests.Response()
+        r.status_code, r._content = code, b"ATOM"
+        r.headers.update(headers or {})
+        return r
+
+    replies = iter([resp(429, {"Retry-After": "120"}), resp(429), resp(200)])
+    session = types.SimpleNamespace(get=lambda *a, **k: next(replies))
+    with tempfile.TemporaryDirectory() as tmp:
+        path, status = fas.download("P1", 6, tmp, session)
+        assert status == "downloaded" and os.path.exists(path)
+    assert sleeps == [120.0, 20.0]
+
+    session = types.SimpleNamespace(get=lambda *a, **k: resp(429))
+    with tempfile.TemporaryDirectory() as tmp:
+        assert fas.download("P1", 6, tmp, session, retries=2) == (None, "error:HTTP429")

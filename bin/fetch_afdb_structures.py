@@ -110,12 +110,13 @@ def uniprot_sequences(path, wanted):
     return seqs
 
 
-def download(acc, version, cache_dir, session, retries=4, retry_wait=10.0):
+def download(acc, version, cache_dir, session, retries=8, retry_wait=10.0):
     """`(path, status)`; status is cached / downloaded / 403 / 404 / error:<reason>.
 
     Same contract as fetch_string_links.download: a 404 (or AFDB's 403) is final at once, other
     failures are retried with doubling waits, and a file is only ever renamed
-    into the cache complete.
+    into the cache complete. AFDB rate-limits a full run with 429s, so 8 attempts
+    (~21 min of waits) and a numeric `Retry-After` is honoured when it is longer.
     """
     import requests
 
@@ -123,10 +124,11 @@ def download(acc, version, cache_dir, session, retries=4, retry_wait=10.0):
     final = os.path.join(cache_dir, name)
     if os.path.exists(final) and os.path.getsize(final) > 0:
         return final, "cached"
-    status = None
+    status, wait = None, 0.0
     for attempt in range(max(retries, 1)):
         if attempt:
-            time.sleep(retry_wait * 2 ** (attempt - 1))
+            time.sleep(wait)
+        wait = retry_wait * 2 ** attempt
         try:
             resp = session.get(URL_TEMPLATE.format(acc=acc, version=version), timeout=(30, 120))
             if str(resp.status_code) in NOT_IN_AFDB:
@@ -135,6 +137,9 @@ def download(acc, version, cache_dir, session, retries=4, retry_wait=10.0):
         except requests.RequestException as exc:
             code = getattr(exc.response, "status_code", None)
             status = f"error:HTTP{code}" if code else f"error:{type(exc).__name__}"
+            retry_after = getattr(exc.response, "headers", {}).get("Retry-After", "")
+            if retry_after.isdigit():  # the HTTP-date form is rare; doubling covers it
+                wait = max(wait, float(retry_after))
             continue
         fd, tmp = tempfile.mkstemp(dir=cache_dir, prefix=f".{name}.", suffix=".part")
         try:
@@ -196,6 +201,9 @@ def main() -> int:
     with ThreadPoolExecutor(max_workers=max(args.jobs, 1)) as pool:
         fetched = dict(zip(fetchable, pool.map(
             lambda a: download(a, args.version, cache_dir, session), fetchable)))
+    # 429s come from the parallel burst; one serial pass gets most of them without a costly task retry
+    for acc in [a for a, (_, s) in fetched.items() if s.startswith("error:")]:
+        fetched[acc] = download(acc, args.version, cache_dir, session)
 
     rows, n_written, n_errors = [], 0, 0
     with h5py.File(args.output_h5, "w") as h5:
