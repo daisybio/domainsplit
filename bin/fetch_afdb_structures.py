@@ -133,7 +133,8 @@ def download(acc, version, cache_dir, session, retries=4, retry_wait=10.0):
                 return None, str(resp.status_code)
             resp.raise_for_status()
         except requests.RequestException as exc:
-            status = f"error:{type(exc).__name__}"
+            code = getattr(exc.response, "status_code", None)
+            status = f"error:HTTP{code}" if code else f"error:{type(exc).__name__}"
             continue
         fd, tmp = tempfile.mkstemp(dir=cache_dir, prefix=f".{name}.", suffix=".part")
         try:
