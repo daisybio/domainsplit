@@ -7,6 +7,7 @@ import sys
 import time
 
 import pytest
+import zstandard
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.join(REPO, "bin"))
@@ -100,6 +101,21 @@ def test_same_source_conflict_is_fatal(tmp_path, layout):
     af3_job(str(other), "Pos_P33333_P44444")
     with pytest.raises(SystemExit, match="two different inferred models"):
         run(tmp_path, "--inferred_dir", layout["inf_root"], "--inferred_dir", str(other))
+
+
+def test_downloaded_conflict_keeps_higher_plddt(tmp_path):
+    low, high = [tmp_path / f"AF-{i}-model_v1.pdb.zst" for i in (1, 2)]
+    for path, score in [(low, 92.23), (high, 92.80)]:
+        pdb = f"ATOM      1  CA  ALA A   1       0.000   0.000   0.000  1.00{score:6.2f}           C\n"
+        path.write_bytes(zstandard.compress(pdb.encode()))
+    meta = touch(str(tmp_path / "af.csv"),
+                 "uniprot_id_a,uniprot_id_b,path,source\n"
+                 f"P11111,P22222,{low},downloaded\n"
+                 f"P22222,P11111,{high},downloaded\n")
+    _, rows, inventory, report = run(tmp_path, "--af_metadata", meta)
+    assert [(r["uniprot_id_a"], r["path"]) for r in rows] == [("P22222", str(high))]
+    assert {r["path"]: r["status"] for r in inventory} == {str(low): "shadowed", str(high): "selected"}
+    assert report["downloaded"]["shadowed"] == "1"
 
 
 def test_relative_af_metadata_and_reader_compat(tmp_path, layout):

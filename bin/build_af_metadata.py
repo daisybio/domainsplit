@@ -17,8 +17,8 @@ Written from scratch on every run, never appended. Rules, in this order:
   1. A candidate whose model file does not exist is dropped (status model_missing).
   2. Exact repeats of one model (same unordered pair, source and model path) are
      counted once.
-  3. Two different models of one source for one unordered pair are fatal: no rule
-     says which prediction is right.
+  3. Competing downloaded models are ranked by mean C-alpha pLDDT. Ties for the
+     highest score and conflicting inferred models are fatal.
   4. A pair with a usable `downloaded` model keeps it; its `inferred` model is
      `shadowed`. Validation comes before precedence, so a missing downloaded file
      never hides a usable inferred one.
@@ -41,8 +41,9 @@ import hashlib
 import os
 import re
 import sys
+from statistics import mean
 
-from enrich_structural_af import confidence_paths
+from enrich_structural_af import confidence_paths, load_structure
 
 OUT_COLS = ["uniprot_id_a", "uniprot_id_b", "path", "source",
             "model_size", "model_mtime_ns", "pae_size", "pae_mtime_ns",
@@ -130,6 +131,14 @@ def read_af_metadata(path):
                os.path.join(base, r["path"].strip()), r["source"], f"af_metadata:{i}")
 
 
+def mean_plddt(path):
+    structure, _ = load_structure(path, "downloaded")
+    scores = [residue["CA"].bfactor for residue in structure[0].get_residues() if "CA" in residue]
+    if not scores or not all(0 <= score <= 100 for score in scores):
+        sys.exit(f"{path}: missing or invalid C-alpha pLDDT")
+    return mean(scores)
+
+
 def build(candidates):
     """-> (selected rows, inventory rows, report rows). Exits on a conflict."""
     inventory, usable = [], {}   # usable[(key, source)] = {path: (a, b, origin)}
@@ -149,7 +158,19 @@ def build(candidates):
             continue
         seen[path] = (a, b, origin)
 
-    conflicts = [(key, source, sorted(paths)) for (key, source), paths in usable.items() if len(paths) > 1]
+    conflicts = []
+    for (key, source), paths in usable.items():
+        if len(paths) == 1:
+            continue
+        if source == "downloaded":
+            ranked = sorted(((mean_plddt(path), path) for path in paths), reverse=True)
+            if ranked[0][0] > ranked[1][0]:
+                for _, path in ranked[1:]:
+                    a, b, origin = paths.pop(path)
+                    counts[source]["shadowed"] += 1
+                    inventory.append([a, b, source, path, "shadowed", origin])
+                continue
+        conflicts.append((key, source, sorted(paths)))
     if conflicts:
         lines = "\n".join(f"  {'/'.join(k)} ({s}): {', '.join(p)}" for k, s, p in conflicts[:10])
         sys.exit(f"{len(conflicts)} protein pair(s) have two different {conflicts[0][1]} models; "
