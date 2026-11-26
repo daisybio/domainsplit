@@ -25,6 +25,10 @@ process WRITE_RUN_MANIFEST {
     // manifest key with its file's index.
     val  local_keys
     path local_files,          stageAs: 'local??/file'
+    // BUILD_AF_METADATA's af_metadata.csv / af_inventory.tsv / af_metadata_report.tsv
+    // and, under --frozen_splits, the bundle's bundle_manifest.json; [] otherwise.
+    // Hashed under their file names.
+    path extra_inputs,         stageAs: 'extra/*'
 
     output:
     path "run_manifest.json", emit: manifest
@@ -37,6 +41,7 @@ process WRITE_RUN_MANIFEST {
     def ppidm_args = [ppidm_reports].flatten().findAll { f -> f }.collect { f -> "--input ${f.name}=${f}" }.join(' ')
     def mapping_arg = candidate_pfam_mapping ? "--input candidate_gene_pfam_mapping=${candidate_pfam_mapping}" : ''
     def local_args = local_keys.collect { k, i -> "--local ${k}=${[local_files].flatten()[i]}" }.join(' ')
+    def extra_args = [extra_inputs].flatten().findAll { f -> f }.collect { f -> "--input ${f.name}=${f}" }.join(' ')
     """
     write_run_manifest.py \\
         --base ${base_json} \\
@@ -47,6 +52,7 @@ process WRITE_RUN_MANIFEST {
         ${ppidm_args} \\
         ${mapping_arg} \\
         ${local_args} \\
+        ${extra_args} \\
         --out run_manifest.json \\
         --versions versions.yml \\
         --process-name "${task.process}"

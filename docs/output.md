@@ -145,7 +145,7 @@ their `iptm` is NaN unless the PDB header carries one. pLDDT is in the PDB B-fac
 The PAE submatrix over the two sliced domain windows is at
 `pae/{pfam_id_a}_{pfam_id_b}/{instance_id_a}__{instance_id_b}`:
 
-- float16 and square, with rows and columns ordered [domain A residues, domain B residues].
+- float32 and square, with rows and columns ordered [domain A residues, domain B residues].
 - Rows are aligned residues and columns are scored residues, as in AlphaFold.
 - Attrs `residues_a` and `residues_b` give the UniProt residue numbers.
 - The dataset is absent when the PAE file is missing.
@@ -153,8 +153,21 @@ The PAE submatrix over the two sliced domain windows is at
 A confidence file that is missing is not fatal: it leaves NaN attrs and no PAE. One that is present
 but cannot be parsed, or does not fit its model, stops the run.
 
+`af_metadata/` is the AF model index this run used, rebuilt by `BUILD_AF_METADATA` from
+`--af_downloaded_manifest`, `--af_inferred_dirs` and/or `--af_metadata` on every run:
+
+- `af_metadata.csv`: one model per unordered protein pair, `uniprot_id_a` being chain A of the
+  file, plus a stat fingerprint (`*_size`, `*_mtime_ns`; -1 = file absent) of the model, its PAE
+  and its summary file. A changed fingerprint re-runs the slicing.
+- `af_inventory.tsv`: every candidate with `status` `selected`, `shadowed` (an inferred model
+  of a pair that has a downloaded one), `model_missing` or `exact_duplicate`, and its `origin`.
+- `af_metadata_report.tsv`: those counts per source.
+
 `structure_coverage.tsv` has one row per (`method`, `split`, `label`), with columns
-`instance_pairs`, `with_structure`, `fraction`, `with_pae` and `with_iptm`. Positives and negatives
+`instance_pairs`, `with_structure`, `fraction`, `with_pae`, `with_iptm`, `same_protein_pairs` and
+`same_protein_with_structure`. A same-protein pair has both instances on one protein; its structure
+comes from a homodimer model, so the slice is an inter-chain contact even where the real one may be
+intra-chain. Positives and negatives
 are covered at very different rates, which makes structure features a label leak, so check this
 file before using them.
 
@@ -239,6 +252,33 @@ report being non-empty.
 - `bias_analysis.html` — ppi-splitting's own MultiQC report on the splits it produced.
 
 </details>
+
+### Frozen splits
+
+`frozen_splits/` (every run unless `--export_frozen_splits false`) lets a later run reuse exactly
+this run's instances and splits, so AF3 predictions queued against this run stay valid:
+
+- `fetch/`: FETCH_DOMAIN_META's `sequences.fasta`, `instances.tsv`, `species.tsv`,
+  `go_annotations.tsv` and `dropped_families.tsv` (the sampled domain instances).
+- `split_ddis/split_ddis.csv`: the positive population handed to ppi-splitting.
+- `splits/{family,instance}/<method>/<split>.csv`: what ppi-splitting handed to INGEST_SPLITS.
+- `bundle_manifest.json`: SHA-256 of every file, the split list, the params the bundle depends on
+  (`frozenParamKeys()` in `workflows/domainsplit.nf`), and the final master's membership and
+  protein-sequence fingerprints.
+
+`--frozen_splits <dir>` skips FETCH_DOMAIN_META and PPI_SPLITTING. Three checks guard it:
+
+1. At launch: the params and the (method, split) set must match the bundle.
+2. VERIFY_FROZEN_SPLITS, before ingest: every bundle file hashes to its entry, and this run's
+   positive population (rebuilt from its own sources) equals the frozen one.
+3. CHECK_FROZEN_DB, before structure and the split databases: the final master's membership rows
+   (external test included) and protein sequences match the frozen run's fingerprints.
+
+Pin every source (local copies for each `url_*` and `uniprot_dat_urls`) to the frozen run's
+files, or check 2 or 3 fails. A frozen run does not republish ppi-splitting's own reports
+(`union/data/dropped_families.tsv`, the bias report): those belong to the original run.
+`reports/run_manifest.json` records both fingerprints (`membership_fingerprint`,
+`protein_fingerprint`) for every run.
 
 ### Pipeline information
 

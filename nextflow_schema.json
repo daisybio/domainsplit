@@ -202,6 +202,18 @@
                     "maximum": 1,
                     "fa_icon": "fas fa-percent"
                 },
+                "frozen_splits": {
+                    "type": "string",
+                    "format": "directory-path",
+                    "description": "A `frozen_splits/` directory published by an earlier run. Skips FETCH_DOMAIN_META and PPI_SPLITTING and ingests that run's instances and splits, so AF3 predictions made for it stay valid. Seed, instance_tier, taxa, drop_homomer_ddi, ppi_splitting_multi_negset and the external-test params must equal the bundle's (checked at launch), and this run's positive population must equal the frozen one (VERIFY_FROZEN_SPLITS).",
+                    "fa_icon": "fas fa-snowflake"
+                },
+                "export_frozen_splits": {
+                    "type": "boolean",
+                    "description": "Publish `frozen_splits/` (split CSVs, sampled instances, positive population, SHA-256 manifest) so this run can be reused with --frozen_splits.",
+                    "default": true,
+                    "fa_icon": "fas fa-snowflake"
+                },
                 "ppi_splitting_multi_negset": {
                     "type": "boolean",
                     "description": "Ask ppi-splitting for every negative set of each split row \u2014 plain `ilp` plus `ilp_candidates`, the same sampler restricted to the candidate network, and for `random` also its `uniform` baseline \u2014 which turns 3 method directories into 7 and 11 split databases into 26. On by default: the comma-separated `negative_sampling_method` fan-out it needs is in the pinned submodule. The candidate network must be dense enough that every split can cover itself from it: survival is quadratic in a split's share, because both families of a pair have to land in the same split. Set false to keep one negative set per row (drops the `_hrni` methods). This does not enable ppi-splitting's `--split_only`, which is unsupported from domainsplit.",
@@ -463,11 +475,21 @@
                     "default": "all",
                     "fa_icon": "fas fa-list"
                 },
+                "af_downloaded_manifest": {
+                    "type": "string",
+                    "format": "file-path",
+                    "description": "Raw AFDB heterodimer download manifest (uniprot_id_a,uniprot_id_b,model_entity_id,local_tar_name,path; path is the directory holding <model_entity_id>-model_v1.pdb.zst). Source `downloaded`; it wins over an inferred model of the same pair.",
+                    "fa_icon": "fas fa-file-csv"
+                },
+                "af_inferred_dirs": {
+                    "type": "string",
+                    "description": "Comma-separated AF3 output roots, scanned on every run for <prefix>_<A>_<B>/<prefix>_<A>_<B>_model.cif (source `inferred`). Read in place: must be visible at the same path inside the container.",
+                    "fa_icon": "fas fa-folder-open"
+                },
                 "af_metadata": {
                     "type": "string",
-                    "format": "path",
-                    "description": "CSV uniprot_id_a,uniprot_id_b,path,source (source: downloaded or inferred) pointing at AF3 complex files (a relative path is relative to the CSV). Only read when structure_data_methods is non-empty; pairs without an entry keep has_structure = 0.",
-                    "default": "/nfs/data/CoBiNet_Masterpraktikum/domainsplit/af_metadata.csv",
+                    "format": "file-path",
+                    "description": "Optional ready CSV uniprot_id_a,uniprot_id_b,path,source (source: downloaded or inferred; a relative path is relative to the CSV). Merged with the other two sources by BUILD_AF_METADATA. At least one of the three is required while structure_data_methods is non-empty; pairs without a model keep has_structure = 0.",
                     "fa_icon": "fas fa-file-csv"
                 },
                 "build_scoring_matrix_shards": {

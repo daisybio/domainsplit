@@ -10,7 +10,7 @@ include { ENRICH_STRUCTURAL_AF } from '../../../modules/local/structural/enrich_
 workflow ENRICH_STRUCTURAL {
     take:
     domainsplit_db_in // the enriched master
-    af_metadata       // CSV uniprot_id_a,uniprot_id_b,path,source
+    af_metadata       // CSV uniprot_id_a,uniprot_id_b,path,source[,fingerprint columns]
     methods           // comma-separated methods whose instance pairs are sliced
 
     main:

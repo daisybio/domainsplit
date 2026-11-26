@@ -36,6 +36,7 @@ to fail a finished run.
 import argparse
 import hashlib
 import json
+import os
 import sqlite3
 import sys
 import urllib.request
@@ -85,6 +86,44 @@ def split_counts(db):
     return out
 
 
+def membership_fingerprint(db):
+    """SHA-256 over every membership row as (method, split, pfam_a, pfam_b,
+    instance_a, instance_b, negative), sorted -- no surrogate ids, so two runs
+    with the same splits get the same value. Equal fingerprint = AF3 queues and
+    predictions made against one run are valid for the other."""
+    conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+    h, n = hashlib.sha256(), 0
+    try:
+        for row in conn.execute(
+            "SELECT m.method, m.split, da.pfam_id, db.pfam_id, COALESCE(m.instance_id_a, ''), "
+            "COALESCE(m.instance_id_b, ''), CAST(d.negative AS INTEGER) "
+            "FROM ddi_split_membership m JOIN domain_domain_interaction d ON d.id = m.ddi_id "
+            "JOIN domain da ON da.id = d.domain_id_a JOIN domain db ON db.id = d.domain_id_b "
+            "ORDER BY 1, 2, 3, 4, 5, 6, 7"
+        ):
+            h.update(("\t".join(map(str, row)) + "\n").encode())
+            n += 1
+    finally:
+        conn.close()
+    return {"sha256": h.hexdigest(), "rows": n}
+
+
+def protein_fingerprint(db):
+    """SHA-256 over every (uniprot_id, sequence) of `protein`, sorted: a frozen
+    run reuses the splits' domain coordinates, which are only valid on the
+    same parent sequences."""
+    conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+    h, n = hashlib.sha256(), 0
+    try:
+        for uniprot_id, sequence in conn.execute(
+                "SELECT uniprot_id, COALESCE(sequence, '') FROM protein ORDER BY uniprot_id"):
+            h.update(f"{uniprot_id}\t{sequence}\n".encode())
+            n += 1
+    finally:
+        conn.close()
+    return {"sha256": h.hexdigest(), "rows": n}
+
+
 def sampled_negatives_without_membership(db):
     conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
     try:
@@ -120,7 +159,8 @@ def main(argv=None):
             name, _, path = spec.partition("=")
             if not path:
                 sys.exit(f"{flag} expects NAME=PATH, got {spec!r}")
-            out[name] = path
+            # A staged file's name can carry its stageAs directory (`extra/x.tsv`).
+            out[os.path.basename(name)] = path
         return out
 
     manifest["manual_inputs"] = {
@@ -136,6 +176,8 @@ def main(argv=None):
     }
     manifest["split_counts"] = split_counts(args.db)
     manifest["sampled_negatives_without_membership"] = sampled_negatives_without_membership(args.db)
+    manifest["membership_fingerprint"] = membership_fingerprint(args.db)
+    manifest["protein_fingerprint"] = protein_fingerprint(args.db)
     # ppi-splitting publishes no solver status, so whether an ILP hit its time
     # limit (and returned an incumbent rather than an optimum) is not knowable here.
     manifest["ilp_solver_status"] = "not recorded: ppi-splitting does not publish it"

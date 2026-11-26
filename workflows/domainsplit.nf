@@ -28,9 +28,11 @@ include { PPI_SPLITTING               } from '../subworkflows/external/ppi-split
 include { FETCH_DOMAIN_META           } from '../subworkflows/external/ppi-splitting/processes/data_prep.nf'
 include { GET_LENGTHS                 } from '../subworkflows/external/ppi-splitting/processes/data_prep.nf'
 include { SUBSET_DOMAIN_DATA          } from '../subworkflows/external/ppi-splitting/processes/data_prep.nf'
+include { EXPORT_FROZEN_SPLITS ; VERIFY_FROZEN_BUNDLE ; VERIFY_FROZEN_SPLITS ; CHECK_FROZEN_DB } from '../modules/local/frozen_splits/main.nf'
 
 // AF inclusion
 include { ENRICH_STRUCTURAL           } from '../subworkflows/local/enrich_structural/main.nf'
+include { SCAN_AF_METADATA ; BUILD_AF_METADATA } from '../modules/local/structural/build_af_metadata/main.nf'
 include { ANNOTATE_DDI                } from '../subworkflows/local/annotate_ddi/main.nf'
 
 
@@ -157,6 +159,81 @@ def rejectBareFlag(name) {
     def v = params[name]
     if (v instanceof Boolean || v.toString() == 'true') {
         error("--${name} arrived as '${v}': Nextflow parses `--${name} ''` as a bare flag. To pass an empty value (off), write `--${name}=` or set it in a -params-file.")
+    }
+}
+
+// Params a frozen split bundle depends on: a `--frozen_splits` run must use the
+// values the bundle was exported with. Seed and universe decide the instances and
+// splits; the external sources decide the family union FETCH_DOMAIN_META covered.
+def frozenParamKeys() {
+    ['seed', 'instance_tier', 'instance_tiers', 'swissprot_taxon_ids', 'drop_homomer_ddi',
+     'ppi_splitting_multi_negset', 'external_test_sources', 'external_test_balance', 'ppidm_classes']
+}
+
+// Comparable string form: a list and its comma-joined string, and `a,b` vs
+// `a, b`, give the same value.
+def frozenParamValue(v) {
+    if (v == null) {
+        return null
+    }
+    def items = v instanceof List ? v*.toString() : v.toString().tokenize(',')
+    return items*.trim().findAll { x -> x }.join(',')
+}
+
+def frozenParams() {
+    frozenParamKeys().collectEntries { k -> [(k): frozenParamValue(params[k])] }
+}
+
+// The (method, split) pairs INGEST_SPLITS receives from ppi-splitting on this
+// configuration: the same rule as family_splits below (an external row brings
+// only train/validation; its test comes from BUILD_EXTERNAL_TEST).
+def ingestedSplits() {
+    splitRows().collectMany { row ->
+        activeNegsets(row).collectMany { negset ->
+            splitsOf(row, negset).collect { split -> "${row.negsets[negset]}/${split}".toString() }
+        }
+    }.toSorted()
+}
+
+// --frozen_splits <dir>: [dir: Path, manifest: Map], or null. Checked at launch:
+// the bundle's params and (method, split) set must match this run; file
+// integrity and the positive population are checked by VERIFY_FROZEN_SPLITS.
+def frozenBundle() {
+    if (!params.frozen_splits) {
+        return null
+    }
+    rejectBareFlag('frozen_splits')
+    def dir = file(params.frozen_splits, checkIfExists: true)
+    def mf = dir.resolve('bundle_manifest.json')
+    if (!mf.exists()) {
+        error("--frozen_splits ${dir}: no bundle_manifest.json (pass the published frozen_splits/ directory)")
+    }
+    def manifest = new groovy.json.JsonSlurper().parse(mf.toFile())
+    if (manifest.format != 2) {
+        error("--frozen_splits ${dir}: bundle format ${manifest.format}, this pipeline reads 2; re-export it")
+    }
+    def diff = frozenParamKeys().findAll { k -> manifest.params[k] != frozenParamValue(params[k]) }
+    if (diff) {
+        error("--frozen_splits ${dir} was exported with different params: " +
+            diff.collect { k -> "${k}=${manifest.params[k]} (this run: ${params[k]})" }.join(', '))
+    }
+    def frozen_set = manifest.family.collect { e -> "${e.method}/${e.split}".toString() }.toSorted()
+    if (frozen_set != ingestedSplits()) {
+        error("--frozen_splits ${dir} holds ${frozen_set}, this configuration ingests ${ingestedSplits()}")
+    }
+    return [dir: dir, manifest: manifest]
+}
+
+// AF3 job roots scanned by BUILD_AF_METADATA, absolute (they are read in place).
+def afInferredDirs() {
+    rejectBareFlag('af_inferred_dirs')
+    def dirs = (params.af_inferred_dirs ?: '').toString().tokenize(',')*.trim().findAll { d -> d }
+    dirs.collect { d ->
+        def f = file(d)
+        if (!f.isDirectory()) {
+            error("--af_inferred_dirs: ${d} is not a directory")
+        }
+        f.toAbsolutePath().toString()
     }
 }
 
@@ -442,13 +519,36 @@ Use all_species_reviewed or human_any_review_status.""")
         log.warn "--cache_dir ${cache_dir} does not exist yet; it will be created."
     }
 
-    fetched = FETCH_DOMAIN_META(
-        families.map { fams -> tuple([id: 'union'], fams) },
-        clans_ch,
-        regions_ch,
-        sprot_ch,
-        channel.value(cache_dir),
-    )
+    // A frozen run takes FETCH_DOMAIN_META's outputs (the sampled instances) and
+    // the splits from the bundle instead of drawing them again.
+    def frozen = frozenBundle()
+    if (frozen) {
+        log.info "--frozen_splits ${frozen.dir}: FETCH_DOMAIN_META and PPI_SPLITTING are skipped; instances and splits come from the bundle."
+        // Nothing reads a bundle file before VERIFY_FROZEN_BUNDLE has hashed them all.
+        def bundle_ok = VERIFY_FROZEN_BUNDLE(frozen.dir).ok
+        def bundled = { name ->
+            bundle_ok.map { _ok -> tuple([id: 'union'], frozen.dir.resolve(frozen.manifest.fetch[name])) }.first()
+        }
+        fetched_sequences = bundled.call('sequences.fasta')
+        fetched_go        = bundled.call('go_annotations.tsv')
+        fetched_species   = bundled.call('species.tsv')
+        fetched_instances = bundled.call('instances.tsv')
+        fetched_dropped   = bundled.call('dropped_families.tsv')
+    }
+    else {
+        fetched = FETCH_DOMAIN_META(
+            families.map { fams -> tuple([id: 'union'], fams) },
+            clans_ch,
+            regions_ch,
+            sprot_ch,
+            channel.value(cache_dir),
+        )
+        fetched_sequences = fetched.sequences
+        fetched_go        = fetched.go_annotations
+        fetched_species   = fetched.species
+        fetched_instances = fetched.instances
+        fetched_dropped   = fetched.dropped_families
+    }
 
     // The families Pfam had nothing usable for, one row per family with a
     // `reason` column. Taken from the channel, never read back from the
@@ -466,7 +566,7 @@ Use all_species_reviewed or human_any_review_status.""")
     // precomputed `domain_instances` and DATA_PREP_DDI never fetches. Nothing
     // may block on either of them: a run that drops nothing still emits the
     // header-only file.
-    dropped_families = fetched.dropped_families.map { _meta, f -> f }
+    dropped_families = fetched_dropped.map { _meta, f -> f }
     dropped_families
         .map { f -> f.readLines().drop(1).findAll { line -> line.trim() }.countBy { line -> line.tokenize('\t')[-1] } }
         .subscribe { counts ->
@@ -480,11 +580,10 @@ Use all_species_reviewed or human_any_review_status.""")
             }
         }
 
-    union_sequences = fetched.sequences.map      { _meta, f -> f }
-    union_species   = fetched.species.map        { _meta, f -> f }
-    union_instances = fetched.instances.map      { _meta, f -> f }
-    union_go        = fetched.go_annotations.map { _meta, f -> f }
-    union_lengths   = GET_LENGTHS(fetched.sequences).map { _meta, f -> f }
+    union_sequences = fetched_sequences.map { _meta, f -> f }
+    union_species   = fetched_species.map   { _meta, f -> f }
+    union_instances = fetched_instances.map { _meta, f -> f }
+    union_go        = fetched_go.map        { _meta, f -> f }
 
     // The split population: 3did positives only, restricted to families that
     // actually resolved to instances. Under `instance_tier = human_reviewed` a
@@ -492,61 +591,78 @@ Use all_species_reviewed or human_any_review_status.""")
     // the database later, in PRUNE_UNREPRESENTED_DDIS.
     split_ddis = EXPORT_SPLIT_DDIS(domainsplit_db_ddi, union_instances, '3did').ddis
 
-    subset = SUBSET_DOMAIN_DATA(
-        split_ddis.map { ddis -> tuple([id: '3did'], ddis) },
-        union_sequences,
-        union_go,
-        union_species,
-        union_lengths,
-        union_instances,
-    )
-
-    //
-    // Splitting + negative sampling, three dataset rows over one shared
-    // positive set and one shared precomputed data prep.
-    //
-    candidate_network = COLLECT_DDI_DATA.out.candidate_network
-
-    datasets_ch = channel.fromList(splitRows())
-        .combine(split_ddis)
-        .combine(subset.sequences.map { _meta, f -> f })
-        .combine(subset.species.map   { _meta, f -> f })
-        .combine(subset.instances.map { _meta, f -> f })
-        .combine(candidate_network)
-        .map { row, ppis, sequences, species, instances, candidates ->
-            // A candidate network is passed only to rows that actually ask for
-            // the `ilp_candidates` negative set; supplying it otherwise makes
-            // ppi-splitting warn and ignore it. An absent optional file is [],
-            // never null -- null blows up staging.
-            def wants_candidates = 'ilp_candidates' in activeNegsets(row)
-            def files = [
-                ppis             : ppis,
-                sequences        : sequences,
-                go_annotations   : [],
-                species          : species,
-                domain_instances : instances,
-                blast_results    : [],
-                candidate_network: wants_candidates ? candidates : [],
-                partition        : [],
-                node_mapping     : [],
-            ]
-            tuple(metaOf(row), files)
+    if (frozen) {
+        // The bundle's splits, released to INGEST_SPLITS only once
+        // VERIFY_FROZEN_SPLITS has checked the bundle and that this run's
+        // positive population is the frozen one.
+        def verified = VERIFY_FROZEN_SPLITS(frozen.dir, split_ddis).ok
+        def fromBundle = { level ->
+            channel.fromList(frozen.manifest[level].collect { e -> tuple(e.method, e.split, frozen.dir.resolve(e.path)) })
+                .combine(verified)
+                .map { method, split, csv, _ok -> tuple(method, split, csv) }
         }
+        family_splits   = fromBundle.call('family')
+        instance_splits = fromBundle.call('instance')
+    }
+    else {
+        union_lengths = GET_LENGTHS(fetched_sequences).map { _meta, f -> f }
+        subset = SUBSET_DOMAIN_DATA(
+            split_ddis.map { ddis -> tuple([id: '3did'], ddis) },
+            union_sequences,
+            union_go,
+            union_species,
+            union_lengths,
+            union_instances,
+        )
 
-    ppi = PPI_SPLITTING(datasets_ch)
+        //
+        // Splitting + negative sampling, three dataset rows over one shared
+        // positive set and one shared precomputed data prep.
+        //
+        candidate_network = COLLECT_DDI_DATA.out.candidate_network
 
-    // (meta, negset, label, csv) -> (method, split, csv). `test_balanced` /
-    // `test_realistic` of the external_test row are empty files (its test
-    // fraction is 0) and are dropped here.
-    def negsetMethod = splitRows().collectEntries { row -> [(row.id): row.negsets] }
-    def internalTest = splitRows().collectEntries { row -> [(row.id): row.internal_test] }
+        datasets_ch = channel.fromList(splitRows())
+            .combine(split_ddis)
+            .combine(subset.sequences.map { _meta, f -> f })
+            .combine(subset.species.map   { _meta, f -> f })
+            .combine(subset.instances.map { _meta, f -> f })
+            .combine(candidate_network)
+            .map { row, ppis, sequences, species, instances, candidates ->
+                // A candidate network is passed only to rows that actually ask for
+                // the `ilp_candidates` negative set; supplying it otherwise makes
+                // ppi-splitting warn and ignore it. An absent optional file is [],
+                // never null -- null blows up staging.
+                def wants_candidates = 'ilp_candidates' in activeNegsets(row)
+                def files = [
+                    ppis             : ppis,
+                    sequences        : sequences,
+                    go_annotations   : [],
+                    species          : species,
+                    domain_instances : instances,
+                    blast_results    : [],
+                    candidate_network: wants_candidates ? candidates : [],
+                    partition        : [],
+                    node_mapping     : [],
+                ]
+                tuple(metaOf(row), files)
+            }
 
-    family_splits = ppi.labelled
-        .filter { meta, _negset, label, _csv -> internalTest[meta.id] || !label.startsWith('test') }
-        .map    { meta, negset, label, csv -> tuple(negsetMethod[meta.id][negset], publishedSplit(negset, label), csv) }
-    instance_splits = ppi.labelled_inst
-        .filter { meta, _negset, label, _csv -> internalTest[meta.id] || !label.startsWith('test') }
-        .map    { meta, negset, label, csv -> tuple(negsetMethod[meta.id][negset], publishedSplit(negset, label), csv) }
+        ppi = PPI_SPLITTING(datasets_ch)
+
+        // (meta, negset, label, csv) -> (method, split, csv). `test_balanced` /
+        // `test_realistic` of the external_test row are empty files (its test
+        // fraction is 0) and are dropped here.
+        def negsetMethod = splitRows().collectEntries { row -> [(row.id): row.negsets] }
+        def internalTest = splitRows().collectEntries { row -> [(row.id): row.internal_test] }
+
+        family_splits = ppi.labelled
+            .filter { meta, _negset, label, _csv -> internalTest[meta.id] || !label.startsWith('test') }
+            .map    { meta, negset, label, csv -> tuple(negsetMethod[meta.id][negset], publishedSplit(negset, label), csv) }
+        instance_splits = ppi.labelled_inst
+            .filter { meta, _negset, label, _csv -> internalTest[meta.id] || !label.startsWith('test') }
+            .map    { meta, negset, label, csv -> tuple(negsetMethod[meta.id][negset], publishedSplit(negset, label), csv) }
+
+    }
 
     //
     // Ingest, then the external sources, then prune -- in that order.
@@ -696,6 +812,44 @@ Use all_species_reviewed or human_any_review_status.""")
 
     enriched_db = ENRICH_DDI_DATABASE.out.domainsplit_db
 
+    // Every normal run exports its splits, so any run can be frozen later with
+    // --frozen_splits <outdir>/frozen_splits. Here rather than next to
+    // PPI_SPLITTING: the bundle records the final master's fingerprints.
+    if (!frozen && params.export_frozen_splits.toString().toBoolean()) {
+        def specsAndFiles = { ch ->
+            ch.toSortedList { a, b -> "${a[0]}/${a[1]}" <=> "${b[0]}/${b[1]}" }
+                .map { items -> [items.collect { m, sp, _f -> [m, sp] }, items.collect { _m, _sp, f -> f }] }
+        }
+        def fam  = specsAndFiles.call(family_splits)
+        def inst = specsAndFiles.call(instance_splits)
+        EXPORT_FROZEN_SPLITS(
+            fetched_sequences.mix(fetched_go, fetched_species, fetched_instances, fetched_dropped)
+                .map { _meta, f -> f }.collect(),
+            split_ddis,
+            fam.map { specs, _files -> specs },
+            fam.map { _specs, files -> files },
+            inst.map { specs, _files -> specs },
+            inst.map { _specs, files -> files },
+            groovy.json.JsonOutput.toJson(frozenParams()),
+            enriched_db,
+        )
+        ch_versions = ch_versions.mix(EXPORT_FROZEN_SPLITS.out.versions)
+    }
+
+    // A frozen run releases its master to structure and the split databases only
+    // once CHECK_FROZEN_DB has matched its membership and protein sequences to
+    // the frozen run's: otherwise AF3 work done for that run would be applied to
+    // a different dataset. WRITE_RUN_MANIFEST waits on it too, so a rejected
+    // master leaves no fresh manifest.
+    if (frozen) {
+        release_db = enriched_db
+            .combine(CHECK_FROZEN_DB(frozen.dir, enriched_db).ok)
+            .map { db, _ok -> db }
+    }
+    else {
+        release_db = enriched_db
+    }
+
     def subset_targets = splitRows().collectMany { row ->
         activeNegsets(row).collectMany { negset ->
             def method = row.negsets[negset]
@@ -713,9 +867,23 @@ Use all_species_reviewed or human_any_review_status.""")
     //
     def structure_methods = structureMethods(subset_targets*.method.unique())
     if (structure_methods) {
+        // af_metadata is always rebuilt from its sources (BUILD_AF_METADATA):
+        // deduplicated, downloaded before inferred, fingerprinted. Any
+        // combination of the three inputs may be given.
+        def af_dirs     = afInferredDirs()
+        def af_manifest = params.af_downloaded_manifest ? file(params.af_downloaded_manifest, checkIfExists: true) : []
+        def af_manual   = params.af_metadata ? file(params.af_metadata, checkIfExists: true) : []
+        if (!af_manifest && !af_manual && !af_dirs) {
+            error("Structure is on (--structure_data_methods ${params.structure_data_methods}) but no AF model source is set: give --af_downloaded_manifest, --af_inferred_dirs and/or --af_metadata, or turn structure off with --structure_data_methods=")
+        }
+        SCAN_AF_METADATA(af_manifest, af_manual, af_dirs)
+        BUILD_AF_METADATA(af_manifest, af_manual, af_dirs, SCAN_AF_METADATA.out.digest)
+        af_metadata_csv = BUILD_AF_METADATA.out.af_metadata
+        af_manifest_files = BUILD_AF_METADATA.out.af_metadata.mix(SCAN_AF_METADATA.out.inventory, SCAN_AF_METADATA.out.report)
+        ch_versions = ch_versions.mix(BUILD_AF_METADATA.out.versions)
         ENRICH_STRUCTURAL(
-            enriched_db,
-            file(params.af_metadata, checkIfExists: true),
+            release_db,
+            af_metadata_csv,
             structure_methods.join(','),
         )
         ANNOTATE_DDI(
@@ -727,7 +895,8 @@ Use all_species_reviewed or human_any_review_status.""")
         ch_versions = ch_versions.mix(ENRICH_STRUCTURAL.out.versions, ANNOTATE_DDI.out.versions)
     }
     else {
-        scored_db = enriched_db
+        scored_db = release_db
+        af_manifest_files = channel.empty()
         log.info "--structure_data_methods is empty: no structures are sliced or scored, and every has_structure stays 0."
     }
 
@@ -768,7 +937,8 @@ Use all_species_reviewed or human_any_review_status.""")
     def local_paths = local_urls.values().toUnique()
     WRITE_RUN_MANIFEST(
         channel.of(manifestBase(uniprot_dats)).collectFile(name: 'manifest_base.json'),
-        enriched_db,
+        // release_db: a frozen run whose master fails CHECK_FROZEN_DB publishes no manifest.
+        release_db,
         // [] when --external_test_sources left that source out.
         (ppidmComputed() || externalSourceWanted('single_domain_ppi')) && params.url_hippie ? file(params.url_hippie) : [],
         params.ppidm_tsv ? file(params.ppidm_tsv, checkIfExists: true) : [],
@@ -779,6 +949,8 @@ Use all_species_reviewed or human_any_review_status.""")
         COLLECT_DDI_DATA.out.candidate_pfam_mapping,
         local_urls.collect { k, f -> [k, local_paths.indexOf(f)] },
         local_paths,
+        af_manifest_files.mix(frozen ? channel.value(frozen.dir.resolve('bundle_manifest.json')) : channel.empty())
+            .collect().ifEmpty([]),
     )
 
     //

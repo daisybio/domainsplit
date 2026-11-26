@@ -19,16 +19,24 @@ def test_manifest():
         db = os.path.join(d, "m.sqlite3")
         conn = sqlite3.connect(db)
         conn.executescript(
-            "CREATE TABLE domain_domain_interaction(id INTEGER PRIMARY KEY, negative INTEGER, source TEXT);"
-            "CREATE TABLE ddi_split_membership(ddi_id INTEGER, method TEXT, split TEXT);"
-            "INSERT INTO domain_domain_interaction VALUES (1,0,'3did'),(2,1,'sampled_negative'),"
-            " (3,1,'sampled_negative'),(4,0,'3did'),"
-            " (5,1,'sampled_negative'),(6,1,'Negatome, sampled_negative'),(7,1,'Negatome'),(8,1,'sampledXnegative');"
+            "CREATE TABLE domain(id INTEGER PRIMARY KEY, pfam_id TEXT);"
+            "INSERT INTO domain VALUES (1,'PF00001'),(2,'PF00002');"
+            "CREATE TABLE protein(id INTEGER PRIMARY KEY, uniprot_id TEXT, sequence TEXT);"
+            "INSERT INTO protein VALUES (1,'P1','MKV'),(2,'P2',NULL);"
+            "CREATE TABLE domain_domain_interaction(id INTEGER PRIMARY KEY, domain_id_a, domain_id_b,"
+            " negative INTEGER, source TEXT);"
+            "CREATE TABLE ddi_split_membership(ddi_id INTEGER, method TEXT, split TEXT,"
+            " instance_id_a TEXT, instance_id_b TEXT);"
+            "INSERT INTO domain_domain_interaction VALUES (1,1,2,0,'3did'),(2,1,1,1,'sampled_negative'),"
+            " (3,2,2,1,'sampled_negative'),(4,1,2,0,'3did'),"
+            " (5,1,2,1,'sampled_negative'),(6,1,2,1,'Negatome, sampled_negative'),(7,1,2,1,'Negatome'),"
+            " (8,1,2,1,'sampledXnegative');"
             # DDI 1 has three instance pairs, DDIs 2 and 3 one each: family ratio 2.0, instance ratio 2/3.
             "INSERT INTO ddi_split_membership VALUES"
-            " (1,'random','train'),(1,'random','train'),(1,'random','train'),"
-            " (2,'random','train'),(3,'random','train'),"
-            " (4,'random_hrni','validation');"
+            " (1,'random','train','PF00001_P1_1_9','PF00002_P2_1_9'),(1,'random','train','PF00001_P3_1_9','PF00002_P2_1_9'),"
+            " (1,'random','train','PF00001_P4_1_9','PF00002_P2_1_9'),"
+            " (2,'random','train','PF00001_P1_1_9','PF00001_P3_1_9'),(3,'random','train',NULL,NULL),"
+            " (4,'random_hrni','validation','PF00001_P1_1_9','PF00002_P2_1_9');"
         )
         conn.commit()
         conn.close()
@@ -60,6 +68,30 @@ def test_manifest():
     assert m["split_counts"]["random_hrni"]["validation"]["negatives_per_positive"] == 0.0
     assert m["url_headers"]["url_3did"] == {"url": "https://example.invalid/x"}
     assert m["url_headers"]["url_pfam2go"] == {"url": "/data/pfam2go", "sha256": hashlib.sha256(b"a\tb\n").hexdigest()}
+    assert m["membership_fingerprint"]["rows"] == 6
+    assert len(m["membership_fingerprint"]["sha256"]) == 64
+    assert m["protein_fingerprint"]["rows"] == 2
+
+
+def test_membership_fingerprint_ignores_surrogate_ids_and_order():
+    def db(path, ids, order):
+        conn = sqlite3.connect(path)
+        conn.executescript(
+            "CREATE TABLE domain(id INTEGER PRIMARY KEY, pfam_id TEXT);"
+            "CREATE TABLE domain_domain_interaction(id INTEGER PRIMARY KEY, domain_id_a, domain_id_b, negative);"
+            "CREATE TABLE ddi_split_membership(ddi_id, method, split, instance_id_a, instance_id_b);")
+        conn.executemany("INSERT INTO domain VALUES (?,?)", [(ids[0], "PF1"), (ids[1], "PF2")])
+        conn.execute("INSERT INTO domain_domain_interaction VALUES (?,?,?,0)", (ids[2], ids[0], ids[1]))
+        rows = [(ids[2], "random", "train", "PF1_A_1_2", "PF2_B_1_2"), (ids[2], "random", "test", "PF1_C_1_2", "PF2_B_1_2")]
+        conn.executemany("INSERT INTO ddi_split_membership VALUES (?,?,?,?,?)", rows[::order])
+        conn.commit()
+        conn.close()
+        return write_run_manifest.membership_fingerprint(path)
+
+    with tempfile.TemporaryDirectory() as d:
+        a = db(os.path.join(d, "a.sqlite3"), (1, 2, 10), 1)
+        b = db(os.path.join(d, "b.sqlite3"), (7, 3, 99), -1)
+    assert a == b
 
 
 if __name__ == "__main__":

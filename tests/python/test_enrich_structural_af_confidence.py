@@ -117,7 +117,7 @@ def test_afdb_pae_is_sliced_in_row_orientation_and_reports_list_missing_pairs():
         assert attrs["af_source"] == "downloaded"
         assert all(math.isnan(attrs[k]) for k in ("iptm", "ptm", "ranking_score"))
         assert "chain_pair_iptm" not in attrs
-        assert pae.dtype == np.float16
+        assert pae.dtype == np.float32
         np.testing.assert_array_equal(pae, PAE[np.ix_(ROW_IDX, ROW_IDX)])
         assert list(pattrs["residues_a"]) == list(range(5, 16))
         assert list(pattrs["residues_b"]) == list(range(3, 10))

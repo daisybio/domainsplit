@@ -291,7 +291,7 @@ def slice_confidence(conf, model, chain_a, start_a, end_a, chain_b, start_b, end
             raise ValueError(f"chain {chain} {start}-{end}: residue(s) without a unique PAE token")
         rows += idx
         resnums.append(np.array([r.id[1] for r in sel], dtype=np.int32))
-    pae = conf["pae"][np.ix_(rows, rows)].astype(np.float16)
+    pae = conf["pae"][np.ix_(rows, rows)].astype(np.float32)
     return attrs, pae, resnums[0], resnums[1]
 
 
@@ -496,10 +496,17 @@ def write_reports(db_path, methods, reasons, with_pae, with_iptm, coverage_path,
     df["with_structure"] = df["has_structure"].astype(int)
     df["with_pae"] = [int(p in with_pae) for p in pairs]
     df["with_iptm"] = [int(p in with_iptm) for p in pairs]
+    # Both instances on one protein: its "complex" is a homodimer model, so the
+    # slice is an inter-chain contact even where the real one may be intra-chain.
+    protein = lambda i: utils_struct.extract_data_from_instance_id(i)[1]  # noqa: E731
+    df["same_protein"] = [int(protein(a) == protein(b)) for a, b in pairs]
+    df["same_protein_with_structure"] = df["same_protein"] * df["with_structure"]
 
     cov = (df.groupby(["method", "split", "label"])
              .agg(instance_pairs=("with_structure", "size"), with_structure=("with_structure", "sum"),
-                  with_pae=("with_pae", "sum"), with_iptm=("with_iptm", "sum"))
+                  with_pae=("with_pae", "sum"), with_iptm=("with_iptm", "sum"),
+                  same_protein_pairs=("same_protein", "sum"),
+                  same_protein_with_structure=("same_protein_with_structure", "sum"))
              .reset_index())
     cov.insert(5, "fraction", (cov["with_structure"] / cov["instance_pairs"]).round(4))
     cov.to_csv(coverage_path, sep="\t", index=False)
