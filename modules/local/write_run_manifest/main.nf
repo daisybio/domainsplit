@@ -26,8 +26,9 @@ process WRITE_RUN_MANIFEST {
     val  local_keys
     path local_files,          stageAs: 'local??/file'
     // BUILD_AF_METADATA's af_metadata.csv / af_inventory.tsv / af_metadata_report.tsv
-    // and, under --frozen_splits, the bundle's bundle_manifest.json; [] otherwise.
-    // Hashed under their file names.
+    // BUILD_AF3_QUEUE's af3_queue.json, STRUCTURE_COVERAGE_BALANCE's
+    // structure_coverage_balance.json (also embedded) and, under --frozen_splits,
+    // the bundle's bundle_manifest.json; [] otherwise. Hashed under their file names.
     path extra_inputs,         stageAs: 'extra/*'
 
     output:

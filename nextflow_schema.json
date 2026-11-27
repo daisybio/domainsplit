@@ -475,6 +475,44 @@
                     "default": "all",
                     "fa_icon": "fas fa-list"
                 },
+                "structure_balance_coverage": {
+                    "type": "boolean",
+                    "description": "Coverage-balance guard after scoring: per (method, split), mask has_structure/z_score so structure coverage does not differ between labels; a split below structure_min_coverage loses all its structures. has_structure_raw keeps the unmasked value; reports/structure_coverage_balance.tsv is written either way.",
+                    "default": true,
+                    "fa_icon": "fas fa-balance-scale"
+                },
+                "structure_min_coverage": {
+                    "type": "number",
+                    "description": "Minimum DDI structure coverage (both labels together, positives, negatives) a split needs to keep any structure under structure_balance_coverage.",
+                    "default": 0.3,
+                    "minimum": 0,
+                    "maximum": 1,
+                    "fa_icon": "fas fa-percent"
+                },
+                "domain_metadata": {
+                    "type": "boolean",
+                    "description": "Write metadata/<method>/domain_metadata.csv: ProtParam sequence features per membership instance (domainbenchmark --metadata input).",
+                    "default": true,
+                    "fa_icon": "fas fa-table"
+                },
+                "ddi_metadata": {
+                    "type": "boolean",
+                    "description": "Write metadata/<method>/ddi_metadata.csv: af_* interface scores (pDockQ, pDockQ2, LIS, ipSAE, ipTM_d0chn, ...) per structured instance pair from structures.h5. A pair masked by the coverage guard in any split of a method is left out of that method. Header-only when structure is off.",
+                    "default": true,
+                    "fa_icon": "fas fa-table"
+                },
+                "ddi_metadata_pae_cutoff": {
+                    "type": "number",
+                    "description": "PAE cutoff (strict <, Angstrom) for LIS, ipSAE and numberOfInteractions in ddi_metadata.csv.",
+                    "default": 12.0,
+                    "minimum": 0
+                },
+                "ddi_metadata_contact_cutoff": {
+                    "type": "number",
+                    "description": "CB-CB contact cutoff (strict <, Angstrom) for ddi_metadata.csv.",
+                    "default": 8.0,
+                    "minimum": 0
+                },
                 "af_downloaded_manifest": {
                     "type": "string",
                     "format": "file-path",

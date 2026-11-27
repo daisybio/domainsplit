@@ -13,6 +13,7 @@ The pipeline is built using [Nextflow](https://www.nextflow.io/) and produces:
 - [Master database](#master-database) - the single enriched SQLite database
 - [Split databases](#split-databases) - one database per (splitting method, split)
 - [Domain embeddings](#domain-embeddings) - one HDF5 per embedding model
+- [Enrichment metadata](#enrichment-metadata) - per-method `domain_metadata.csv` / `ddi_metadata.csv` for domainbenchmark
 - [Reports](#reports) - what left the database, or failed to enter it
 - [Splitting inputs and diagnostics](#splitting-inputs-and-diagnostics)
 - [Pipeline information](#pipeline-information) - Report metrics generated during the workflow execution
@@ -127,10 +128,13 @@ Which models run is `--embedding_models_domainbench` (default `esm3,esmc,prott5`
 - `structures/structures.h5`
 - `structures/structure_coverage.tsv`
 - `structures/af3_to_model/<method>.tsv`, `structures/af3_to_model/all_methods.tsv`
+- `structures/af3_to_model/queue.tsv`, `queue_summary.txt`, `unusable_models.tsv`
+- `reports/structure_coverage_balance.tsv`, `reports/structure_coverage_balance.json`
 
 </details>
 
-Written only for the methods in `--structure_data_methods`.
+Slicing, `structure_coverage.tsv` and `af3_to_model/` cover only the methods in
+`--structure_data_methods`; the balance reports cover every method (see below).
 
 `structures.h5` holds each instance pair's sliced two-chain PDB as gzip bytes at
 `{pfam_id_a}_{pfam_id_b}/{instance_id_a}__{instance_id_b}`. Each slice dataset carries these attrs:
@@ -171,15 +175,90 @@ intra-chain. Positives and negatives
 are covered at very different rates, which makes structure features a label leak, so check this
 file before using them.
 
-`af3_to_model/` lists the protein pairs to run AF3 on: one row per unordered UniProt pair
-(`uniprot_id_a` < `uniprot_id_b`) with at least one membership instance pair that has no structure.
+`af3_to_model/<method>.tsv` and `all_methods.tsv` are gap reports: one row per unordered UniProt
+pair (`uniprot_id_a` <= `uniprot_id_b`; equal for two domains of one protein) with at least one
+membership instance pair that has no structure. They include pairs that already have a model; the
+submission list is `queue.tsv` below.
 
 - `reason`: comma-joined, from `no_af_metadata_entry`, `file_missing`, `file_unreadable` and
   `slice_failed`.
 - Also `n_instance_pairs`, `labels` and `splits`.
 - `all_methods.tsv` adds a `methods` column.
 
-Nothing is hidden to equalise coverage. The task log only warns about the gaps.
+`queue.tsv` (`BUILD_AF3_QUEUE`, from the master before the guard below) is the AF3 submission
+order: every protein pair of a structure method's instance pairs that has **no** row in
+`af_metadata.csv`, listed once, at the first level that needs it. Levels, in order:
+`minimal_leakage`, `minimal_leakage_hrni`, `random_ilp`, `random_hrni` (train, validation,
+test_matched_1_1), `external_test`, `external_test_hrni` (train, validation, test), `random` (train,
+validation, test_uniform_1_1), then every method's `test_uniform_1_10`. A split matching no level
+fails the run. Columns `level`, `level_name`, `uniprot_a` <= `uniprot_b` (equal: a homodimer job), `labels` (`pos`, `neg`,
+`pos,neg`), `splits` (`<method>/<split>` within that level), `n_instance_pairs`. Plain TSV: one
+header line, no comment lines. Within a level, rows are ordered by CRC32(`seed:uniprot_a:uniprot_b`),
+so a partly submitted level is label-mixed. Keep levels 1-2 only:
+`awk -F'\t' 'NR == 1 || $1 <= 2' queue.tsv`. `queue_summary.txt` has one line per selected level
+with its pairs (`X pos, Y neg[, Z pairs]`; a pair with both labels counts in both numbers); the same
+counts are in `run_manifest.json` (`af3_queue`).
+
+`unusable_models.tsv` lists the pairs that do have a model, but none of whose instance pairs could
+be sliced from it, with the gap report's `reason` and the model's `source` and `path`. They are not
+in the queue.
+
+`structure_coverage_balance.tsv` (`STRUCTURE_COVERAGE_BALANCE`, after scoring,
+`--structure_balance_coverage`, default on) has one row per (`method`, `split`, `label`) of every
+method: `ddis`,
+`covered_before`, `covered_after`, `masked`, `fraction_before`, `fraction_after` (DDIs with at least
+one structured instance pair) and `action`:
+
+- `masked_all`: DDI coverage of both labels together, of positives or of negatives is below
+  `--structure_min_coverage` (0.3). Every structure of that split is masked.
+- `balanced`: the better-covered label keeps `floor(f_low * n_high)` of its covered DDIs, chosen by
+  CRC32(`seed:pfam_a:pfam_b`) rank; the rest are masked. With few DDIs the floor can leave it below
+  the other label.
+- `single_label`: only one label in the split, nothing masked. `off`: guard disabled.
+
+Masking sets `has_structure = 0` and `z_score = NULL` on that split's rows of the DDI and deletes
+its `ddi_interaction_confirmed` row for the method. That row is per method, not per split, so a
+positive shared by `test_matched_1_1` and `test_uniform_1_10` loses it when either split masks it. `has_structure_raw` keeps the unmasked value and
+`structures.h5` is unchanged; `structure_coverage.tsv` and `af3_to_model/` describe the unmasked
+state. A split with `masked_all` has no `has_structure = 1` row at all.
+
+### Enrichment metadata
+
+<details markdown="1">
+<summary>Output files</summary>
+
+- `metadata/<method>/domain_metadata.csv` (`EXPORT_DOMAIN_METADATA`, `--domain_metadata`, default
+  on) — one row per `ddi_split_membership` instance of that method: `instance_id, pfam_id,
+  uniprot_id` and 21 ProtParam features of `protein.sequence[start-1:end]` (ported from master_ct's
+  `create_protein_domain_metadata.py`; `isoelectric_point` spelled correctly, no sequence column,
+  no InterPro counters). An instance whose domain sequence holds `X` has no row; Z/B/U/O are
+  computed as Q/N/C/K; flexibility is empty for a domain of 9 residues or fewer.
+- `metadata/<method>/ddi_metadata.csv` (`EXPORT_DDI_METADATA`, `--ddi_metadata`, default on) — one
+  row per structured instance pair of that method, in membership orientation: `pfam_id_a/b,
+  uniprot_id_a/b, instance_id_a/b, source` and `af_min_cb_dist, af_pDockQ, af_pDockQ2_AB/BA,
+  af_LIS_AB/BA, af_ipSAE_AB/BA, af_ipTM_d0chn_AB/BA, af_numberOfInteractions`, scored from the slice
+  and PAE block in `structures/structures.h5` (cutoffs `--ddi_metadata_pae_cutoff` 12,
+  `--ddi_metadata_contact_cutoff` 8, both strict). AB = rows of domain a, columns of domain b. A
+  pair is written only if **every** membership row of it in that method has `has_structure = 1`
+  after the coverage guard, so a pair masked in one split (e.g. a positive shared by the 1:1 and
+  1:10 tests) is missing from the whole method. Empty field = undefined: no CB-CB contact leaves
+  pDockQ/pDockQ2/ipSAE empty (`numberOfInteractions` 0), no PAE leaves everything but
+  `min_cb_dist` and `pDockQ` empty. Header-only for a method without structure, or when structure
+  is off.
+- `metadata/ddi_metadata_coverage.tsv` — per method, split, label and `source` (`downloaded`,
+  `inferred`, `none` = not exported): membership `rows`, `with_structure_raw`, `with_structure`,
+  `exported`, `with_pae`, `with_contact`.
+- `metadata/domain_metadata_report.tsv` — `metric, value` over the distinct instances: `instances`,
+  `written`, `skipped_x`, `substituted_Z/B/U/O`.
+
+</details>
+
+Point domainbenchmark's `--metadata` at one `metadata/<method>/` directory: it reads one directory
+for every database it gets, and the coverage guard masks per (method, split), so the files cannot be
+shared across methods. Not a numerical reproduction of the helper: the slice went through a CIF to
+PDB rewrite (rounded coordinates and pLDDT), residues map to PAE rows through the AF3 token map
+rather than by residue ordinal, and windows that failed `ENRICH_STRUCTURAL_AF`'s sequence check
+are never scored (the helper scored them at whatever residues carried those numbers).
 
 ### Reports
 
@@ -228,6 +307,11 @@ Nothing is hidden to equalise coverage. The task log only warns about the gaps.
     `no_uniprot_sequence`, `download_failed`, `parse_failed`), `below_min_coverage` when the
     protein is `ok` (the domain fell under the structure-coverage or length cutoff), or
     `not_in_afdb_report`. Missing coverage only warns.
+  - `z_score_summary.tsv` — per method, split and label, over membership rows (one row = one
+    split's instance pair): `rows`, `with_structure_raw` (before the coverage guard; empty on a
+    master without that column), `with_structure` (after it), `scored`, `structure_no_score`
+    (structured but `z_score` NULL: too few contacts or constant random trials) and
+    `z_min, z_p25, z_median, z_p75, z_max, z_mean` over the scored rows. NULL is never counted as 0.
 - `external_ddis/*.tsv` — each external source normalized, as the record of what it contributed
   before the merge/drop rules ran.
 

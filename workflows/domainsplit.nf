@@ -34,6 +34,10 @@ include { EXPORT_FROZEN_SPLITS ; VERIFY_FROZEN_BUNDLE ; VERIFY_FROZEN_SPLITS ; C
 include { ENRICH_STRUCTURAL           } from '../subworkflows/local/enrich_structural/main.nf'
 include { SCAN_AF_METADATA ; BUILD_AF_METADATA } from '../modules/local/structural/build_af_metadata/main.nf'
 include { ANNOTATE_DDI                } from '../subworkflows/local/annotate_ddi/main.nf'
+include { BUILD_AF3_QUEUE             } from '../modules/local/structural/build_af3_queue/main.nf'
+include { STRUCTURE_COVERAGE_BALANCE  } from '../modules/local/structural/structure_coverage_balance/main.nf'
+include { EXPORT_DDI_METADATA         } from '../modules/local/export_metadata/export_ddi_metadata/main.nf'
+include { EXPORT_DOMAIN_METADATA      } from '../modules/local/export_metadata/export_domain_metadata/main.nf'
 
 
 /*
@@ -886,18 +890,45 @@ Use all_species_reviewed or human_any_review_status.""")
             af_metadata_csv,
             structure_methods.join(','),
         )
+        // Queue from the unmasked master: the guard below must not hide a model.
+        BUILD_AF3_QUEUE(
+            ENRICH_STRUCTURAL.out.domainsplit_db,
+            af_metadata_csv,
+            ENRICH_STRUCTURAL.out.af3_to_model,
+            structure_methods.join(','),
+        )
         ANNOTATE_DDI(
             ENRICH_STRUCTURAL.out.domainsplit_db,
             ENRICH_STRUCTURAL.out.structures,
             structure_methods,
         )
-        scored_db = ANNOTATE_DDI.out.domainsplit_db
-        ch_versions = ch_versions.mix(ENRICH_STRUCTURAL.out.versions, ANNOTATE_DDI.out.versions)
+        // After scoring, so the contact potential keeps every train positive.
+        STRUCTURE_COVERAGE_BALANCE(ANNOTATE_DDI.out.domainsplit_db)
+        scored_db = STRUCTURE_COVERAGE_BALANCE.out.dbstruct
+        structure_summaries = BUILD_AF3_QUEUE.out.counts.mix(STRUCTURE_COVERAGE_BALANCE.out.summary)
+        ch_versions = ch_versions.mix(ENRICH_STRUCTURAL.out.versions, ANNOTATE_DDI.out.versions,
+            BUILD_AF3_QUEUE.out.versions, STRUCTURE_COVERAGE_BALANCE.out.versions)
     }
     else {
         scored_db = release_db
         af_manifest_files = channel.empty()
+        structure_summaries = channel.empty()
         log.info "--structure_data_methods is empty: no structures are sliced or scored, and every has_structure stays 0."
+    }
+
+    //
+    // Enrichment metadata for domainbenchmark, one directory per method
+    // (metadata/<method>/): the coverage guard masks per (method, split), and
+    // domainbenchmark reads one metadata directory for every database it gets.
+    //
+    if (params.domain_metadata.toString().toBoolean()) {
+        EXPORT_DOMAIN_METADATA(release_db)
+        ch_versions = ch_versions.mix(EXPORT_DOMAIN_METADATA.out.versions)
+    }
+    if (params.ddi_metadata.toString().toBoolean()) {
+        // Header-only files without structure, so metadata/<method>/ stays complete.
+        EXPORT_DDI_METADATA(scored_db, structure_methods ? ENRICH_STRUCTURAL.out.structures : [])
+        ch_versions = ch_versions.mix(EXPORT_DDI_METADATA.out.versions)
     }
 
     //
@@ -949,8 +980,9 @@ Use all_species_reviewed or human_any_review_status.""")
         COLLECT_DDI_DATA.out.candidate_pfam_mapping,
         local_urls.collect { k, f -> [k, local_paths.indexOf(f)] },
         local_paths,
-        af_manifest_files.mix(frozen ? channel.value(frozen.dir.resolve('bundle_manifest.json')) : channel.empty())
-            .collect().ifEmpty([]),
+        af_manifest_files.mix(structure_summaries)
+            .mix(frozen ? channel.value(frozen.dir.resolve('bundle_manifest.json')) : channel.empty())
+            .collect(sort: { a, b -> a.name <=> b.name }).ifEmpty([]),
     )
 
     //

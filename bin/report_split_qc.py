@@ -24,6 +24,12 @@ Outputs (all TSV, deterministically sorted):
 * with ``--esm3-h5`` + ``--afdb-report``: ``esm3_structure_coverage.tsv``,
   ``esm3_structure_missing_instances.tsv``,
   ``esm3_structure_missing_accessions.tsv``. Missing coverage only warns.
+* ``z_score_summary.tsv``: per method, split and label, membership rows (one
+  row = one (split, instance pair) membership row), rows with a structure
+  before (``with_structure_raw``, empty on a master without that column) and
+  after the coverage guard, rows scored, rows with a structure but NULL
+  z_score, and min / quartiles / max / mean over the scored rows. NULL stays
+  NULL: it is never counted as 0.
 """
 
 import argparse
@@ -246,6 +252,39 @@ class Esm3Coverage:
                 f"({len(by_acc)} accessions): {dict(sorted(reasons.items()))}")
 
 
+def zscore_rows(db):
+    """z_score_summary.tsv rows; the unit is the membership row."""
+    conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(ddi_split_membership)")}
+    raw = "m.has_structure_raw" if "has_structure_raw" in cols else "NULL"
+    groups = defaultdict(lambda: {"rows": 0, "raw": 0, "has": 0, "no_score": 0, "z": []})
+    for method, split, neg, has_raw, has, z in conn.execute(
+        f"SELECT m.method, m.split, d.negative, {raw}, m.has_structure, m.z_score "
+        "FROM ddi_split_membership m JOIN domain_domain_interaction d ON d.id = m.ddi_id"
+    ):
+        g = groups[method, split, "negative" if neg else "positive"]
+        g["rows"] += 1
+        g["raw"] = None if has_raw is None or g["raw"] is None else g["raw"] + has_raw
+        g["has"] += has
+        g["no_score"] += int(bool(has) and z is None)
+        if z is not None:
+            g["z"].append(z)
+    conn.close()
+    out = []
+    for key, g in groups.items():
+        z = sorted(g["z"])
+        if len(z) >= 2:
+            q1, med, q3 = statistics.quantiles(z, n=4, method="inclusive")
+            stats = (z[0], q1, med, q3, z[-1], statistics.fmean(z))
+        elif z:
+            stats = (z[0],) * 6
+        else:
+            stats = ("",) * 6
+        out.append((*key, g["rows"], "" if g["raw"] is None else g["raw"], g["has"], len(z), g["no_score"],
+                    *(s if s == "" else round(s, 4) for s in stats)))
+    return out
+
+
 def tokens(s):
     return [t for t in (x.strip() for x in s.split(",")) if t]
 
@@ -297,6 +336,10 @@ def main(argv=None):
                "pair_min_train_pos_degree_median"], profile)
     if esm3:
         esm3.write(o)
+    write_tsv(os.path.join(o, "z_score_summary.tsv"),
+              ["method", "split", "label", "rows", "with_structure_raw", "with_structure", "scored",
+               "structure_no_score", "z_min", "z_p25", "z_median", "z_p75", "z_max", "z_mean"],
+              zscore_rows(args.db))
 
     if args.versions:
         with open(args.versions, "w") as f:

@@ -136,3 +136,22 @@ def test_esm3_coverage(tmp_path):
     acc = read(tmp_path / "esm3_structure_missing_accessions.tsv")
     assert [(r["accession"], r["reason"], r["n_instances"]) for r in acc] == [
         ("P4", "below_min_coverage", "1"), ("P5", "not_in_afdb", "1")]
+
+
+def test_z_score_summary(tmp_path):
+    db = str(tmp_path / "m.sqlite3")
+    make_db(db, CLEAN)
+    conn = sqlite3.connect(db)
+    # ml train positive scored (2.0); ml train negative structured but unscored.
+    conn.execute("UPDATE ddi_split_membership SET has_structure = 1, z_score = 2.0 WHERE method = 'ml' AND ddi_id = 1")
+    conn.execute("UPDATE ddi_split_membership SET has_structure = 1 WHERE method = 'ml' AND ddi_id = 4")
+    conn.commit()
+    conn.close()
+    assert report_split_qc.main(["--db", db, "--ilp-methods", "ml", "--external-methods", "ext",
+                                 "--outdir", str(tmp_path)]) == 0
+    z = {(r["method"], r["split"], r["label"]): r for r in read(tmp_path / "z_score_summary.tsv")}
+    pos, neg = z["ml", "train", "positive"], z["ml", "train", "negative"]
+    assert (pos["rows"], pos["with_structure"], pos["scored"], pos["z_median"]) == ("1", "1", "1", "2.0")
+    assert (neg["scored"], neg["structure_no_score"], neg["z_median"]) == ("0", "1", "")
+    assert pos["with_structure_raw"] == ""  # this master has no has_structure_raw column
+    assert z["ext", "test", "negative"]["with_structure"] == "0"

@@ -71,6 +71,7 @@ CREATE TABLE ddi_split_membership (
     instance_id_a, instance_id_b,
     has_structure INTEGER NOT NULL DEFAULT 0,
     z_score REAL,
+    has_structure_raw INTEGER NOT NULL DEFAULT 0,
     UNIQUE(ddi_id, method, split, instance_id_a, instance_id_b)
 );
 CREATE INDEX idx_ddi_split_membership_triple

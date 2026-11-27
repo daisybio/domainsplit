@@ -119,12 +119,15 @@ process INIT_DOMAINSPLIT_DB {
         -- z_score: ANNOTATE_DDI's contact-potential z-score for the instance
         -- pair under this method's train potential; NULL when has_structure = 0
         -- or the interface has too few contacts to score.
+        -- has_structure_raw: has_structure before STRUCTURE_COVERAGE_BALANCE
+        -- masked it (bin/balance_structure_coverage.py); equal when nothing was masked.
         CREATE TABLE ddi_split_membership (
             ddi_id REFERENCES domain_domain_interaction ON DELETE CASCADE,
             method, split,
             instance_id_a, instance_id_b,
             has_structure INTEGER NOT NULL DEFAULT 0,
             z_score REAL,
+            has_structure_raw INTEGER NOT NULL DEFAULT 0,
             UNIQUE(ddi_id, method, split, instance_id_a, instance_id_b)
         );
 

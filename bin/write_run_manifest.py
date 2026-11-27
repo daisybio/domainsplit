@@ -42,6 +42,11 @@ import sys
 import urllib.request
 
 
+# BUILD_AF3_QUEUE / STRUCTURE_COVERAGE_BALANCE summaries arriving via --input.
+EMBEDDED = {"af3_queue.json": "af3_queue",
+            "structure_coverage_balance.json": "structure_coverage_balance"}
+
+
 def sha256(path):
     h = hashlib.sha256()
     with open(path, "rb") as f:
@@ -166,6 +171,13 @@ def main(argv=None):
     manifest["manual_inputs"] = {
         name: {"path": path, "sha256": sha256(path)} for name, path in pairs("--input", args.input).items()
     }
+
+    # Step summaries hashed above and also embedded under their manifest key.
+    for name, key in EMBEDDED.items():
+        path = pairs("--input", args.input).get(name)
+        if path:
+            with open(path) as f:
+                manifest[key] = json.load(f)
 
     local = pairs("--local", args.local)
     urls = manifest.get("urls", {})

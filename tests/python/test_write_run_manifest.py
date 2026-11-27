@@ -49,10 +49,14 @@ def test_manifest():
             json.dump({"params": {"seed": 42}, "urls": {"url_3did": "https://example.invalid/x",
                                                        "url_pfam2go": "/data/pfam2go"}}, f)
         out = os.path.join(d, "run_manifest.json")
+        queue = os.path.join(d, "af3_queue.json")
+        with open(queue, "w") as f:
+            json.dump({"levels": [{"level": 1, "pairs": 3}]}, f)
 
         write_run_manifest.main([
             "--base", base, "--db", db, "--out", out, "--no-network",
             "--input", f"hippie_tsv={manual}",
+            "--input", f"extra/af3_queue.json={queue}",
             # a local url_* arrives staged under another path; the original value is kept
             "--local", f"url_pfam2go={manual}",
         ])
@@ -71,6 +75,10 @@ def test_manifest():
     assert m["membership_fingerprint"]["rows"] == 6
     assert len(m["membership_fingerprint"]["sha256"]) == 64
     assert m["protein_fingerprint"]["rows"] == 2
+    # Step summaries are hashed and embedded under their manifest key.
+    assert m["af3_queue"] == {"levels": [{"level": 1, "pairs": 3}]}
+    assert len(m["manual_inputs"]["af3_queue.json"]["sha256"]) == 64
+    assert "structure_coverage_balance" not in m
 
 
 def test_membership_fingerprint_ignores_surrogate_ids_and_order():
