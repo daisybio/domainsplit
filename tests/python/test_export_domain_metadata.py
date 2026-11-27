@@ -38,9 +38,9 @@ def build(tmp_path, rows, seqs=SEQ):
     return db, ids
 
 
-def run(tmp_path, db):
+def run(tmp_path, db, extra=()):
     out = tmp_path / "out"
-    edm.main(["--db", str(db), "--outdir", str(out), "--report", str(tmp_path / "r.tsv")])
+    edm.main(["--db", str(db), "--outdir", str(out), "--report", str(tmp_path / "r.tsv"), *extra])
     files = {}
     for m in os.listdir(out):
         with open(out / m / "domain_metadata.csv") as fh:
@@ -74,3 +74,22 @@ def test_window_outside_sequence_is_fatal(tmp_path):
     db, _ = build(tmp_path, [("m1", "a", "c")], seqs={**SEQ, "P11111": "MKDEARLLGHWYVST"})
     with pytest.raises(SystemExit, match="outside their protein.sequence"):
         run(tmp_path, db)
+
+
+def test_interpro_columns_merged_per_family(tmp_path):
+    db, ids = build(tmp_path, [("m1", "a", "z")])
+    tsv = tmp_path / "ip.tsv"
+    tsv.write_text("pfam_id\tinterpro_proteins\tinterpro_literature\n"
+                   "PF00001\t42\t0\nPF00003\t\t\nPF00002\t7\t1\n")
+    files, _ = run(tmp_path, db, ["--interpro", str(tsv)])
+    assert files["m1"][ids["a"]]["interpro_proteins"] == "42"
+    assert files["m1"][ids["a"]]["interpro_literature"] == "0"
+    assert files["m1"][ids["z"]]["interpro_proteins"] == ""  # missing entry stays empty, never 0
+
+
+def test_interpro_missing_family_is_fatal(tmp_path):
+    db, _ = build(tmp_path, [("m1", "a", "z")])
+    tsv = tmp_path / "ip.tsv"
+    tsv.write_text("pfam_id\tinterpro_proteins\nPF00001\t42\n")
+    with pytest.raises(SystemExit, match="missing from --interpro"):
+        run(tmp_path, db, ["--interpro", str(tsv)])

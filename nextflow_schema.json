@@ -501,6 +501,19 @@
                     "default": true,
                     "fa_icon": "fas fa-table"
                 },
+                "interpro_metadata": {
+                    "type": "boolean",
+                    "description": "Append InterPro counters per Pfam family (interpro_proteins, interpro_structures, interpro_literature, interpro_alphafold, ...) to domain_metadata.csv. Fetched from the InterPro API (network) into <cache_dir>/interpro-<release>/; an entry missing from InterPro stays empty, never 0.",
+                    "help_text": "The counters are study-intensity proxies (literature, structures) and can confound any label they correlate with.",
+                    "default": true,
+                    "fa_icon": "fas fa-table"
+                },
+                "interpro_release": {
+                    "type": "string",
+                    "pattern": "^\\d+(\\.\\d+)*$",
+                    "description": "Pin the InterPro release (e.g. 111.0) of the interpro_* counters. When it is not the live release, nothing is fetched: every family must be in <cache_dir>/interpro-<release>/ or the run fails.",
+                    "fa_icon": "fas fa-thumbtack"
+                },
                 "ddi_metadata_pae_cutoff": {
                     "type": "number",
                     "description": "PAE cutoff (strict <, Angstrom) for LIS, ipSAE and numberOfInteractions in ddi_metadata.csv.",

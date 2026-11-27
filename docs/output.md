@@ -229,14 +229,17 @@ state. A split with `masked_all` has no `has_structure = 1` row at all.
 
 - `metadata/<method>/domain_metadata.csv` (`EXPORT_DOMAIN_METADATA`, `--domain_metadata`, default
   on) — one row per `ddi_split_membership` instance of that method: `instance_id, pfam_id,
-  uniprot_id` and 21 ProtParam features of `protein.sequence[start-1:end]` (ported from master_ct's
-  `create_protein_domain_metadata.py`; `isoelectric_point` spelled correctly, no sequence column,
-  no InterPro counters). An instance whose domain sequence holds `X` has no row; Z/B/U/O are
-  computed as Q/N/C/K; flexibility is empty for a domain of 9 residues or fewer.
+uniprot_id` and 21 ProtParam features of `protein.sequence[start-1:end]` (ported from master_ct's
+  `create_protein_domain_metadata.py`; `isoelectric_point` spelled correctly, no sequence column).
+  An instance whose domain sequence holds `X` has no row; Z/B/U/O are computed as Q/N/C/K;
+  flexibility is empty for a domain of 9 residues or fewer. With `--interpro_metadata` (default
+  on) the per-family InterPro counters follow: `interpro_subfamilies, _domain_architectures,
+_interactions, _matches, _pathways, _proteins, _proteomes, _sets, _structures, _taxa,
+_literature, _alphafold` (same value on every instance of a family).
 - `metadata/<method>/ddi_metadata.csv` (`EXPORT_DDI_METADATA`, `--ddi_metadata`, default on) — one
   row per structured instance pair of that method, in membership orientation: `pfam_id_a/b,
-  uniprot_id_a/b, instance_id_a/b, source` and `af_min_cb_dist, af_pDockQ, af_pDockQ2_AB/BA,
-  af_LIS_AB/BA, af_ipSAE_AB/BA, af_ipTM_d0chn_AB/BA, af_numberOfInteractions`, scored from the slice
+uniprot_id_a/b, instance_id_a/b, source` and `af_min_cb_dist, af_pDockQ, af_pDockQ2_AB/BA,
+af_LIS_AB/BA, af_ipSAE_AB/BA, af_ipTM_d0chn_AB/BA, af_numberOfInteractions`, scored from the slice
   and PAE block in `structures/structures.h5` (cutoffs `--ddi_metadata_pae_cutoff` 12,
   `--ddi_metadata_contact_cutoff` 8, both strict). AB = rows of domain a, columns of domain b. A
   pair is written only if **every** membership row of it in that method has `has_structure = 1`
@@ -250,6 +253,10 @@ state. A split with `masked_all` has no `has_structure = 1` row at all.
   `exported`, `with_pae`, `with_contact`.
 - `metadata/domain_metadata_report.tsv` — `metric, value` over the distinct instances: `instances`,
   `written`, `skipped_x`, `substituted_Z/B/U/O`.
+- `metadata/interpro_counts.tsv` / `metadata/interpro_metadata.json` (`FETCH_INTERPRO_METADATA`) —
+  the counters per membership family, and the InterPro release they come from (also in
+  `run_manifest.json` under `interpro_metadata`), families fetched vs. from cache, entries missing
+  from InterPro and counter keys absent from a response.
 
 </details>
 
@@ -259,6 +266,16 @@ shared across methods. Not a numerical reproduction of the helper: the slice wen
 PDB rewrite (rounded coordinates and pLDDT), residues map to PAE rows through the AF3 token map
 rather than by residue ordinal, and windows that failed `ENRICH_STRUCTURAL_AF`'s sequence check
 are never scored (the helper scored them at whatever residues carried those numbers).
+
+InterPro serves only its live release, so the counters are cached per release under
+`<cache_dir>/interpro-<release>/` (one JSON per family), the release is read from the API before
+fetching and a release change mid-run is fatal (nothing fetched in that run is cached). `-resume`
+keeps the counters of the release the cached task ran with, even if InterPro has moved on since. `--interpro_release <x>` pins a release: when it is
+no longer live, nothing is fetched and every family must already be in that cache. Keep the cache
+of the thesis run. Unlike the helper, a family InterPro does not have gets empty counters, never 0;
+a `null` literature list in an existing entry is 0 (it counts references cited in the entry, not
+publications on the family). `interpro_literature` and `interpro_structures` measure how well
+studied a family is, so they can confound any label that correlates with that.
 
 ### Reports
 

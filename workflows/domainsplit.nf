@@ -38,6 +38,7 @@ include { BUILD_AF3_QUEUE             } from '../modules/local/structural/build_
 include { STRUCTURE_COVERAGE_BALANCE  } from '../modules/local/structural/structure_coverage_balance/main.nf'
 include { EXPORT_DDI_METADATA         } from '../modules/local/export_metadata/export_ddi_metadata/main.nf'
 include { EXPORT_DOMAIN_METADATA      } from '../modules/local/export_metadata/export_domain_metadata/main.nf'
+include { FETCH_INTERPRO_METADATA     } from '../modules/local/export_metadata/fetch_interpro_metadata/main.nf'
 
 
 /*
@@ -921,8 +922,16 @@ Use all_species_reviewed or human_any_review_status.""")
     // (metadata/<method>/): the coverage guard masks per (method, split), and
     // domainbenchmark reads one metadata directory for every database it gets.
     //
+    interpro_summary = channel.empty()
     if (params.domain_metadata.toString().toBoolean()) {
-        EXPORT_DOMAIN_METADATA(release_db)
+        def interpro_tsv = []
+        if (params.interpro_metadata.toString().toBoolean()) {
+            FETCH_INTERPRO_METADATA(release_db, cache_dir, params.interpro_release ?: '')
+            interpro_tsv = FETCH_INTERPRO_METADATA.out.tsv
+            interpro_summary = FETCH_INTERPRO_METADATA.out.summary
+            ch_versions = ch_versions.mix(FETCH_INTERPRO_METADATA.out.versions)
+        }
+        EXPORT_DOMAIN_METADATA(release_db, interpro_tsv)
         ch_versions = ch_versions.mix(EXPORT_DOMAIN_METADATA.out.versions)
     }
     if (params.ddi_metadata.toString().toBoolean()) {
@@ -980,7 +989,7 @@ Use all_species_reviewed or human_any_review_status.""")
         COLLECT_DDI_DATA.out.candidate_pfam_mapping,
         local_urls.collect { k, f -> [k, local_paths.indexOf(f)] },
         local_paths,
-        af_manifest_files.mix(structure_summaries)
+        af_manifest_files.mix(structure_summaries, interpro_summary)
             .mix(frozen ? channel.value(frozen.dir.resolve('bundle_manifest.json')) : channel.empty())
             .collect(sort: { a, b -> a.name <=> b.name }).ifEmpty([]),
     )

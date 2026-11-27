@@ -1,7 +1,7 @@
 // Per-method domain_metadata.csv (bin/export_domain_metadata.py): ProtParam
 // sequence features per ddi_split_membership instance. Needs no structure, so
 // it reads the master before ENRICH_STRUCTURAL and stays cached across
-// structure re-runs.
+// structure re-runs. `interpro` is FETCH_INTERPRO_METADATA's TSV, [] when off.
 process EXPORT_DOMAIN_METADATA {
     tag "export_domain_metadata"
     label 'process_single'
@@ -11,6 +11,7 @@ process EXPORT_DOMAIN_METADATA {
 
     input:
     path db, stageAs: 'input.domainsplit.sqlite3'
+    path interpro, stageAs: 'interpro/*'
 
     output:
     path "metadata/*/domain_metadata.csv",       emit: csv
@@ -18,11 +19,13 @@ process EXPORT_DOMAIN_METADATA {
     path "versions.yml",                         emit: versions
 
     script:
+    def interpro_arg = interpro ? "--interpro ${interpro}" : ''
     """
     export_domain_metadata.py \\
         --db input.domainsplit.sqlite3 \\
         --outdir metadata \\
         --report metadata/domain_metadata_report.tsv \\
+        ${interpro_arg} \\
         --versions versions.yml \\
         --process_name "${task.process}"
     """

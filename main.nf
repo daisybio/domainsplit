@@ -91,6 +91,13 @@ params {
     build_scoring_matrix_shards: Integer
     score_ddi_shards: Integer
     validate_params: Boolean
+    structure_balance_coverage: Boolean
+    structure_min_coverage: Float
+    domain_metadata: Boolean
+    ddi_metadata: Boolean
+    ddi_metadata_pae_cutoff: Float
+    ddi_metadata_contact_cutoff: Float
+    interpro_metadata: Boolean
 
     // ---- imported from ppi-splitting via
     //      `includeConfig 'subworkflows/external/ppi-splitting/conf/params.config'`.

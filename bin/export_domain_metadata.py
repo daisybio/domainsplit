@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Per-method domain_metadata.csv (domainbenchmark's enrichment input):
 ProtParam sequence features per domain instance, ported from master_ct's
-create_protein_domain_metadata.py without the InterPro counters.
+create_protein_domain_metadata.py. With --interpro (FETCH_INTERPRO_METADATA's
+TSV) the per-family interpro_* counters are appended to every instance row of
+that family; an empty counter (entry missing from InterPro) stays empty.
 
 Instances are those of ddi_split_membership, per method (the split databases
 also hold family-context proteins, which are not benchmark instances). The
@@ -80,6 +82,7 @@ def main(argv=None):
     p.add_argument("--db", required=True)
     p.add_argument("--outdir", required=True)
     p.add_argument("--report", required=True)
+    p.add_argument("--interpro", help="pfam_id + interpro_* TSV")
     p.add_argument("--versions")
     p.add_argument("--process_name", default="EXPORT_DOMAIN_METADATA")
     args = p.parse_args(argv)
@@ -93,6 +96,16 @@ def main(argv=None):
     needed = {u for _p, u, _s, _e in parsed.values()}
     sequences = {u: s for u, s in conn.execute("SELECT uniprot_id, sequence FROM protein") if u in needed}
     conn.close()
+
+    ip_cols, ip_rows = [], {}
+    if args.interpro:
+        with open(args.interpro, newline="") as fh:
+            r = csv.reader(fh, delimiter="\t")
+            ip_cols = next(r)[1:]
+            ip_rows = {row[0]: row[1:] for row in r}
+        absent = sorted({p for p, _u, _s, _e in parsed.values()} - set(ip_rows))
+        if absent:
+            raise SystemExit(f"{len(absent)} membership famil(ies) missing from --interpro, e.g. {absent[:5]}")
 
     counts = dict.fromkeys(["instances", "written", "skipped_x"] + [f"substituted_{c}" for c in SUBSTITUTIONS], 0)
     rows, bad = {}, []
@@ -118,11 +131,12 @@ def main(argv=None):
         os.makedirs(os.path.join(args.outdir, method), exist_ok=True)
         with open(os.path.join(args.outdir, method, "domain_metadata.csv"), "w", newline="") as fh:
             w = csv.writer(fh, lineterminator="\n")
-            w.writerow(["instance_id", "pfam_id", "uniprot_id"] + FEATURES)
+            w.writerow(["instance_id", "pfam_id", "uniprot_id"] + FEATURES + ip_cols)
             for inst in sorted(members):
                 if inst in rows:
                     pfam, acc, f = rows[inst]
-                    w.writerow([inst, pfam, acc] + ["" if np.isnan(f[c]) else f[c] for c in FEATURES])
+                    w.writerow([inst, pfam, acc] + ["" if np.isnan(f[c]) else f[c] for c in FEATURES]
+                               + ip_rows.get(pfam, []))
 
     with open(args.report, "w", newline="") as fh:
         w = csv.writer(fh, delimiter="\t", lineterminator="\n")

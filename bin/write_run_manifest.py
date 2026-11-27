@@ -42,9 +42,11 @@ import sys
 import urllib.request
 
 
-# BUILD_AF3_QUEUE / STRUCTURE_COVERAGE_BALANCE summaries arriving via --input.
+# BUILD_AF3_QUEUE / STRUCTURE_COVERAGE_BALANCE / FETCH_INTERPRO_METADATA
+# summaries arriving via --input.
 EMBEDDED = {"af3_queue.json": "af3_queue",
-            "structure_coverage_balance.json": "structure_coverage_balance"}
+            "structure_coverage_balance.json": "structure_coverage_balance",
+            "interpro_metadata.json": "interpro_metadata"}
 
 
 def sha256(path):
