@@ -134,6 +134,20 @@ def test_ddis_are_3did_positives_with_instances_only():
         assert "ddis_dropped_no_instances = 1" in log
 
 
+def test_ddis_drop_homomer_leaves_out_self_pairs():
+    with tempfile.TemporaryDirectory() as tmp:
+        build_db(tmp)
+        instances = os.path.join(tmp, "instances.tsv")
+        write_instances(instances, ["PF00002", "PF00010", "PF00300"])
+
+        out, log = run_export(tmp, "ddis", instances=instances, drop_homomer=[])
+        with open(out) as fh:
+            pairs = {tuple(row) for row in list(csv.reader(fh))[1:]}
+
+        assert pairs == {("PF00002", "PF00010")}
+        assert "ddis_dropped_homomer = 1" in log
+
+
 def test_ddis_rejects_a_missing_instances_argument():
     with tempfile.TemporaryDirectory() as tmp:
         build_db(tmp)

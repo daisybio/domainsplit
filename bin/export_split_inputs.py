@@ -58,6 +58,11 @@ def parse_args():
         default="3did",
         help="mode=ddis: only DDIs whose source list contains this source (default: 3did)",
     )
+    p.add_argument(
+        "--drop-homomer",
+        action="store_true",
+        help="mode=ddis: leave out DDIs with the same family on both sides (--drop_homomer_ddi)",
+    )
     p.add_argument("--versions", required=True)
     p.add_argument("--process-name", required=True)
     args = p.parse_args()
@@ -108,12 +113,14 @@ def export_families(conn, external_paths, out_path):
     print(f"[export] families_union = {len(ordered)}", flush=True)
 
 
-def export_ddis(conn, source, instances_path, out_path):
+def export_ddis(conn, source, instances_path, out_path, drop_homomer=False):
     represented = {row["family"] for row in read_instances_tsv(instances_path)}
     pairs = source_ddis(conn, source)
-    kept, dropped = [], 0
+    kept, dropped, homomers = [], 0, 0
     for pfam_a, pfam_b in pairs:
-        if pfam_a in represented and pfam_b in represented:
+        if drop_homomer and pfam_a == pfam_b:
+            homomers += 1
+        elif pfam_a in represented and pfam_b in represented:
             kept.append((pfam_a, pfam_b))
         else:
             dropped += 1
@@ -129,6 +136,7 @@ def export_ddis(conn, source, instances_path, out_path):
     print(f"[export] ddis_total = {len(pairs)}", flush=True)
     print(f"[export] ddis_exported = {len(kept)}", flush=True)
     print(f"[export] ddis_dropped_no_instances = {dropped}", flush=True)
+    print(f"[export] ddis_dropped_homomer = {homomers}", flush=True)
 
 
 def main():
@@ -138,7 +146,7 @@ def main():
     if args.mode == "families":
         export_families(conn, args.external_ddis, args.out)
     else:
-        export_ddis(conn, args.source, args.instances, args.out)
+        export_ddis(conn, args.source, args.instances, args.out, args.drop_homomer)
     conn.close()
 
     with open(args.versions, "w") as f:

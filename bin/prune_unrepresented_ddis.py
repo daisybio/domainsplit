@@ -17,7 +17,9 @@ Deleted, in order:
 
 1. every DDI where either family has no ``domain_protein_map`` row, whatever its
    source -- 3did included, since the orphan 3did DDIs that a narrow tier
-   strands are exactly this case;
+   strands are exactly this case; with ``--drop-homomer`` also every DDI with
+   the same family on both sides (sampled negatives and external sources
+   included; the 3did ones were already kept out of the split export);
 2. every ``domain`` row no surviving DDI references (this cascades to its
    ``domain_protein_map`` rows);
 3. every ``protein`` row no surviving mapping references, so ENRICH does not
@@ -43,11 +45,17 @@ def parse_args():
     p.add_argument("--report-out", required=True, help="pruned_ddis.tsv")
     p.add_argument("--versions", required=True)
     p.add_argument("--process-name", required=True)
+    p.add_argument(
+        "--drop-homomer",
+        action="store_true",
+        help="also delete every DDI with the same family on both sides (--drop_homomer_ddi)",
+    )
     return p.parse_args()
 
 
-def unrepresented_ddis(conn):
-    """``[(ddi_id, pfam_a, pfam_b, negative, source, reason)]`` for DDIs with a family that has no instance."""
+def unrepresented_ddis(conn, drop_homomer=False):
+    """``[(ddi_id, pfam_a, pfam_b, negative, source, reason)]`` for DDIs with a family that has no
+    instance, plus (``drop_homomer``) every homomer DDI, reason ``homomer``."""
     with_instances = {
         row[0] for row in conn.execute("SELECT DISTINCT domain_id FROM domain_protein_map")
     }
@@ -61,6 +69,8 @@ def unrepresented_ddis(conn):
         missing = [p for p, i in ((pfam_a, id_a), (pfam_b, id_b)) if i not in with_instances]
         if missing:
             doomed.append((ddi_id, pfam_a, pfam_b, negative, source, "no_instances:" + ",".join(missing)))
+        elif drop_homomer and id_a == id_b:
+            doomed.append((ddi_id, pfam_a, pfam_b, negative, source, "homomer"))
     return doomed
 
 
@@ -73,7 +83,7 @@ def main():
     conn.execute("PRAGMA synchronous=OFF")
 
     n_ddis_before = conn.execute("SELECT COUNT(*) FROM domain_domain_interaction").fetchone()[0]
-    doomed = unrepresented_ddis(conn)
+    doomed = unrepresented_ddis(conn, args.drop_homomer)
 
     per_source = Counter()
     for _, _, _, _, source, _ in doomed:

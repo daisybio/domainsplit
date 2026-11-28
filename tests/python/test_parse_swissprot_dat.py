@@ -8,8 +8,8 @@ shapes their consumers parse, because those consumers were left untouched:
 
   * ``insert_protein_go_terms.py`` reads ``Entry``/``Gene Ontology IDs`` with
     pandas and splits the GO column on ``"; "``;
-  * ``build_swissprot_pfam_map.py`` reads four positional columns and splits the
-    Pfam column on ``";"``, the gene column on whitespace;
+  * ``parse_single_domain_ppi.py`` reads ``Entry``/``Pfam`` and splits the Pfam
+    column on ``";"``, dropping the empty token after the trailing ``";"``;
   * ``insert_protein_sequences.py`` reads the FASTA with ``Bio.SeqIO`` and takes
     the accession from ``record.id.split("|")[1]``, so the ``sp|ACC|NAME`` /
     ``tr|ACC|NAME`` header is load-bearing.
@@ -155,13 +155,12 @@ def test_human_filter_and_output_shapes():
         assert len(go) == 2, go
 
         pfam = got["pfam.tsv.gz"].splitlines()
-        assert pfam[0] == "Entry\tEntry Name\tGene Names\tPfam"
-        # Evidence braces stripped, comma-separated synonyms split, order kept.
-        assert pfam[1] == "O00192\tARVC_HUMAN\tARVCF ARVC XYZ1\tPF00514;PF00071;"
+        assert pfam[0] == "Entry\tPfam"
+        assert pfam[1] == "O00192\tPF00514;PF00071;"
         # Every kept reviewed entry gets a row even with no Pfam xref: an empty
         # Pfam column is "this protein has no domain", which is a different claim
         # from "this protein is not in the map".
-        assert pfam[2] == "Q11111\tNOGO_HUMAN\tb0001 CG42\t"
+        assert pfam[2] == "Q11111\t"
 
         fasta = got["seq.fasta.gz"].splitlines()
         assert fasta[0].startswith(">sp|O00192|ARVC_HUMAN ")
@@ -177,7 +176,7 @@ def test_no_filter_keeps_every_species():
     with tempfile.TemporaryDirectory() as tmp:
         got = run(tmp, "")
         assert "P99999\tGO:0000001" in got["go.tsv.gz"]
-        assert "P99999\tMOUSY_MOUSE\tMus1\tPF99999;" in got["pfam.tsv.gz"]
+        assert "P99999\tPF99999;" in got["pfam.tsv.gz"]
         assert ">sp|P99999|MOUSY_MOUSE" in got["seq.fasta.gz"]
 
 
@@ -234,7 +233,7 @@ SQ   SEQUENCE   5 AA;  100 MW;  BBBB CRC64;
 def test_review_flag_drives_the_fasta_prefix_and_the_pfam_map():
     """A TrEMBL entry is ``tr|``, and it stays out of the Pfam map.
 
-    That map feeds ``build_swissprot_pfam_map.py`` -> ``parse_single_domain_ppi.py``,
+    That map feeds ``parse_single_domain_ppi.py``,
     which infers a DDI from a HIPPIE PPI between two *single-domain* proteins. On
     an unreviewed entry the Pfam annotation is automatic and the sequence is often
     a fragment, so "this protein has exactly one domain" is not a claim that source
@@ -257,7 +256,7 @@ def test_pfam_map_can_be_opened_up():
         got = run(tmp, "9606",
                   text=DAT + TREMBL.split("//\n", 1)[0] + "//\n",
                   extra=["--no-pfam-map-reviewed-only"])
-        assert "A0A804HJH4\tTIER2_HUMAN\tTIER2\tPF00514;" in got["pfam.tsv.gz"]
+        assert "A0A804HJH4\tPF00514;" in got["pfam.tsv.gz"]
 
 
 def test_two_files_merge_with_first_writer_winning():

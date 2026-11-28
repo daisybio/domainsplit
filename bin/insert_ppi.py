@@ -37,6 +37,7 @@ what distinguishes "one species is misconfigured" from "the whole join is wrong"
 
 import argparse
 import gzip
+import math
 import shutil
 import sqlite3
 import sys
@@ -45,9 +46,12 @@ from typing import Dict
 
 BATCH = 100_000
 
+# Two STRING ids can collapse onto one accession pair; keep the strongest score,
+# not whichever the file listed first.
 INSERT_SQL = (
-    "INSERT OR IGNORE INTO protein_protein_interaction(protein_id_a, protein_id_b, score) "
-    "VALUES (?, ?, ?)"
+    "INSERT INTO protein_protein_interaction(protein_id_a, protein_id_b, score) "
+    "VALUES (?, ?, ?) "
+    "ON CONFLICT(protein_id_a, protein_id_b) DO UPDATE SET score = MAX(COALESCE(score, excluded.score), excluded.score)"
 )
 
 
@@ -62,8 +66,13 @@ def load_uniprot_id_mapping(mapping_path: str, key_name: str, prefer=None) -> Di
     ``prefer`` (the database's proteins) therefore wins over one that is not.
     Ids no database protein claims still map, so ``not_in_db`` and ``unmapped``
     keep their meaning in the report.
+
+    An id claimed by two or more database proteins is ambiguous: it is dropped
+    (its edges count as ``unmapped``) rather than handed to one claimant or
+    cross-producted onto all of them, the same rule FETCH_STRING_LINKS applies.
     """
     mapping: Dict[str, str] = {}
+    ambiguous = set()
     with gzip.open(mapping_path, "rt") as f:
         for line in f:
             uniprot_id, id_type, symbol_name = line.strip().split("\t")
@@ -71,9 +80,19 @@ def load_uniprot_id_mapping(mapping_path: str, key_name: str, prefer=None) -> Di
                 continue
             symbol, uniprot_id = symbol_name.strip(), uniprot_id.strip()
             held = mapping.get(symbol)
-            if held is not None and prefer is not None and held in prefer and uniprot_id not in prefer:
+            if held is not None and prefer is not None and held in prefer and held != uniprot_id:
+                if uniprot_id in prefer:
+                    ambiguous.add(symbol)
                 continue
             mapping[symbol] = uniprot_id
+    for symbol in ambiguous:
+        del mapping[symbol]
+    if ambiguous:
+        print(
+            f"[ppi] WARNING: {len(ambiguous)} {key_name} ids are claimed by two or more "
+            "proteins in the database; their edges are skipped (counted as unmapped)",
+            file=sys.stderr, flush=True,
+        )
     return mapping
 
 
@@ -125,10 +144,14 @@ def stream_edges(path, string_id_mapping, uniprot_to_pid, conn, min_score=0.0):
             # would empty the interactome behind a green run.
             try:
                 score = float(raw_score)
+                # nan passes every `<` filter and is stored as NULL.
+                if not math.isfinite(score):
+                    raise ValueError
             except ValueError:
                 raise SystemExit(
                     f"ERROR: {path}: edge {a} {b} (row {totals['read']} of the "
-                    f"links file) has a non-numeric combined_score {raw_score!r}. "
+                    f"links file) has a non-numeric combined_score {raw_score!r} "
+                    "(nan/inf included). "
                     "STRING links files are `protein1 protein2 combined_score` -- "
                     "check that --url_string / FETCH_STRING_LINKS' output is a "
                     "links file and not a different STRING download."

@@ -1,6 +1,1 @@
-name: insert_ppi
-channels:
-  - conda-forge
-  - bioconda
-dependencies:
-  - python>=3.10
+../../../../docker/env/general.yml

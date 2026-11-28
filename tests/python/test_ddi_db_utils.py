@@ -230,6 +230,16 @@ def test_canonical_pair_is_order_independent_on_a_digit_tie():
     assert canonical_pair("PF00001", "PB00001") == canonical_pair("PB00001", "PF00001")
 
 
+def test_ensure_domains_assigns_ids_in_pfam_order():
+    """domain.id must not depend on set iteration order (PYTHONHASHSEED)."""
+    with tempfile.TemporaryDirectory() as tmp:
+        conn = _conn(tmp)
+        ensure_domains(conn, ["PF00010", "PF00002", "PF00100", "PF00001", "PF00002"])
+        rows = conn.execute("SELECT pfam_id FROM domain ORDER BY id").fetchall()
+        assert [r[0] for r in rows] == ["PF00001", "PF00002", "PF00010", "PF00100"]
+        conn.close()
+
+
 if __name__ == "__main__":
     test_insert_into_empty()
     test_protected_source_wins_and_reports_a_contradiction()
@@ -241,4 +251,5 @@ if __name__ == "__main__":
     test_count_source_matches_whole_tokens_only()
     test_canonical_pair_is_numeric()
     test_canonical_pair_is_order_independent_on_a_digit_tie()
+    test_ensure_domains_assigns_ids_in_pfam_order()
     print("OK: ddi_db_utils merge/drop rules hold")

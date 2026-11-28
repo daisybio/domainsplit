@@ -1,0 +1,35 @@
+# Single source of truth for the GPU environment (docker/Dockerfile.gpu,
+# GENERATE_DOMAIN_EMBEDDINGS_CHUNK). modules/local/domain_embeddings/environment.yml
+# symlinks here.
+#
+# torch/esm/transformers come from pip in ONE block on purpose: micromamba runs
+# the block as a single `pip install -r`, so esm's or transformers' transitive
+# deps cannot pull a torch wheel for another CUDA build from PyPI. Anything
+# added to the pip side goes in this block.
+#
+# Version ceiling is esm, not the CUDA driver: esm 3.4.2 pins
+# torch>=2.11,<2.12 and transformers>=4.57.6,<5; transformers 4.57 pins
+# huggingface_hub<1.0. torch 2.11.0 has no cu132 build, so cu130.
+name: gpu
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - python=3.13.18
+  - numpy=2.5.4
+  - pandas=3.1.1
+  - h5py=3.16.0
+  - biopython=1.88
+  - tqdm=4.70.1
+  - zstandard=0.25.0
+  - zstd=1.5.7
+  - pip=26.2.2
+  - pip:
+      - --index-url https://download.pytorch.org/whl/cu130
+      - --extra-index-url https://pypi.org/simple
+      - torch==2.11.0
+      - esm==3.4.2
+      - huggingface_hub==0.36.2
+      - transformers==4.57.6
+      - sentencepiece==0.2.3
+      - protobuf==7.36.2

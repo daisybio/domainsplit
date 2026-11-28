@@ -13,6 +13,7 @@ The pipeline is built using [Nextflow](https://www.nextflow.io/) and produces:
 - [Master database](#master-database) - the single enriched SQLite database
 - [Split databases](#split-databases) - one database per (splitting method, split)
 - [Domain embeddings](#domain-embeddings) - one HDF5 per embedding model
+- [Enrichment metadata](#enrichment-metadata) - per-method `domain_metadata.csv` / `ddi_metadata.csv` for domainbenchmark
 - [Reports](#reports) - what left the database, or failed to enter it
 - [Splitting inputs and diagnostics](#splitting-inputs-and-diagnostics)
 - [Pipeline information](#pipeline-information) - Report metrics generated during the workflow execution
@@ -41,23 +42,29 @@ The master carries **no BLOBs**: embeddings are published separately (see below)
 - `databases/<method>/<split>.sqlite3`
   - One database per (method, split), each a self-contained subset of the master holding only its
     own split's DDIs and everything they reach.
+  - Only `ddi_split_membership` is the split assignment. `domain_protein_map`, `protein` and PPI
+    rows of a kept family can include proteins ppi-splitting placed in another split, so do not
+    form new evaluation pairs from them.
 
 </details>
 
-With the default `--ppi_splitting_multi_negset true` there are **5 method directories and 18
+With the default `--ppi_splitting_multi_negset true` there are **7 method directories and 26
 databases**:
 
 | method                 | splits                                                         |
 | ---------------------- | -------------------------------------------------------------- |
 | `random`               | `train`, `validation`, `test_uniform_1_1`, `test_uniform_1_10` |
+| `random_ilp`           | `train`, `validation`, `test_matched_1_1`, `test_uniform_1_10` |
+| `random_hrni`          | `train`, `validation`, `test_matched_1_1`, `test_uniform_1_10` |
 | `minimal_leakage`      | `train`, `validation`, `test_matched_1_1`, `test_uniform_1_10` |
-| `minimal_leakage_hcni` | `train`, `validation`, `test_matched_1_1`, `test_uniform_1_10` |
+| `minimal_leakage_hrni` | `train`, `validation`, `test_matched_1_1`, `test_uniform_1_10` |
 | `external_test`        | `train`, `validation`, `test`                                  |
-| `external_test_hcni`   | `train`, `validation`, `test`                                  |
+| `external_test_hrni`   | `train`, `validation`, `test`                                  |
 
 `random` is the naive baseline (random split, uniform negatives). `minimal_leakage` is the main
-product (ILP split, ILP negatives). The `_hcni` directories are the same positive split with
-**h**igh-**c**onfidence **n**egative **i**nstances: negatives drawn from the candidate network of
+product (ILP split, ILP negatives). `random_ilp` / `random_hrni` put the ILP negative sets on the
+random split, so HRNI can be compared without the family-disjoint split as a confounder. The `_hrni` directories are the same positive split with
+**h**igh-**r**eplication **n**on-**i**nteractions: negatives drawn from the candidate network of
 Pfam pairs a Y2H/MS screen tested without finding an interaction. `external_test`'s `test` split is
 not an internal held-out slice at all — it is the external DDIs (PPIDM / single-domain-PPI /
 Negatome), unseen by construction.
@@ -65,7 +72,7 @@ Negatome), unseen by construction.
 The two internal test sets are named for the sampler that drew their negatives, because they
 are not one test set at two class ratios. `test_uniform_1_10` is always drawn uniformly at 1:10.
 The 1:1 set is drawn by the negative set's own sampler: uniform for `random`
-(`test_uniform_1_1`), the bias-matched ILP for the ILP rows (`test_matched_1_1`). Comparing a
+(`test_uniform_1_1`), the bias-matched ILP for the `ilp`/`ilp_candidates` sets (`test_matched_1_1`). Comparing a
 predictor's ROC-AUC between `test_matched_1_1` and `test_uniform_1_10` therefore compares two
 negative distributions, not two ratios. A sampled negative that 3did already holds as a
 positive is dropped (`reports/unresolved_split_rows.tsv`, `reason=label_mismatch`), so a 1:1 set
@@ -110,8 +117,165 @@ Root attributes on each file: `model`, `pooling`, `dim`, `dtype`, `key_layout`, 
 > accession keys a lookup either finds the family or does not, so pairing an embedding file with the
 > databases it belongs to is the caller's business.
 
-Which models run is `--embedding_models_domainbench` (default `esm3,esmc,prott5`); set it empty to
-skip embedding entirely. ESM3 and ESMC need `HF_TOKEN`; ProtT5 does not.
+Which models run is `--embedding_models_domainbench` (default `esm3,esmc,prott5`); set it empty
+(`--embedding_models_domainbench=`, or a params file) to skip embedding entirely. ESM3 and ESMC need `HF_TOKEN`; ProtT5 does not.
+
+### Structures
+
+<details markdown="1">
+<summary>Output files</summary>
+
+- `structures/structures.h5`
+- `structures/structure_coverage.tsv`
+- `structures/af3_to_model/<method>.tsv`, `structures/af3_to_model/all_methods.tsv`
+- `structures/af3_to_model/queue.tsv`, `queue_summary.txt`, `unusable_models.tsv`
+- `reports/structure_coverage_balance.tsv`, `reports/structure_coverage_balance.json`
+
+</details>
+
+Slicing, `structure_coverage.tsv` and `af3_to_model/` cover only the methods in
+`--structure_data_methods`; the balance reports cover every method (see below).
+
+`structures.h5` holds each instance pair's sliced two-chain PDB as gzip bytes at
+`{pfam_id_a}_{pfam_id_b}/{instance_id_a}__{instance_id_b}`. Each slice dataset carries these attrs:
+
+- `iptm`, `ptm`, `ranking_score`: float, NaN when absent.
+- `af_source`: `inferred` for own AF3 runs, `downloaded` for AlphaFold DB complexes.
+- `chain_pair_iptm`: 2×2, AF3 only, in the row's orientation (index 0 is the row's protein A).
+
+AlphaFold DB models have no confidence summary. Their `ptm` and `ranking_score` are always NaN, and
+their `iptm` is NaN unless the PDB header carries one. pLDDT is in the PDB B-factor column.
+
+The PAE submatrix over the two sliced domain windows is at
+`pae/{pfam_id_a}_{pfam_id_b}/{instance_id_a}__{instance_id_b}`:
+
+- float32 and square, with rows and columns ordered [domain A residues, domain B residues].
+- Rows are aligned residues and columns are scored residues, as in AlphaFold.
+- Attrs `residues_a` and `residues_b` give the UniProt residue numbers.
+- The dataset is absent when the PAE file is missing.
+
+A confidence file that is missing is not fatal: it leaves NaN attrs and no PAE. One that is present
+but cannot be parsed, or does not fit its model, stops the run.
+
+`af_metadata/` is the AF model index this run used, rebuilt by `BUILD_AF_METADATA` from
+`--af_downloaded_manifest`, `--af_inferred_dirs` and/or `--af_metadata` on every run:
+
+- `af_metadata.csv`: one model per unordered protein pair, `uniprot_id_a` being chain A of the
+  file, plus a stat fingerprint (`*_size`, `*_mtime_ns`; -1 = file absent) of the model, its PAE
+  and its summary file. A changed fingerprint re-runs the slicing.
+- `af_inventory.tsv`: every candidate with `status` `selected`, `shadowed` (an inferred model
+  of a pair that has a downloaded one), `model_missing` or `exact_duplicate`, and its `origin`.
+- `af_metadata_report.tsv`: those counts per source.
+
+`structure_coverage.tsv` has one row per (`method`, `split`, `label`), with columns
+`instance_pairs`, `with_structure`, `fraction`, `with_pae`, `with_iptm`, `same_protein_pairs` and
+`same_protein_with_structure`. A same-protein pair has both instances on one protein; its structure
+comes from a homodimer model, so the slice is an inter-chain contact even where the real one may be
+intra-chain. Positives and negatives
+are covered at very different rates, which makes structure features a label leak, so check this
+file before using them.
+
+`af3_to_model/<method>.tsv` and `all_methods.tsv` are gap reports: one row per unordered UniProt
+pair (`uniprot_id_a` <= `uniprot_id_b`; equal for two domains of one protein) with at least one
+membership instance pair that has no structure. They include pairs that already have a model; the
+submission list is `queue.tsv` below.
+
+- `reason`: comma-joined, from `no_af_metadata_entry`, `file_missing`, `file_unreadable` and
+  `slice_failed`.
+- Also `n_instance_pairs`, `labels` and `splits`.
+- `all_methods.tsv` adds a `methods` column.
+
+`queue.tsv` (`BUILD_AF3_QUEUE`, from the master before the guard below) is the AF3 submission
+order: every protein pair of a structure method's instance pairs that has **no** row in
+`af_metadata.csv`, listed once, at the first level that needs it. Levels, in order:
+`minimal_leakage`, `minimal_leakage_hrni`, `random_ilp`, `random_hrni` (train, validation,
+test_matched_1_1), `external_test`, `external_test_hrni` (train, validation, test), `random` (train,
+validation, test_uniform_1_1), then every method's `test_uniform_1_10`. A split matching no level
+fails the run. Columns `level`, `level_name`, `uniprot_a` <= `uniprot_b` (equal: a homodimer job), `labels` (`pos`, `neg`,
+`pos,neg`), `splits` (`<method>/<split>` within that level), `n_instance_pairs`. Plain TSV: one
+header line, no comment lines. Within a level, rows are ordered by CRC32(`seed:uniprot_a:uniprot_b`),
+so a partly submitted level is label-mixed. Keep levels 1-2 only:
+`awk -F'\t' 'NR == 1 || $1 <= 2' queue.tsv`. `queue_summary.txt` has one line per selected level
+with its pairs (`X pos, Y neg[, Z pairs]`; a pair with both labels counts in both numbers); the same
+counts are in `run_manifest.json` (`af3_queue`).
+
+`unusable_models.tsv` lists the pairs that do have a model, but none of whose instance pairs could
+be sliced from it, with the gap report's `reason` and the model's `source` and `path`. They are not
+in the queue.
+
+`structure_coverage_balance.tsv` (`STRUCTURE_COVERAGE_BALANCE`, after scoring,
+`--structure_balance_coverage`, default on) has one row per (`method`, `split`, `label`) of every
+method: `ddis`,
+`covered_before`, `covered_after`, `masked`, `fraction_before`, `fraction_after` (DDIs with at least
+one structured instance pair) and `action`:
+
+- `masked_all`: DDI coverage of both labels together, of positives or of negatives is below
+  `--structure_min_coverage` (0.3). Every structure of that split is masked.
+- `balanced`: the better-covered label keeps `floor(f_low * n_high)` of its covered DDIs, chosen by
+  CRC32(`seed:pfam_a:pfam_b`) rank; the rest are masked. With few DDIs the floor can leave it below
+  the other label.
+- `single_label`: only one label in the split, nothing masked. `off`: guard disabled.
+
+Masking sets `has_structure = 0` and `z_score = NULL` on that split's rows of the DDI and deletes
+its `ddi_interaction_confirmed` row for the method. That row is per method, not per split, so a
+positive shared by `test_matched_1_1` and `test_uniform_1_10` loses it when either split masks it. `has_structure_raw` keeps the unmasked value and
+`structures.h5` is unchanged; `structure_coverage.tsv` and `af3_to_model/` describe the unmasked
+state. A split with `masked_all` has no `has_structure = 1` row at all.
+
+### Enrichment metadata
+
+<details markdown="1">
+<summary>Output files</summary>
+
+- `metadata/<method>/domain_metadata.csv` (`EXPORT_DOMAIN_METADATA`, `--domain_metadata`, default
+  on) — one row per `ddi_split_membership` instance of that method: `instance_id, pfam_id,
+uniprot_id` and 21 ProtParam features of `protein.sequence[start-1:end]` (ported from master_ct's
+  `create_protein_domain_metadata.py`; `isoelectric_point` spelled correctly, no sequence column).
+  An instance whose domain sequence holds `X` has no row; Z/B/U/O are computed as Q/N/C/K;
+  flexibility is empty for a domain of 9 residues or fewer. With `--interpro_metadata` (default
+  on) the per-family InterPro counters follow: `interpro_subfamilies, _domain_architectures,
+_interactions, _matches, _pathways, _proteins, _proteomes, _sets, _structures, _taxa,
+_literature, _alphafold` (same value on every instance of a family).
+- `metadata/<method>/ddi_metadata.csv` (`EXPORT_DDI_METADATA`, `--ddi_metadata`, default on) — one
+  row per structured instance pair of that method, in membership orientation: `pfam_id_a/b,
+uniprot_id_a/b, instance_id_a/b, source` and `af_min_cb_dist, af_pDockQ, af_pDockQ2_AB/BA,
+af_LIS_AB/BA, af_ipSAE_AB/BA, af_ipTM_d0chn_AB/BA, af_numberOfInteractions`, scored from the slice
+  and PAE block in `structures/structures.h5` (cutoffs `--ddi_metadata_pae_cutoff` 12,
+  `--ddi_metadata_contact_cutoff` 8, both strict). AB = rows of domain a, columns of domain b. A
+  pair is written only if **every** membership row of it in that method has `has_structure = 1`
+  after the coverage guard, so a pair masked in one split (e.g. a positive shared by the 1:1 and
+  1:10 tests) is missing from the whole method. Empty field = undefined: no CB-CB contact leaves
+  pDockQ/pDockQ2/ipSAE empty (`numberOfInteractions` 0), no PAE leaves everything but
+  `min_cb_dist` and `pDockQ` empty. Header-only for a method without structure, or when structure
+  is off.
+- `metadata/ddi_metadata_coverage.tsv` — per method, split, label and `source` (`downloaded`,
+  `inferred`, `none` = not exported): membership `rows`, `with_structure_raw`, `with_structure`,
+  `exported`, `with_pae`, `with_contact`.
+- `metadata/domain_metadata_report.tsv` — `metric, value` over the distinct instances: `instances`,
+  `written`, `skipped_x`, `substituted_Z/B/U/O`.
+- `metadata/interpro_counts.tsv` / `metadata/interpro_metadata.json` (`FETCH_INTERPRO_METADATA`) —
+  the counters per membership family, and the InterPro release they come from (also in
+  `run_manifest.json` under `interpro_metadata`), families fetched vs. from cache, entries missing
+  from InterPro and counter keys absent from a response.
+
+</details>
+
+Point domainbenchmark's `--metadata` at one `metadata/<method>/` directory: it reads one directory
+for every database it gets, and the coverage guard masks per (method, split), so the files cannot be
+shared across methods. Not a numerical reproduction of the helper: the slice went through a CIF to
+PDB rewrite (rounded coordinates and pLDDT), residues map to PAE rows through the AF3 token map
+rather than by residue ordinal, and windows that failed `ENRICH_STRUCTURAL_AF`'s sequence check
+are never scored (the helper scored them at whatever residues carried those numbers).
+
+InterPro serves only its live release, so the counters are cached per release under
+`<cache_dir>/interpro-<release>/` (one JSON per family), the release is read from the API before
+fetching and a release change mid-run is fatal (nothing fetched in that run is cached). `-resume`
+keeps the counters of the release the cached task ran with, even if InterPro has moved on since. `--interpro_release <x>` pins a release: when it is
+no longer live, nothing is fetched and every family must already be in that cache. Keep the cache
+of the thesis run. Unlike the helper, a family InterPro does not have gets empty counters, never 0;
+a `null` literature list in an existing entry is 0 (it counts references cited in the entry, not
+publications on the family). `interpro_literature` and `interpro_structures` measure how well
+studied a family is, so they can confound any label that correlates with that.
 
 ### Reports
 
@@ -125,6 +289,46 @@ skip embedding entirely. ESM3 and ESMC need `HF_TOKEN`; ProtT5 does not.
   differ.
 - `reports/unresolved_split_rows.tsv` — split rows whose DDI or instance could not be resolved. Rows
   here mean a wiring error, not a data property.
+- `reports/run_manifest.json` — what the run was made from: every param, the git commits of this
+  repo and the ppi-splitting submodule, SHA-256 of the three manual inputs, `Last-Modified`/`ETag`
+  of every download URL, and the positive/negative count of every (method, split). ILP solver
+  status is not recorded: ppi-splitting does not publish it.
+- `reports/split_qc/` (`REPORT_SPLIT_QC`, on the final master; every count is over
+  `ddi_split_membership` rows, family/protein taken from the instance id, label from
+  `domain_domain_interaction.negative`):
+  - `split_overlap.tsv` — per method and unordered split pair, for each `unit` (`family`,
+    `family_pair_positive`, `family_pair_negative`, `protein`, `instance`): the size of each split's
+    set (`n_a`, `n_b`) and how many they share (`n_shared`).
+  - `family_leaks.tsv` — `method, pfam_id, splits`: families that appear in more than one of
+    `train`, `validation` and the test partition (all `test_*` splits together: the 1:1 and 1:10
+    sets share their positives) of a method split by the ILP (every `split_method: 'ilp'` row of
+    `workflows/domainsplit.nf`; the external `test` split is not part of that partition). The ILP
+    guarantees there are none, so **any row fails the task** — and a failed task publishes nothing,
+    so the leaks are also printed (first 50) to the task's stderr, which Nextflow shows in the error
+    report. Other methods are reported in `split_overlap.tsv` only.
+  - `test_variant_overlap.tsv` — per method with internal tests: its 1:1 test (`split_1_1`) vs
+    `test_uniform_1_10`, per label, at `ddi_row` (DDI + instance pair) and `family_pair`
+    granularity. Expected: positives identical, ILP negatives near-disjoint.
+  - `external_test_profile.tsv` — per external-test method, its `test` split per label and source
+    token (`__total__` = the whole label): family pairs, instance pairs, families, families also
+    in the other label, families and family pairs also in train, and the min/median/max of the
+    families' **train-positive degree** (distinct positive family pairs a family has in train)
+    plus the median of each pair's smaller degree. High-degree families in one label only is the
+    hub shortcut a model can score on without learning the interaction.
+  - Only with `esm3_structure` in `--embedding_models_domainbench`:
+    `esm3_structure_coverage.tsv` (per method, split, label: instance pairs with both instances in
+    `esm3_structure_domain_embeddings.h5` vs total), `esm3_structure_missing_instances.tsv`
+    (`instance_id, uniprot_id, reason, n_membership_rows`) and
+    `esm3_structure_missing_accessions.tsv` (`accession, reason, n_instances`). `reason` is the
+    protein's `afdb_structures_report.tsv` status (`not_in_afdb`, `sequence_mismatch`,
+    `no_uniprot_sequence`, `download_failed`, `parse_failed`), `below_min_coverage` when the
+    protein is `ok` (the domain fell under the structure-coverage or length cutoff), or
+    `not_in_afdb_report`. Missing coverage only warns.
+  - `z_score_summary.tsv` — per method, split and label, over membership rows (one row = one
+    split's instance pair): `rows`, `with_structure_raw` (before the coverage guard; empty on a
+    master without that column), `with_structure` (after it), `scored`, `structure_no_score`
+    (structured but `z_score` NULL: too few contacts or constant random trials) and
+    `z_min, z_p25, z_median, z_p75, z_max, z_mean` over the scored rows. NULL is never counted as 0.
 - `external_ddis/*.tsv` — each external source normalized, as the record of what it contributed
   before the merge/drop rules ran.
 
@@ -149,6 +353,33 @@ report being non-empty.
 - `bias_analysis.html` — ppi-splitting's own MultiQC report on the splits it produced.
 
 </details>
+
+### Frozen splits
+
+`frozen_splits/` (every run unless `--export_frozen_splits false`) lets a later run reuse exactly
+this run's instances and splits, so AF3 predictions queued against this run stay valid:
+
+- `fetch/`: FETCH_DOMAIN_META's `sequences.fasta`, `instances.tsv`, `species.tsv`,
+  `go_annotations.tsv` and `dropped_families.tsv` (the sampled domain instances).
+- `split_ddis/split_ddis.csv`: the positive population handed to ppi-splitting.
+- `splits/{family,instance}/<method>/<split>.csv`: what ppi-splitting handed to INGEST_SPLITS.
+- `bundle_manifest.json`: SHA-256 of every file, the split list, the params the bundle depends on
+  (`frozenParamKeys()` in `workflows/domainsplit.nf`), and the final master's membership and
+  protein-sequence fingerprints.
+
+`--frozen_splits <dir>` skips FETCH_DOMAIN_META and PPI_SPLITTING. Three checks guard it:
+
+1. At launch: the params and the (method, split) set must match the bundle.
+2. VERIFY_FROZEN_SPLITS, before ingest: every bundle file hashes to its entry, and this run's
+   positive population (rebuilt from its own sources) equals the frozen one.
+3. CHECK_FROZEN_DB, before structure and the split databases: the final master's membership rows
+   (external test included) and protein sequences match the frozen run's fingerprints.
+
+Pin every source (local copies for each `url_*` and `uniprot_dat_urls`) to the frozen run's
+files, or check 2 or 3 fails. A frozen run does not republish ppi-splitting's own reports
+(`union/data/dropped_families.tsv`, the bias report): those belong to the original run.
+`reports/run_manifest.json` records both fingerprints (`membership_fingerprint`,
+`protein_fingerprint`) for every run.
 
 ### Pipeline information
 

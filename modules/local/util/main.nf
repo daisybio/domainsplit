@@ -17,7 +17,7 @@ process SHARD_FASTA {
     tag { "${input_fasta.simpleName}:${num_shards}" }
     label 'process_low'
     conda "${moduleDir}/environment.yml"
-    container "docker.io/konstantinpelz/domainsplit-general:1.0.0"
+    container "docker.io/konstantinpelz/domainsplit-general:2.0.0"
 
     input:
     tuple val(meta), path(input_fasta)

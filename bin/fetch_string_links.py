@@ -96,12 +96,14 @@ def db_proteins(path):
 
 
 def load_string_map(path, proteins):
-    """``({string_id: uniprot}, {taxid: {uniprot}})`` restricted to ``proteins``.
+    """``({string_id: uniprot}, {taxid: {uniprot}}, n_ambiguous)`` restricted to ``proteins``.
 
     The map file is ``uniprot \\t id_type \\t symbol``; only ``STRING`` rows count.
+    A STRING id claimed by two or more of ``proteins`` is ambiguous and dropped,
+    so its edges are skipped -- the same rule ``insert_ppi.py`` applies.
     """
     string_to_uniprot = {}
-    per_taxon = defaultdict(set)
+    ambiguous = set()
     with gzip.open(path, "rt") as fh:
         for line in fh:
             parts = line.rstrip("\n").split("\t")
@@ -110,9 +112,15 @@ def load_string_map(path, proteins):
             uniprot, string_id = parts[0].strip(), parts[2].strip()
             if not string_id or uniprot not in proteins:
                 continue
+            if string_to_uniprot.get(string_id, uniprot) != uniprot:
+                ambiguous.add(string_id)
             string_to_uniprot[string_id] = uniprot
-            per_taxon[string_id.split(".", 1)[0]].add(uniprot)
-    return string_to_uniprot, per_taxon
+    for string_id in ambiguous:
+        del string_to_uniprot[string_id]
+    per_taxon = defaultdict(set)
+    for string_id, uniprot in string_to_uniprot.items():
+        per_taxon[string_id.split(".", 1)[0]].add(uniprot)
+    return string_to_uniprot, per_taxon, len(ambiguous)
 
 
 def download(taxid, release, cache_dir, session, retries=4, retry_wait=10.0):
@@ -201,13 +209,19 @@ def main():
     proteins = db_proteins(args.db)
     print(f"[string] {len(proteins)} proteins in the database", flush=True)
 
-    string_to_uniprot, per_taxon = load_string_map(args.string_map, proteins)
+    string_to_uniprot, per_taxon, ambiguous = load_string_map(args.string_map, proteins)
     mapped = {up for ups in per_taxon.values() for up in ups}
     print(
         f"[string] {len(string_to_uniprot)} STRING ids map onto {len(mapped)} of them, "
         f"across {len(per_taxon)} taxa",
         flush=True,
     )
+    if ambiguous:
+        print(
+            f"[string] WARNING: {ambiguous} STRING ids are claimed by two or more proteins "
+            "in the database; their edges are skipped",
+            file=sys.stderr, flush=True,
+        )
 
     # UniProt does not cross-reference STRING for unreviewed entries, so this
     # number is expected to be roughly the TrEMBL share of the universe. Reported
@@ -215,7 +229,8 @@ def main():
     unmapped = Counter(proteins[up] or "unknown" for up in proteins if up not in mapped)
     if unmapped:
         print(
-            "[string] no STRING cross-reference, so no PPI edge, for "
+            "[string] no usable STRING cross-reference (none, or shared with another "
+            "protein), so no PPI edge, for "
             + ", ".join(f"{n} {flag}" for flag, n in sorted(unmapped.items()))
             + " proteins -- UniProt does not cross-reference STRING for unreviewed "
             "entries, and no links file changes that",
@@ -224,7 +239,7 @@ def main():
 
     if not per_taxon:
         raise SystemExit(
-            "ERROR: none of this run's proteins carries a `DR STRING;` cross-reference, "
+            "ERROR: none of this run's proteins carries an unambiguous `DR STRING;` cross-reference, "
             "so there is no taxon to fetch links for and the PPI table would be empty. "
             "Check that PARSE_SWISSPROT's string map covers the same universe as the "
             "database, or pin one explicit links file with --url_string."
@@ -253,34 +268,38 @@ def main():
     print(f"[string] fetching links for {len(taxa)} taxa (release {args.release})", flush=True)
     session = requests.Session()
     session.headers["User-Agent"] = "domainsplit-pipeline"
-    with concurrent.futures.ThreadPoolExecutor(max_workers=max(args.jobs, 1)) as pool:
-        results = list(pool.map(
-            lambda t: (t,) + download(t, args.release, cache_dir, session,
-                                      retries=args.retries, retry_wait=args.retry_wait),
-            taxa,
-        ))
-
-    rows, totals = [], Counter()
-    with gzip.open(args.out, "wt", newline="") as out:
+    jobs = max(args.jobs, 1)
+    results, rows, totals = [], [], Counter()
+    # One batch of `jobs` taxa on disk at a time: an all-species run would
+    # otherwise hold every raw links file before the first is filtered.
+    with concurrent.futures.ThreadPoolExecutor(max_workers=jobs) as pool, \
+            gzip.open(args.out, "wt", newline="") as out:
         out.write("protein1 protein2 combined_score\n")
-        for taxid, path, status in results:
-            read = kept = 0
-            if path:
-                read, kept = stream_edges(path, string_to_uniprot, out)
-                if not cache_dir:
-                    os.unlink(path)
-            totals[status] += 1
-            totals["edges_read"] += read
-            totals["edges_kept"] += kept
-            rows.append(
-                {
-                    "taxon_id": taxid,
-                    "proteins": len(per_taxon[taxid]),
-                    "status": status,
-                    "edges_read": read,
-                    "edges_kept": kept,
-                }
-            )
+        for start in range(0, len(taxa), jobs):
+            batch = list(pool.map(
+                lambda t: (t,) + download(t, args.release, cache_dir, session,
+                                          retries=args.retries, retry_wait=args.retry_wait),
+                taxa[start:start + jobs],
+            ))
+            results.extend(batch)
+            for taxid, path, status in batch:
+                read = kept = 0
+                if path:
+                    read, kept = stream_edges(path, string_to_uniprot, out)
+                    if not cache_dir:
+                        os.unlink(path)
+                totals[status] += 1
+                totals["edges_read"] += read
+                totals["edges_kept"] += kept
+                rows.append(
+                    {
+                        "taxon_id": taxid,
+                        "proteins": len(per_taxon[taxid]),
+                        "status": status,
+                        "edges_read": read,
+                        "edges_kept": kept,
+                    }
+                )
 
     for taxid in skipped:
         rows.append(
@@ -302,7 +321,8 @@ def main():
     print(
         f"[string] taxa: {totals['downloaded']} downloaded, {totals['cached']} from cache, "
         f"{totals['404']} with no STRING file (404), {len(failed)} failed; "
-        f"edges: {totals['edges_read']} read, {totals['edges_kept']} kept",
+        f"edges: {totals['edges_read']} read, {totals['edges_kept']} kept; "
+        f"{ambiguous} ambiguous STRING ids skipped",
         flush=True,
     )
     if failed:

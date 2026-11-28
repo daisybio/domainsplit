@@ -14,7 +14,7 @@ process FETCH_STRING_LINKS {
     // downloaded, which is exactly the case worth retrying.
     label 'error_retry'
     conda "${moduleDir}/environment.yml"
-    container "docker.io/konstantinpelz/domainsplit-general:1.0.0"
+    container "docker.io/konstantinpelz/domainsplit-general:2.0.0"
 
     input:
     path domainsplit_db, stageAs: 'input.domainsplit.sqlite3'

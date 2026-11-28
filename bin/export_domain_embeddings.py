@@ -153,7 +153,8 @@ def main() -> int:
     if missing:
         print(f"[export] WARNING: {missing} instances have no {args.model} embedding "
               f"(e.g. {', '.join(sample_missing)}) -- expected only for sequences dropped by "
-              "--max-len or an OOM at batch size 1", flush=True)
+              "--max-len, or for esm3_structure: no AFDB coordinates, backbone coverage below "
+              "--min-coverage, or a coordinate/sequence length mismatch", flush=True)
     if written == 0:
         sys.exit("[export] no vector matched any domain instance -- the chunk keys and "
                  "domain_protein_map.instance_id have diverged")

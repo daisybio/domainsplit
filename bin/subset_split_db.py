@@ -36,9 +36,12 @@ implemented:
    published DB describes only itself.
 
 Instances of a surviving family are kept whole, not narrowed to the pairs this
-split happens to use: the split is a partition of *families*, so an instance of a
-kept family belongs to this split by construction, and keeping them lets a
-consumer form its own pairs.
+split happens to use. **Only ``ddi_split_membership`` is the split assignment.**
+ppi-splitting also assigns *proteins* to splits, so the ``domain_protein_map``
+and ``protein`` rows of a kept family (and their ``protein_protein_interaction``
+edges) may include proteins it placed in another split. They are context, not
+examples: a consumer must not form new evaluation pairs from them, or it leaks
+across splits.
 
 Every table in the master must appear in ``FILTERS``. A new table added to
 ``INIT_DOMAINSPLIT_DB`` therefore fails here loudly, instead of being copied
@@ -66,6 +69,7 @@ FILTERS = {
         "AND protein_id_b IN (SELECT id FROM keep_protein)"
     ),
     "ddi_split_membership": "method = :method AND split = :split",
+    "ddi_interaction_confirmed": "ddi_id IN (SELECT id FROM keep_ddi) AND method = :method",
 }
 
 # Reported before/after, in the order the old version printed them.

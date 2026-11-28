@@ -12,6 +12,7 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
 
       - name: Read template version from .nf-core.yml
         uses: nichmor/minimal-read-yaml@1f7205277e25e156e1f63815781db80a6d490b8f # v0.0.2
@@ -19,10 +20,15 @@ jobs:
         with:
           config: ${{ github.workspace }}/.nf-core.yml
 
+      # The version string comes from the PR head under pull_request_target: pass it as data, never as shell syntax.
       - name: Install nf-core
+        env:
+          NF_CORE_VERSION: ${{ steps.read_yml.outputs['nf_core_version'] }}
         run: |
+          [[ "$NF_CORE_VERSION" =~ ^[0-9]+(\.[0-9]+)*$ ]] || { echo "::error::invalid nf_core_version in .nf-core.yml"; exit 1; }
           python -m pip install --upgrade pip
-          pip install nf-core==${{ steps.read_yml.outputs['nf_core_version'] }}
+          pip install "nf-core==${NF_CORE_VERSION}"
+          echo "NF_CORE_VERSION_CHECKED=${NF_CORE_VERSION}" >> "$GITHUB_ENV"
 
       - name: Check nf-core outdated
         id: nf_core_outdated
@@ -39,7 +45,7 @@ jobs:
             > [!WARNING]
             > Newer version of the nf-core template is available.
             >
-            > Your pipeline is using an old version of the nf-core template: ${{ steps.read_yml.outputs['nf_core_version'] }}.
+            > Your pipeline is using an old version of the nf-core template: ${{ env.NF_CORE_VERSION_CHECKED }}.
             > Please update your pipeline to the latest version.
             >
             > For more documentation on how to update your pipeline, please see the [Synchronisation documentation](https://nf-co.re/docs/developing/template-syncs/overview).

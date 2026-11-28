@@ -1,0 +1,24 @@
+# Single source of truth for the CPU environment (docker/Dockerfile.general).
+# Every module whose container is domainsplit-general symlinks its
+# environment.yml here, so the conda profile and the image cannot drift.
+name: general
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - python=3.13.18
+  - numpy=2.5.4
+  - scipy=1.18.1
+  - pandas=3.1.1
+  - pyarrow=26.0.1
+  - h5py=3.16.0
+  - biopython=1.88
+  - requests=2.34.2
+  - tqdm=4.70.1
+  - matplotlib=3.11.2
+  - sqlite=3.54.1
+  - wget=1.25.0
+  - gawk=5.4.1
+  - gzip=1.14
+  - zstandard=0.25.0
+  - zstd=1.5.7

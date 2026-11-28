@@ -4,12 +4,11 @@ process INSERT_PROTEIN_SEQUENCES {
     // per-residue HDF5 reads, and those are gone.
     label 'process_medium'
     conda "${moduleDir}/environment.yml"
-    container "docker.io/konstantinpelz/domainsplit-general:1.0.0"
+    container "docker.io/konstantinpelz/domainsplit-general:2.0.0"
 
     input:
     path domainsplit_db_in, stageAs: 'input.domainsplit.sqlite3'
     path uniprot_database
-    path protein_domain_map
 
     output:
     path "domainsplit.sqlite3", emit: domainsplit_db
@@ -20,7 +19,6 @@ process INSERT_PROTEIN_SEQUENCES {
     insert_protein_sequences.py \\
         --db-in ${domainsplit_db_in} \\
         --uniprot-db ${uniprot_database} \\
-        --protein-domain-map ${protein_domain_map} \\
         --versions versions.yml \\
         --process-name "${task.process}"
     """

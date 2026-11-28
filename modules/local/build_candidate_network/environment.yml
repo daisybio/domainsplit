@@ -1,8 +1,1 @@
-channels:
-  - conda-forge
-  - bioconda
-dependencies:
-  - python=3.12
-  - sqlite
-  - pyarrow
-  - requests
+../../../docker/env/general.yml

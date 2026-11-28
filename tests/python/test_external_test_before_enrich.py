@@ -58,7 +58,7 @@ SEQUENCES = {"P11111": "M" * 80, "Q22222": "K" * 40}
 
 
 def build_inputs(tmp):
-    """`(db, protein_domain_map, uniprot_fasta)` for the instances above."""
+    """`(db, uniprot_fasta)` for the instances above."""
     db = os.path.join(tmp, "domainsplit.sqlite3")
     make_db(db)
     conn = sqlite3.connect(db)
@@ -68,18 +68,12 @@ def build_inputs(tmp):
     conn.commit()
     conn.close()
 
-    pd_map = os.path.join(tmp, "protein_domain_mapping.csv.gz")
-    with gzip.open(pd_map, "wt", newline="") as fh:
-        fh.write("pfam_id,uniprot_id,start_pos,end_pos,sequence\n")
-        for pfam, uniprot, start, end in INSTANCES:
-            fh.write(f"{pfam},{uniprot},{start},{end},{'A' * (end - start + 1)}\n")
-
     fasta = os.path.join(tmp, "uniprot_sequences.fasta.gz")
     with gzip.open(fasta, "wt") as fh:
         for uniprot, seq in SEQUENCES.items():
             fh.write(f">sp|{uniprot}|{uniprot}_HUMAN test protein\n{seq}\n")
 
-    return db, pd_map, fasta
+    return db, fasta
 
 # Non-protected sources, so build_external_test.py treats them as the held-out
 # set. Both families carry instances via INSTANCES above.
@@ -125,7 +119,7 @@ def run_external_test(db, tmp, tag):
 
 def test_membership_is_unchanged_by_enrichment():
     with tempfile.TemporaryDirectory() as tmp:
-        db, pd_map, fasta = build_inputs(tmp)
+        db, fasta = build_inputs(tmp)
         add_external_ddis(db)
 
         before = run_external_test(db, tmp, "before")
@@ -138,7 +132,6 @@ def test_membership_is_unchanged_by_enrichment():
         shutil.copyfile(db, staged)
         done = subprocess.run(
             [sys.executable, INSERT_PROTEINS, "--db-in", staged, "--uniprot-db", fasta,
-             "--protein-domain-map", pd_map,
              "--versions", os.path.join(tmp, "v1.yml"), "--process-name", "TEST"],
             env=ENV, cwd=tmp, capture_output=True, text=True,
         )

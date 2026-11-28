@@ -28,7 +28,6 @@ Three things are worth a test here:
 Run directly (`python3 tests/python/test_ingest_instances.py`) or via pytest.
 """
 
-import gzip
 import os
 import sqlite3
 import subprocess
@@ -73,20 +72,19 @@ def run_ingest(tmp, rows, check=True, taxon_ids="9606"):
     make_db(db)
     instances = os.path.join(tmp, "instances.tsv")
     sequences = os.path.join(tmp, "sequences.fasta")
-    mapping = os.path.join(tmp, "protein_domain_mapping.csv.gz")
     write_instances(instances, rows)
     write_fasta(sequences, rows)
 
     env = dict(os.environ, PYTHONPATH=BIN + os.pathsep + os.environ.get("PYTHONPATH", ""))
     proc = subprocess.run(
         [sys.executable, INGEST, "--db", db, "--instances", instances,
-         "--sequences", sequences, "--mapping-out", mapping,
+         "--sequences", sequences,
          "--taxon-ids", taxon_ids,
          "--versions", os.path.join(tmp, "versions.yml"),
          "--process-name", "TEST:INGEST_INSTANCES"],
         check=check, env=env, capture_output=True, text=True,
     )
-    return db, mapping, proc
+    return db, proc
 
 
 def test_protein_review_status_is_stored():
@@ -97,7 +95,7 @@ def test_protein_review_status_is_stored():
     `--instance_tier` becomes unmeasurable.
     """
     with tempfile.TemporaryDirectory() as tmp:
-        db, _mapping, proc = run_ingest(tmp, HUMAN_ROWS)
+        db, proc = run_ingest(tmp, HUMAN_ROWS)
         conn = sqlite3.connect(db)
         stored = dict(conn.execute("SELECT uniprot_id, reviewed FROM protein"))
         taxa = dict(conn.execute("SELECT uniprot_id, taxon_id FROM protein"))
@@ -113,7 +111,7 @@ def test_protein_review_status_is_stored():
 
 def test_instance_level_rows():
     with tempfile.TemporaryDirectory() as tmp:
-        db, mapping, _ = run_ingest(tmp, HUMAN_ROWS)
+        db, _ = run_ingest(tmp, HUMAN_ROWS)
 
         conn = sqlite3.connect(db)
         rows = conn.execute(
@@ -141,20 +139,13 @@ def test_instance_level_rows():
             "PF00001_P11111_10_60", "PF00001_P11111_90_140", "PF00002_Q22222_5_80"
         ], rows
         assert n_domains == 2 and n_proteins == 2, (n_domains, n_proteins)
-
-        with gzip.open(mapping, "rt") as fh:
-            lines = fh.read().splitlines()
-        assert lines[0] == "pfam_id,uniprot_id,start_pos,end_pos,sequence", lines[0]
-        assert lines[1:] == [
-            "PF00001,P11111,10,60,AAAA",
-            "PF00001,P11111,90,140,AAAA",
-            "PF00002,Q22222,5,80,AAAA",
-        ], lines[1:]
+        # No side file any more: the protein table is what enrichment reads.
+        assert not os.path.exists(os.path.join(tmp, "protein_domain_mapping.csv.gz"))
 
 
 def test_instance_outside_the_taxon_universe_is_fatal():
     with tempfile.TemporaryDirectory() as tmp:
-        db, _, proc = run_ingest(tmp, HUMAN_ROWS + [MOUSE_ROW], check=False, taxon_ids="9606")
+        db, proc = run_ingest(tmp, HUMAN_ROWS + [MOUSE_ROW], check=False, taxon_ids="9606")
 
         assert proc.returncode != 0, proc.stdout
         assert "outside the configured taxon universe" in proc.stderr, proc.stderr
@@ -178,7 +169,7 @@ def test_a_wider_universe_admits_the_same_instance():
     """
     for taxa in ("", "9606,10090"):
         with tempfile.TemporaryDirectory() as tmp:
-            db, _, proc = run_ingest(tmp, HUMAN_ROWS + [MOUSE_ROW], taxon_ids=taxa)
+            db, proc = run_ingest(tmp, HUMAN_ROWS + [MOUSE_ROW], taxon_ids=taxa)
             assert proc.returncode == 0, proc.stderr
             conn = sqlite3.connect(db)
             # And the taxon is kept, not merely checked -- protein.taxon_id is what

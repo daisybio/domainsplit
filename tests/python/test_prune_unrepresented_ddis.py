@@ -99,6 +99,59 @@ def test_prune():
         assert all(p["reason"] == "no_instances:PF00009" for p in pruned), pruned
 
 
+def test_drop_homomer():
+    """Homomers go under --drop-homomer, whatever their source or label; without it they stay."""
+    for flag, expect_kept in (([], True), (["--drop-homomer"], False)):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = os.path.join(tmp, "domainsplit.sqlite3")
+            report = os.path.join(tmp, "pruned_ddis.tsv")
+            make_db(db)
+            conn = sqlite3.connect(db)
+            conn.execute("PRAGMA foreign_keys=ON")
+            ensure_domains(conn, {"PF00001", "PF00002"})
+            insert_ddis(conn, [("PF00001", "PF00002"), ("PF00001", "PF00001")], negative=False, source="3did")
+            merge_external_ddis(conn, [("PF00002", "PF00002", 1, "negatome")])
+            inst_a = add_instance(conn, "PF00001", "P11111", 10, 60)
+            inst_a2 = add_instance(conn, "PF00001", "P33333", 10, 60)
+            add_instance(conn, "PF00002", "Q22222", 5, 80)
+            homo_id = conn.execute(
+                "SELECT ddi.id FROM domain_domain_interaction AS ddi "
+                "JOIN domain AS da ON da.id = ddi.domain_id_a "
+                "WHERE da.pfam_id = 'PF00001' AND ddi.domain_id_a = ddi.domain_id_b"
+            ).fetchone()[0]
+            conn.execute(
+                "INSERT INTO ddi_split_membership(ddi_id, method, split, instance_id_a, instance_id_b) "
+                "VALUES (?, 'random', 'train', ?, ?)",
+                (homo_id, inst_a, inst_a2),
+            )
+            conn.commit()
+            conn.close()
+
+            subprocess.run(
+                [sys.executable, PRUNE, "--db", db, "--report-out", report,
+                 "--versions", os.path.join(tmp, "versions.yml"), "--process-name", "TEST", *flag],
+                check=True, env=ENV, capture_output=True, text=True,
+            )
+
+            conn = sqlite3.connect(db)
+            rows = ddi_rows(conn)
+            n_membership = conn.execute("SELECT COUNT(*) FROM ddi_split_membership").fetchone()[0]
+            conn.close()
+            with open(report) as fh:
+                pruned = list(csv.DictReader(fh, delimiter="\t"))
+
+            if expect_kept:
+                assert set(rows) == {("PF00001", "PF00002"), ("PF00001", "PF00001"), ("PF00002", "PF00002")}, rows
+                assert n_membership == 1 and pruned == []
+            else:
+                assert set(rows) == {("PF00001", "PF00002")}, rows
+                assert n_membership == 0
+                assert sorted((p["pfam_a"], p["source"], p["reason"]) for p in pruned) == [
+                    ("PF00001", "3did", "homomer"), ("PF00002", "negatome", "homomer")
+                ], pruned
+
+
 if __name__ == "__main__":
     test_prune()
+    test_drop_homomer()
     print("OK: unrepresentable DDIs, their domains, proteins and membership rows are pruned")
