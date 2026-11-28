@@ -32,6 +32,7 @@ import re
 import sqlite3
 import sys
 import tempfile
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -46,6 +47,15 @@ COUNTERS = ["subfamilies", "domain_architectures", "interactions", "matches", "p
 PFAM_RE = re.compile(r"^PF\d{5}$")
 RETRY_STATUS = {408, 429, 500, 502, 503, 504}
 RELEASE_RE = re.compile(r"^\d+(\.\d+)*$")  # also keeps the cache path safe
+RATE_LIMIT_TRIES = 12  # 429 is the API throttling us, not a failure: wait it out (~30 min max)
+_pause = {"until": 0.0}  # shared by all worker threads: one 429 pauses every request
+_pause_lock = threading.Lock()
+
+
+def _wait_for_pause():
+    left = _pause["until"] - time.monotonic()
+    if left > 0:
+        time.sleep(left)
 
 
 class EmptyResponse(Exception):
@@ -55,8 +65,10 @@ class EmptyResponse(Exception):
 def get(url, tries=6, timeout=60):
     """(status, parsed JSON or None); None only for 204/404. Retries transient
     failures with backoff, honouring a numeric Retry-After."""
-    for attempt in range(tries):
+    attempt = 0
+    while True:
         wait = min(60, 2 ** attempt)
+        _wait_for_pause()
         try:
             with urllib.request.urlopen(urllib.request.Request(url, headers={"Accept": "application/json"}),
                                         timeout=timeout) as r:
@@ -69,15 +81,21 @@ def get(url, tries=6, timeout=60):
         except urllib.error.HTTPError as e:
             if e.code == 404:
                 return 404, None
-            if e.code not in RETRY_STATUS or attempt == tries - 1:
+            limit = RATE_LIMIT_TRIES if e.code == 429 else tries
+            if e.code not in RETRY_STATUS or attempt >= limit - 1:
                 raise
-            ra = e.headers.get("Retry-After", "")
+            ra = e.headers.get("Retry-After", "") if e.headers else ""
+            if e.code == 429:
+                wait = min(300, 5 * 2 ** attempt)
             wait = max(wait, min(300, int(ra))) if ra.isdigit() else wait
+            if e.code == 429:  # pause every thread, not just this one
+                with _pause_lock:
+                    _pause["until"] = max(_pause["until"], time.monotonic() + wait)
         except (urllib.error.URLError, TimeoutError, ConnectionError, EmptyResponse, json.JSONDecodeError):
-            if attempt == tries - 1:
+            if attempt >= tries - 1:
                 raise
         time.sleep(wait)
-    raise AssertionError("unreachable")
+        attempt += 1
 
 
 def live_release():
@@ -151,7 +169,7 @@ def main(argv=None):
     p.add_argument("--release", default="", help="pinned InterPro release, e.g. 111.0")
     p.add_argument("--out", required=True)
     p.add_argument("--summary", required=True)
-    p.add_argument("--workers", type=int, default=4)
+    p.add_argument("--workers", type=int, default=2)
     p.add_argument("--versions")
     p.add_argument("--process_name", default="FETCH_INTERPRO_METADATA")
     args = p.parse_args(argv)

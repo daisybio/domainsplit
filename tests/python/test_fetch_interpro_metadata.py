@@ -156,3 +156,20 @@ def test_get_204_is_missing_but_empty_200_is_retried(monkeypatch):
     monkeypatch.setattr(fim.time, "sleep", lambda s: None)
     assert fim.get("https://x/") == (204, None)
     assert fim.get("https://x/") == (200, {"metadata": 1})
+
+
+def test_get_429_waits_longer_and_pauses_all_threads(monkeypatch):
+    calls, sleeps = [], []
+
+    def urlopen(req, timeout):
+        calls.append(1)
+        if len(calls) <= 8:  # more than the 6 tries a 5xx gets
+            raise fim.urllib.error.HTTPError(req.full_url, 429, "Too Many Requests", {}, None)
+        return FakeResponse(200, b'{"metadata": 1}')
+
+    monkeypatch.setattr(fim.urllib.request, "urlopen", urlopen)
+    monkeypatch.setattr(fim.time, "sleep", sleeps.append)
+    monkeypatch.setattr(fim, "_pause", {"until": 0.0})
+    assert fim.get("https://x/") == (200, {"metadata": 1})
+    assert len(calls) == 9 and min(sleeps) > 4
+    assert fim._pause["until"] > 0
